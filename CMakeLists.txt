@@ -40,6 +40,9 @@ add_executable(echo-ai
     src/session/session_manager.c
     src/session/migration.c
     src/utils/rate_limiter.c
+    src/utils/circuit_breaker.c
+    src/utils/metrics.c
+    src/change_tracker/change_tracker.c
     src/server/server.c
     src/server/websocket.c
     src/server/routes.c

@@ -285,6 +285,10 @@ static void run_web(Conf *conf, const char *config_path)
     ctx.conf = (Conf *)conf;
     ctx.port = port;
     ctx.rate_limiter = rate_limiter_create(60, 60);
+    ctx.metrics = metrics_create();
+    ctx.change_tracker = ct_create();
+
+    registry_set_change_tracker(ctx.change_tracker);
 
     char pbuf[16];
     snprintf(pbuf, sizeof(pbuf), "%d", port);
@@ -292,6 +296,8 @@ static void run_web(Conf *conf, const char *config_path)
     server_start(&ctx);
 
     rate_limiter_destroy(ctx.rate_limiter);
+    metrics_destroy(ctx.metrics);
+    ct_destroy(ctx.change_tracker);
     agent_destroy(agent);
     if (g_session_manager) session_manager_free(g_session_manager);
     registry_destroy();

@@ -474,6 +474,8 @@ static void handle_session_update(HTTPRequest *req, Client *client, ServerContex
 
 static void handle_chat(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
+    if (ctx->metrics) metrics_counter_inc(ctx->metrics, "echo_chat_requests_total", "Total chat requests");
+
     if (!middleware_check_unlock(req, ctx))
     {
         server_response_error(client, 401, "unauthorized");
@@ -597,13 +599,69 @@ static void handle_sse_stream(HTTPRequest *req, Client *client, ServerContext *c
     client_close(client);
 }
 
+static void handle_metrics(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    (void)req;
+    if (!ctx->metrics)
+    {
+        server_response_error(client, 500, "metrics not available");
+        return;
+    }
+    char *body = metrics_render(ctx->metrics);
+    if (!body) { server_response_error(client, 500, "oom"); return; }
+    server_response(client, 200, "text/plain; charset=utf-8", body);
+    free(body);
+}
+
+static void handle_undo(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    (void)req;
+    if (!ctx->change_tracker)
+    {
+        server_response_error(client, 400, "change tracker not available");
+        return;
+    }
+    int rc = ct_undo(ctx->change_tracker);
+    if (rc < 0)
+    {
+        server_response_json(client, 200, "{\"undo\":false,\"reason\":\"nothing to undo\"}");
+        return;
+    }
+    char *resp = NULL;
+    if (asprintf(&resp, "{\"undo\":true,\"bytes_restored\":%d}", rc) < 0)
+        resp = NULL;
+    server_response_json(client, 200, resp ? resp : "{\"undo\":true}");
+    free(resp);
+}
+
+static void handle_redo(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    (void)req;
+    if (!ctx->change_tracker)
+    {
+        server_response_error(client, 400, "change tracker not available");
+        return;
+    }
+    int rc = ct_redo(ctx->change_tracker);
+    if (rc < 0)
+    {
+        server_response_json(client, 200, "{\"redo\":false,\"reason\":\"nothing to redo\"}");
+        return;
+    }
+    char *resp = NULL;
+    if (asprintf(&resp, "{\"redo\":true,\"bytes_written\":%d}", rc) < 0)
+        resp = NULL;
+    server_response_json(client, 200, resp ? resp : "{\"redo\":true}");
+    free(resp);
+}
+
 const Route routes[] = {
-    {"GET",  "/api/status",   0, 0, handle_status},
-    {"GET",  "/api/health",   0, 0, handle_health},
-    {"GET",  "/api/config",   0, 0, handle_config},
-    {"POST", "/api/setup",    0, 0, handle_setup},
-    {"POST", "/api/unlock",   0, 0, handle_unlock},
-    {"POST", "/api/logout",   0, 1, handle_logout},
+    {"GET",  "/api/status",        0, 0, handle_status},
+    {"GET",  "/api/health",        0, 0, handle_health},
+    {"GET",  "/api/config",        0, 0, handle_config},
+    {"POST", "/api/setup",         0, 0, handle_setup},
+    {"POST", "/api/unlock",        0, 0, handle_unlock},
+    {"POST", "/api/logout",        0, 1, handle_logout},
     {"GET",  "/api/sessions",      0, 1, handle_sessions},
     {"POST", "/api/sessions",      0, 1, handle_create_session},
     {"GET",  "/api/sessions/",     1, 1, handle_session_get},
@@ -611,6 +669,9 @@ const Route routes[] = {
     {"PUT",  "/api/sessions/",     1, 1, handle_session_update},
     {"POST", "/api/chat",          0, 1, handle_chat},
     {"GET",  "/api/stream",        0, 0, handle_sse_stream},
+    {"GET",  "/api/metrics",       0, 0, handle_metrics},
+    {"POST", "/api/undo",          0, 1, handle_undo},
+    {"POST", "/api/redo",          0, 1, handle_redo},
 };
 
 const int routes_count = sizeof(routes) / sizeof(routes[0]);
@@ -628,6 +689,10 @@ typedef struct {
     SessionManager *sm;
     SafetyConfig *safety;
     WSClient *ws;
+    uv_loop_t *loop;
+    char *pending_request_id;
+    int approval_done;
+    int approval_result;
 } WSChatCtx;
 
 static void ws_chat_on_chunk(const char *chunk, void *userdata)
@@ -658,11 +723,33 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
     }
 
     cJSON *type_item = cJSON_GetObjectItem(json, "type");
-    if (type_item && type_item->valuestring &&
-        strcmp(type_item->valuestring, "approval_response") == 0)
+    if (type_item && type_item->valuestring)
     {
-        cJSON_Delete(json);
-        return;
+        if (strcmp(type_item->valuestring, "approval_response") == 0)
+        {
+            cJSON *rid = cJSON_GetObjectItem(json, "request_id");
+            cJSON *ok = cJSON_GetObjectItem(json, "approved");
+            if (rid && rid->valuestring && ok && cJSON_IsBool(ok) &&
+                c->pending_request_id && strcmp(rid->valuestring, c->pending_request_id) == 0)
+            {
+                c->approval_result = cJSON_IsTrue(ok) ? 1 : 0;
+                c->approval_done = 1;
+            }
+            cJSON_Delete(json);
+            return;
+        }
+        if (strcmp(type_item->valuestring, "stop") == 0)
+        {
+            agent_cancel(c->agent);
+            c->approval_done = 1;
+            cJSON_Delete(json);
+            return;
+        }
+        if (strcmp(type_item->valuestring, "message") != 0)
+        {
+            cJSON_Delete(json);
+            return;
+        }
     }
 
     cJSON *msg = cJSON_GetObjectItem(json, "message");
@@ -697,7 +784,12 @@ static void ws_chat_on_close(WSClient *ws, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
     (void)ws;
-    if (c) free(c);
+    if (c)
+    {
+        c->approval_done = 1;
+        free(c->pending_request_id);
+        free(c);
+    }
 }
 
 static int ws_approval_cb(const char *tool_name, const char *arguments, void *userdata)
@@ -710,6 +802,11 @@ static int ws_approval_cb(const char *tool_name, const char *arguments, void *us
     approval_counter++;
     if (asprintf(&req_id, "apr_%lu", approval_counter) < 0) return 0;
 
+    free(c->pending_request_id);
+    c->pending_request_id = str_dup(req_id);
+    c->approval_done = 0;
+    c->approval_result = 0;
+
     cJSON *req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "type", "approval_request");
     cJSON_AddStringToObject(req, "request_id", req_id);
@@ -720,17 +817,10 @@ static int ws_approval_cb(const char *tool_name, const char *arguments, void *us
     free(req_str);
     cJSON_Delete(req);
 
-    int approved = 1;
-    if (c->safety)
-    {
-        if (strcmp(tool_name, "bash") == 0)
-            approved = safety_check_command(c->safety, arguments);
-        else if (strcmp(tool_name, "read_file") == 0 ||
-                 strcmp(tool_name, "write_file") == 0)
-            approved = safety_check_path(c->safety, arguments);
-        else if (strcmp(tool_name, "web_fetch") == 0)
-            approved = safety_check_url(c->safety, arguments);
-    }
+    while (!c->approval_done && c->ws && c->loop)
+        uv_run(c->loop, UV_RUN_NOWAIT);
+
+    int approved = c->approval_result;
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "type", "approval_response");
@@ -745,7 +835,7 @@ static int ws_approval_cb(const char *tool_name, const char *arguments, void *us
     return approved;
 }
 
-void routes_ws_chat_init(WSClient *ws, ServerContext *ctx)
+void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
 {
     WSChatCtx *c = calloc(1, sizeof(WSChatCtx));
     if (!c) return;
@@ -753,6 +843,7 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx)
     c->sm = ctx->sm;
     c->safety = ctx->safety;
     c->ws = ws;
+    c->loop = ctx->loop;
 
     ws->on_message = ws_chat_on_message;
     ws->on_close = ws_chat_on_close;
@@ -761,9 +852,56 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx)
     if (c->agent)
         agent_set_approval_callback(c->agent, ws_approval_cb, c);
 
+    if (query && query[0] && c->sm && c->agent)
+    {
+        const char *sid_start = strstr(query, "session_id=");
+        if (sid_start)
+        {
+            sid_start += 11;
+            const char *sid_end = strchr(sid_start, '&');
+            size_t sid_len = sid_end ? (size_t)(sid_end - sid_start) : strlen(sid_start);
+            if (sid_len > 0 && sid_len < 256)
+            {
+                char session_id[256];
+                memcpy(session_id, sid_start, sid_len);
+                session_id[sid_len] = '\0';
+
+                Session *s = session_manager_load_session(c->sm, session_id);
+                if (s)
+                {
+                    free(c->agent->session_id);
+                    c->agent->session_id = str_dup(session_id);
+
+                    if (s->messages_count > 0)
+                    {
+                        cJSON *hist = cJSON_CreateObject();
+                        cJSON_AddStringToObject(hist, "type", "history");
+                        cJSON *arr = cJSON_CreateArray();
+                        for (int i = 0; i < s->messages_count; i++)
+                        {
+                            cJSON *m = cJSON_CreateObject();
+                            cJSON_AddStringToObject(m, "role",
+                                s->messages[i].role ? s->messages[i].role : "unknown");
+                            cJSON_AddStringToObject(m, "content",
+                                s->messages[i].content ? s->messages[i].content : "");
+                            cJSON_AddItemToArray(arr, m);
+                        }
+                        cJSON_AddItemToObject(hist, "messages", arr);
+                        char *hist_str = cJSON_PrintUnformatted(hist);
+                        if (hist_str) ws_send_json(ws, hist_str);
+                        free(hist_str);
+                        cJSON_Delete(hist);
+                    }
+
+                    session_free(s);
+                }
+            }
+        }
+    }
+
     cJSON *ready = cJSON_CreateObject();
     cJSON_AddStringToObject(ready, "type", "ready");
-    if (c->agent->session_id)
+    if (c->agent && c->agent->session_id)
         cJSON_AddStringToObject(ready, "session_id", c->agent->session_id);
     char *ready_str = cJSON_PrintUnformatted(ready);
     if (ready_str) ws_send_json(ws, ready_str);

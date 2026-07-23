@@ -5,6 +5,7 @@
 
 #include "registry.h"
 #include "tool.h"
+#include "../change_tracker/change_tracker.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 
@@ -88,6 +89,16 @@ char *registry_schemas_json(void)
 int registry_count(void)
 {
     return tool_count;
+}
+
+void registry_set_change_tracker(ChangeTracker *ct)
+{
+    void tool_write_file_set_change_tracker(Tool *tool, ChangeTracker *ct);
+    for (int i = 0; i < tool_count; i++)
+    {
+        if (strcmp(tools[i]->name, "write_file") == 0)
+            tool_write_file_set_change_tracker(tools[i], ct);
+    }
 }
 
 void registry_destroy(void)

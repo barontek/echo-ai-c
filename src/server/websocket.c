@@ -193,7 +193,7 @@ int ws_do_handshake(HTTPRequest *req, Client *client, ServerContext *ctx)
 
     uv_read_stop((uv_stream_t *)req->client);
     ((uv_stream_t *)req->client)->data = ws;
-    routes_ws_chat_init(ws, ctx);
+    routes_ws_chat_init(ws, ctx, req->query);
     ws_start_read(ws);
 
     return 0;

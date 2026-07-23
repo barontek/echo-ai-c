@@ -8,6 +8,8 @@
 #include "../tools/registry.h"
 #include "../safety/safety.h"
 #include "../utils/rate_limiter.h"
+#include "../utils/metrics.h"
+#include "../change_tracker/change_tracker.h"
 
 typedef enum {
     STATE_LOCKED,
@@ -26,6 +28,8 @@ typedef struct {
     uv_loop_t *loop;
     int port;
     RateLimiter *rate_limiter;
+    Metrics *metrics;
+    ChangeTracker *change_tracker;
 } ServerContext;
 
 typedef struct Client Client;

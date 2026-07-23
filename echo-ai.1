@@ -1,0 +1,64 @@
+.TH ECHO\-AI 1 2026-07-23 "Echo AI" "User Commands"
+.SH NAME
+echo\-ai \- agentic AI system with conversational frontend
+.SH SYNOPSIS
+.B echo\-ai
+[\fB\-\-web\fR] [\fB\-\-cli\fR] [\fB\-\-chat\fR]
+[\fB\-\-config\fR \fIPATH\fR] [\fB\-\-debug\fR]
+[\fB\-\-help\fR]
+.SH DESCRIPTION
+Echo AI is an agentic AI system with a conversational frontend and a tool-using backend.
+It runs a HTTP/WebSocket server (default) or an interactive CLI REPL.
+.SH OPTIONS
+.TP
+.B \-\-web
+Start the HTTP server on port 8080 (default).
+.TP
+.B \-\-cli
+Start the interactive CLI REPL.
+.TP
+.B \-\-chat
+Start lightweight chat mode (not yet implemented).
+.TP
+.B \-\-config \fIPATH\fR
+Path to configuration file (default: \fBconfig.conf\fR).
+.TP
+.B \-\-debug
+Enable debug-level logging to stderr.
+.TP
+.B \-\-help
+Display this help message and exit.
+.SH CONFIGURATION
+Echo AI uses a custom \fB.conf\fR format. See \fBconfig.conf.example\fR for a complete reference.
+.P
+Configuration is loaded from \fBconfig.conf\fR in the current directory by default.
+Use \fB\-\-config\fR to specify a different path.
+.SH ENVIRONMENT
+.TP
+.B ECHO_PASSWORD
+Encryption password for session persistence. If not set, the server reads from
+\fB~/.config/echo\-ai/password\fR. If neither is available, session persistence is skipped
+and the server runs in unlocked mode (frontend handles password entry).
+.SH FILES
+.TP
+.I ~/.config/echo\-ai/password
+Optional password file for session encryption.
+.TP
+.I ~/.config/echo\-ai/salt
+Scrypt salt file (auto-generated on first run).
+.TP
+.I ~/.config/echo\-ai/.verifier
+Encrypted verifier token for password validation.
+.TP
+.I ~/.config/echo\-ai/sessions/
+Directory containing encrypted session data.
+.SH DEPENDENCIES
+.B libuv,
+.B libcurl,
+.B sqlite3,
+.B openssl,
+.B cJSON
+.SH BUGS
+Report bugs at https://github.com/barontek/echo-ai-c/issues
+.SH COPYRIGHT
+Copyright \(co 2026 Barontek. License: MIT

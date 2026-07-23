@@ -4,6 +4,7 @@
 #include "message.h"
 #include "../llm/provider.h"
 #include "../session/session_manager.h"
+#include "../utils/circuit_breaker.h"
 
 typedef struct {
     const char *provider;
@@ -35,6 +36,7 @@ typedef struct {
     int parallel_tool_exec;
     volatile int cancel_requested;
     SessionManager *sm;
+    CircuitBreaker *cb;
     int (*on_approval)(const char *tool_name, const char *arguments, void *userdata);
     void *approval_userdata;
 } Agent;

@@ -18,7 +18,7 @@ extern const int routes_count;
 
 int route_match(const char *method, const char *path, const Route *r);
 
-void routes_ws_chat_init(WSClient *ws, ServerContext *ctx);
+void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query);
 void server_sse_write(Client *client, const char *data);
 
 #endif

@@ -247,6 +247,6 @@ const state = {
 - [x] **P3**: Each essential tool works via agent (bash, read, write, ls, glob, grep, web_fetch, web_search)
 - [x] **P4**: Sessions persist across restarts, encrypt/decrypt correctly; password change + crash recovery works
 - [x] **P5**: HTTP server starts, serves REST endpoints, WebSocket streams chat, approval flow works
-- [ ] **P6**: Full chat loop in browser: unlock → create session → send message → stream response → tool calls → approval → done
-- [ ] **P7**: Tests pass, metrics export, undo/redo works, circuit breaker protects against LLM failures
-- [ ] **P8**: README, man page, config.conf.example, header doc comments all written
+- [x] **P6**: Full chat loop in browser: unlock → create session → send message → stream response → tool calls → approval → done
+- [x] **P7**: Tests pass, metrics export, undo/redo works, circuit breaker protects against LLM failures
+- [x] **P8**: README, man page, config.conf.example, header doc comments all written

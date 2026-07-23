@@ -20,6 +20,13 @@ const App = {
         WsClient.on('ready', (d) => {
             if (d.session_id) { this.state.sessionId = d.session_id; this.refreshSessions(); }
         });
+        WsClient.on('history', (d) => {
+            if (d.messages) {
+                this.state.messages = d.messages;
+                Chat.clear();
+                for (const m of d.messages) Chat.renderMessage(m);
+            }
+        });
         WsClient.on('content', (d) => { Chat.appendChunk(d.content || ''); });
         WsClient.on('done', (d) => {
             const last = this.state.messages[this.state.messages.length - 1];

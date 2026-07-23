@@ -34,6 +34,7 @@ Agent *agent_create(const AgentConfig *cfg)
     agent->max_context_chars = cfg->max_context_chars;
     agent->parallel_tool_exec = cfg->parallel_tool_exec;
     agent->cancel_requested = 0;
+    agent->cb = cb_create(5, 30000);
 
     if (!agent->model)
     {
@@ -71,6 +72,7 @@ void agent_destroy(Agent *agent)
     free(agent->model);
     free(agent->system_prompt);
     free(agent->session_id);
+    cb_destroy(agent->cb);
     free(agent);
 }
 
@@ -147,6 +149,12 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
 
 static LLMResponse *agent_llm_call(Agent *agent)
 {
+    if (agent->cb && !cb_is_available(agent->cb))
+    {
+        log_error("circuit breaker open, skipping LLM call", NULL);
+        return NULL;
+    }
+
     int current_messages = agent->messages_count;
     Message *ctx_msgs = apply_context_window(agent->messages, &current_messages,
                                              agent->max_context_messages,
@@ -168,9 +176,14 @@ static LLMResponse *agent_llm_call(Agent *agent)
         agent->messages_count = current_messages;
     }
 
-    return agent->provider->chat(
+    LLMResponse *resp = agent->provider->chat(
         agent->provider, agent->messages, agent->messages_count,
         agent->model, agent->temperature, agent->timeout);
+
+    if (resp && agent->cb) cb_record_success(agent->cb);
+    else if (!resp && agent->cb) cb_record_failure(agent->cb);
+
+    return resp;
 }
 
 static int tool_calls_remaining(ToolCall *calls, int count)
@@ -250,10 +263,19 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
 
     for (int iter = 0; iter < agent->max_iterations; iter++)
     {
+        if (agent->cb && !cb_is_available(agent->cb))
+        {
+            log_error("circuit breaker open, skipping LLM call", NULL);
+            return NULL;
+        }
+
         LLMResponse *resp = agent->provider->chat_streaming(
             agent->provider, agent->messages, agent->messages_count,
             agent->model, agent->temperature, agent->timeout,
             on_chunk, userdata);
+
+        if (resp && agent->cb) cb_record_success(agent->cb);
+        else if (!resp && agent->cb) cb_record_failure(agent->cb);
 
         if (!resp) return NULL;
 

@@ -5,11 +5,13 @@
 
 #include "tool.h"
 #include "../safety/safety.h"
+#include "../change_tracker/change_tracker.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 
 typedef struct {
     SafetyConfig *safety;
+    ChangeTracker *ct;
 } FileCtx;
 
 static ToolResult *write_file_execute(Tool *self, const char *args_json)
@@ -40,6 +42,9 @@ static ToolResult *write_file_execute(Tool *self, const char *args_json)
 
     char *resolved = safety_resolve_path(ctx->safety, path);
     if (!resolved) return tool_result_error("path resolution failed", "execution_error");
+
+    if (ctx->ct)
+        ct_snapshot(ctx->ct, resolved);
 
     FILE *fp = fopen(resolved, "w");
     if (!fp)
@@ -91,4 +96,10 @@ Tool *tool_write_file_create(SafetyConfig *safety)
     t->destroy = write_file_destroy;
     t->ctx = ctx;
     return t;
+}
+
+void tool_write_file_set_change_tracker(Tool *tool, ChangeTracker *ct)
+{
+    if (!tool || !tool->ctx) return;
+    ((FileCtx *)tool->ctx)->ct = ct;
 }
