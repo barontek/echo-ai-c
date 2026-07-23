@@ -4,7 +4,6 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <termios.h>
 #include <sys/stat.h>
 
 #include <arpa/inet.h>
@@ -199,37 +198,6 @@ char *encryption_resolve_password(void)
             if (len > 0) return str_dup(buf);
         }
         fclose(f);
-    }
-
-    FILE *tty = fopen("/dev/tty", "r+");
-    if (!tty && isatty(STDIN_FILENO)) tty = stdin;
-    if (tty)
-    {
-        struct termios old, new;
-        int has_termios = (tcgetattr(fileno(tty), &old) == 0);
-        if (has_termios)
-        {
-            new = old;
-            new.c_lflag &= ~ECHO;
-            tcsetattr(fileno(tty), TCSANOW, &new);
-        }
-
-        fprintf(stderr, "Enter password: ");
-        fflush(stderr);
-
-        char *pw = NULL;
-        size_t cap = 0;
-        ssize_t len = getline(&pw, &cap, tty);
-        if (has_termios) tcsetattr(fileno(tty), TCSANOW, &old);
-        if (tty != stdin) fclose(tty);
-
-        if (len > 0 && pw[len - 1] == '\n') pw[len - 1] = '\0';
-        if (len > 0 && pw[0] != '\0')
-        {
-            fprintf(stderr, "\n");
-            return pw;
-        }
-        free(pw);
     }
 
     return NULL;

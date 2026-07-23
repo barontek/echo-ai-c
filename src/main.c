@@ -24,8 +24,9 @@ static void print_usage(const char *prog)
     printf("  --cli        Interactive REPL with rich-rendered chat\n");
     printf("  --chat       Lightweight interactive chat\n");
     printf("  --web        HTTP server on port 8080 (default)\n");
-    printf("  --config     Path to config file\n");
-    printf("  --help       Show this help message\n");
+    printf("  --config PATH  Path to config file\n");
+    printf("  --debug        Enable debug-level logging\n");
+    printf("  --help         Show this help message\n");
 }
 
 static SafetyConfig *load_safety_config(Conf *conf)
@@ -307,12 +308,14 @@ int main(int argc, char *argv[])
         {"chat",   no_argument,       0, 't'},
         {"web",    no_argument,       0, 'w'},
         {"config", required_argument, 0, 'f'},
+        {"debug",  no_argument,       0, 'd'},
         {"help",   no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "ctwf:h", long_opts, NULL)) != -1)
+    int debug = 0;
+    while ((opt = getopt_long(argc, argv, "ctwf:dh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -320,12 +323,14 @@ int main(int argc, char *argv[])
         case 't': mode = MODE_CHAT; break;
         case 'w': mode = MODE_WEB;  break;
         case 'f': config_path = optarg; break;
+        case 'd': debug = 1; break;
         case 'h': print_usage(argv[0]); return 0;
         default:  print_usage(argv[0]); return 1;
         }
     }
 
     log_init();
+    if (debug) log_set_level(LOG_DEBUG);
     log_info("starting echo-ai", "mode", mode == MODE_CLI ? "cli" :
                                      mode == MODE_CHAT ? "chat" : "web", NULL);
     log_info("loading config", "path", config_path, NULL);

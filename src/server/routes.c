@@ -158,48 +158,41 @@ static void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
     }
     char *password = str_dup(pw->valuestring);
     cJSON_Delete(json);
-    fprintf(stderr, "DEBUG: password=%s\n", password ? password : "NULL");
     if (!password) { server_response_error(client, 500, "oom"); return; }
 
     const char *home = getenv("HOME");
-    fprintf(stderr, "DEBUG: home=%s\n", home ? home : "NULL");
+    log_debug("unlock", "home", home ? home : "NULL", NULL);
     if (!home) { free(password); server_response_error(client, 500, "HOME not set"); return; }
 
     char *salt_path = NULL;
     if (asprintf(&salt_path, "%s/.config/echo-ai/salt", home) < 0)
     { free(password); server_response_error(client, 500, "oom"); return; }
-    fprintf(stderr, "DEBUG: salt_path=%s\n", salt_path);
 
     unsigned char salt[64];
     int salt_len = 0;
     if (encryption_salt_load(salt_path, salt, &salt_len) != 0)
     {
-        fprintf(stderr, "DEBUG: salt_load failed\n");
         free(salt_path);
         free(password);
         server_response_error(client, 500, "salt not found");
         return;
     }
-    fprintf(stderr, "DEBUG: salt loaded, len=%d\n", salt_len);
 
     EncryptionKey key;
     if (encryption_key_derive(password, salt, salt_len, &key) != 0)
     {
-        fprintf(stderr, "DEBUG: key_derive failed\n");
         free(salt_path);
         free(password);
         server_response_error(client, 500, "key derivation failed");
         return;
     }
-    fprintf(stderr, "DEBUG: key derived\n");
 
     char *verifier_path = NULL;
     if (asprintf(&verifier_path, "%s/.config/echo-ai/.verifier", home) < 0)
     { memset(&key, 0, sizeof(key)); free(salt_path); free(password); server_response_error(client, 500, "oom"); return; }
-    fprintf(stderr, "DEBUG: verifier_path=%s\n", verifier_path);
 
     int rc = encryption_check_verifier(&key, verifier_path);
-    fprintf(stderr, "DEBUG: verifier check=%d\n", rc);
+    log_debug("verifier", "result", rc == 0 ? "ok" : "fail", NULL);
     free(verifier_path);
     if (rc != 0)
     {
@@ -299,19 +292,23 @@ static void handle_create_session(HTTPRequest *req, Client *client, ServerContex
         return;
     }
 
-    const char *title = "Chat Session";
+    char *title = str_dup("Chat Session");
     if (req->body && req->body_len > 0)
     {
         cJSON *json = cJSON_Parse(req->body);
         if (json)
         {
             cJSON *t = cJSON_GetObjectItem(json, "title");
-            if (t && t->valuestring) title = t->valuestring;
+            if (t && t->valuestring) {
+                free(title);
+                title = str_dup(t->valuestring);
+            }
             cJSON_Delete(json);
         }
     }
 
     Session *s = session_manager_create_session(ctx->sm, title);
+    free(title);
     if (!s)
     {
         server_response_error(client, 500, "failed to create session");
