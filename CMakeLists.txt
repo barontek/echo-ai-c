@@ -1,0 +1,79 @@
+cmake_minimum_required(VERSION 3.16)
+project(echo-ai VERSION 0.1.0 LANGUAGES C)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+find_package(PkgConfig REQUIRED)
+
+pkg_check_modules(LIBUV REQUIRED libuv)
+pkg_check_modules(LIBCURL REQUIRED libcurl)
+pkg_check_modules(SQLITE3 REQUIRED sqlite3)
+pkg_check_modules(OPENSSL REQUIRED openssl)
+pkg_check_modules(CJSON REQUIRED libcjson)
+
+add_executable(echo-ai
+    src/main.c
+    src/config/config.c
+    src/utils/string_utils.c
+    src/utils/logging.c
+    src/utils/json.c
+    src/agent/message.c
+    src/agent/agent.c
+    src/agent/context.c
+    src/llm/ollama.c
+    src/llm/factory.c
+    src/tools/tool.c
+    src/tools/registry.c
+    src/tools/bash.c
+    src/tools/read_file.c
+    src/tools/write_file.c
+    src/tools/list_dir.c
+    src/tools/glob_tool.c
+    src/tools/grep_tool.c
+    src/tools/web_fetch.c
+    src/tools/web_search.c
+    src/safety/safety.c
+    src/session/session.c
+    src/session/encryption.c
+    src/session/session_manager.c
+    src/session/migration.c
+    src/utils/rate_limiter.c
+    src/server/server.c
+    src/server/websocket.c
+    src/server/routes.c
+    src/server/middleware.c
+)
+
+target_include_directories(echo-ai PRIVATE
+    ${LIBUV_INCLUDE_DIRS}
+    ${LIBCURL_INCLUDE_DIRS}
+    ${SQLITE3_INCLUDE_DIRS}
+    ${OPENSSL_INCLUDE_DIRS}
+    ${CJSON_INCLUDE_DIRS}
+)
+
+target_link_libraries(echo-ai PRIVATE
+    ${LIBUV_LIBRARIES}
+    ${LIBCURL_LIBRARIES}
+    ${SQLITE3_LIBRARIES}
+    ${OPENSSL_LIBRARIES}
+    ${CJSON_LIBRARIES}
+)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(echo-ai PRIVATE -Wall -Wextra -Wpedantic -Werror -g)
+else()
+    target_compile_options(echo-ai PRIVATE -Wall -Wextra -O2)
+endif()
+
+# Tests
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    pkg_check_modules(CHECK check)
+    if(CHECK_FOUND)
+        enable_testing()
+        add_subdirectory(tests)
+    endif()
+endif()
