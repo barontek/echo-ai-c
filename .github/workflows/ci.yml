@@ -9,13 +9,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: debian:bookworm-slim
+    container: debian:bookworm
 
     steps:
     - uses: actions/checkout@v4
 
     - name: install deps
-      run: apt-get update && apt-get install -y cmake pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check
+      run: apt-get update && apt-get install -y cmake pkgconf pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check
 
     - name: configure
       run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
