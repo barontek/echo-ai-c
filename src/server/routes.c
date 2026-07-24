@@ -1123,6 +1123,11 @@ static void ws_chat_flush_queue(WSChatCtx *c)
             {
                 LLMResponse *resp = agent_run_streaming(c->agent, msg->valuestring,
                                                         ws_chat_on_chunk, c);
+                if (!c->active_session_id && c->agent && c->agent->session_id)
+                {
+                    free(c->active_session_id);
+                    c->active_session_id = str_dup(c->agent->session_id);
+                }
                 if (resp)
                 {
                     ws_send_done(c->ws, c->active_session_id, NULL, resp);
@@ -1274,6 +1279,11 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
 
                 LLMResponse *resp = agent_run_streaming(c->agent, content_item->valuestring,
                                                         ws_chat_on_chunk, c);
+                if (!c->active_session_id && c->agent && c->agent->session_id)
+                {
+                    free(c->active_session_id);
+                    c->active_session_id = str_dup(c->agent->session_id);
+                }
                 if (resp)
                 {
                     ws_send_done(c->ws, c->active_session_id, NULL, resp);
@@ -1329,6 +1339,13 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
     LLMResponse *resp = agent_run_streaming(c->agent, msg->valuestring,
                                             ws_chat_on_chunk, c);
     cJSON_Delete(json);
+
+    /* agent may have created a session during the run — capture it */
+    if (!c->active_session_id && c->agent && c->agent->session_id)
+    {
+        free(c->active_session_id);
+        c->active_session_id = str_dup(c->agent->session_id);
+    }
 
     if (resp)
     {
