@@ -387,9 +387,10 @@ static void agent_generate_title(Agent *agent)
         return;
     }
 
+    /* near-zero temperature: titling must be deterministic, not creative */
     LLMResponse *resp = agent->provider->chat(
         agent->provider, title_msgs, 2,
-        agent->model, 0.3, 15);
+        agent->model, 0.1, 15);
 
     free(title_msgs[0].role);
     free(title_msgs[0].content);
