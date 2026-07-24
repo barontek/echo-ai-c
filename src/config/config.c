@@ -61,63 +61,88 @@ Conf *conf_load(const char *path)
 
     char section[256] = "";
     char line[4096];
+    int last_entry_idx = -1;  /* track last entry for multi-line continuation */
 
     while (fgets(line, sizeof(line), fp))
     {
-        trim_line(line);
-        if (line[0] == '\0' || line[0] == '#') continue;
+        /* remove trailing newline if present */
+        size_t llen = strlen(line);
+        if (llen > 0 && line[llen - 1] == '\n') line[llen - 1] = '\0';
 
-        if (line[0] == '[')
+        char *raw = line;
+        while (isspace((unsigned char)*raw)) raw++;
+
+        if (raw[0] == '\0' || raw[0] == '#') continue;
+
+        if (raw[0] == '[')
         {
-            char *end = strchr(line, ']');
+            char *end = strchr(raw, ']');
             if (!end) continue;
             *end = '\0';
-            size_t slen = strlen(line + 1);
+            size_t slen = strlen(raw + 1);
             if (slen >= sizeof(section)) slen = sizeof(section) - 1;
-            memcpy(section, line + 1, slen);
+            memcpy(section, raw + 1, slen);
             section[slen] = '\0';
+            last_entry_idx = -1;
             continue;
         }
 
-        char *eq = strchr(line, '=');
-        if (!eq) continue;
-
-        *eq = '\0';
-        char *key = line;
-        char *value = eq + 1;
-
-        trim_line(key);
-        trim_line(value);
-
-        char *full_key = NULL;
-        if (section[0])
+        char *eq = strchr(raw, '=');
+        if (eq)
         {
-            if (asprintf(&full_key, "%s.%s", section, key) < 0)
-            { free(full_key); continue; }
-        }
-        else
-        {
-            if (asprintf(&full_key, "%s", key) < 0)
-            { free(full_key); continue; }
-        }
+            *eq = '\0';
+            char *key = raw;
+            char *value = eq + 1;
 
-        if (conf->count < MAX_ENTRIES)
-        {
-            char *k = str_dup(full_key);
-            char *v = str_dup(value);
-            if (k && v)
+            trim_line(key);
+            trim_line(value);
+
+            char *full_key = NULL;
+            if (section[0])
             {
-                conf->entries[conf->count].key = k;
-                conf->entries[conf->count].value = v;
-                conf->count++;
+                if (asprintf(&full_key, "%s.%s", section, key) < 0)
+                { free(full_key); continue; }
             }
             else
             {
-                free(k);
-                free(v);
+                if (asprintf(&full_key, "%s", key) < 0)
+                { free(full_key); continue; }
+            }
+
+            if (conf->count < MAX_ENTRIES)
+            {
+                char *k = str_dup(full_key);
+                char *v = str_dup(value);
+                if (k && v)
+                {
+                    conf->entries[conf->count].key = k;
+                    conf->entries[conf->count].value = v;
+                    last_entry_idx = conf->count;
+                    conf->count++;
+                }
+                else
+                {
+                    free(k);
+                    free(v);
+                    last_entry_idx = -1;
+                }
+            }
+            free(full_key);
+        }
+        else if (last_entry_idx >= 0)
+        {
+            /* continuation line: append to the previous entry's value */
+            char *cur = conf->entries[last_entry_idx].value;
+            size_t cur_len = strlen(cur);
+            size_t add_len = strlen(raw);
+            char *new_val = realloc(cur, cur_len + 1 + add_len + 1);
+            if (new_val)
+            {
+                new_val[cur_len] = '\n';
+                memcpy(new_val + cur_len + 1, raw, add_len + 1);
+                conf->entries[last_entry_idx].value = new_val;
             }
         }
-        free(full_key);
     }
 
     fclose(fp);
