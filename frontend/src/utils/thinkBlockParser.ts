@@ -1,3 +1,14 @@
+function trimPartialTag(s: string): string {
+  const lastLt = s.lastIndexOf('<');
+  if (lastLt === -1) return s;
+  const tail = s.slice(lastLt);
+  if (tail === '<think>' || tail === '</think>') return s;
+  if ('<think>'.startsWith(tail) || '</think>'.startsWith(tail)) {
+    return s.slice(0, lastLt);
+  }
+  return s;
+}
+
 export function parseThinkBlocks(
   content: string
 ): Array<{ type: 'thinking' | 'content'; text: string }> {
@@ -6,11 +17,13 @@ export function parseThinkBlocks(
   while (remaining.length) {
     const thinkStart = remaining.indexOf('<think>');
     if (thinkStart === -1) {
-      if (remaining.trim()) blocks.push({ type: 'content', text: remaining });
+      const trimmed = trimPartialTag(remaining);
+      if (trimmed.trim()) blocks.push({ type: 'content', text: trimmed });
       break;
     }
     if (thinkStart > 0) {
-      blocks.push({ type: 'content', text: remaining.slice(0, thinkStart) });
+      const trimmed = trimPartialTag(remaining.slice(0, thinkStart));
+      if (trimmed.trim()) blocks.push({ type: 'content', text: trimmed });
     }
     const thinkEnd = remaining.indexOf('</think>', thinkStart);
     if (thinkEnd === -1) {

@@ -305,11 +305,11 @@ describe('parseThinkBlocks — streaming thinking classification', () => {
     expect(blocks).toEqual([{ type: 'thinking', text: 'I am thinking' }]);
   });
 
-  it('progressive chunks: partial <think tag not yet classified as thinking', () => {
+  it('progressive chunks: partial <think tag hidden until complete', () => {
     const partial = parseThinkBlocks('prefix <thi');
-    // '<thi' is not a complete <think> so it stays as content
-    expect(partial).toEqual([{ type: 'content', text: 'prefix <thi' }]);
-    // Once nk> arrives it becomes thinking
+    expect(partial).toEqual([{ type: 'content', text: 'prefix ' }]);
+    const partialEnd = parseThinkBlocks('</thi');
+    expect(partialEnd).toEqual([]);
     const complete = parseThinkBlocks('prefix <think>thought</think>answer');
     expect(complete).toEqual([
       { type: 'content', text: 'prefix ' },
