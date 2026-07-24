@@ -1183,13 +1183,73 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
     }
 
     cJSON *session_id_item = cJSON_GetObjectItem(json, "session_id");
-    if (session_id_item && session_id_item->valuestring && c->active_session_id)
+    if (session_id_item && session_id_item->valuestring)
     {
-        if (strcmp(session_id_item->valuestring, c->active_session_id) != 0)
+        if (c->active_session_id)
         {
-            ws_send_json(ws, "{\"type\":\"error\",\"message\":\"stale session_id\"}");
-            cJSON_Delete(json);
-            return;
+            if (strcmp(session_id_item->valuestring, c->active_session_id) != 0)
+            {
+                ws_send_json(ws, "{\"type\":\"error\",\"message\":\"stale session_id\"}");
+                cJSON_Delete(json);
+                return;
+            }
+        }
+        else if (c->sm && c->agent)
+        {
+            Session *s = session_manager_load_session(c->sm, session_id_item->valuestring);
+            if (s)
+            {
+                free(c->active_session_id);
+                c->active_session_id = str_dup(session_id_item->valuestring);
+                free(c->agent->session_id);
+                c->agent->session_id = str_dup(session_id_item->valuestring);
+
+                if (c->agent->messages)
+                {
+                    message_free_all(c->agent->messages, c->agent->messages_count);
+                    c->agent->messages = NULL;
+                    c->agent->messages_count = 0;
+                }
+                if (s->messages_count > 0)
+                {
+                    c->agent->messages = calloc((size_t)s->messages_count, sizeof(Message));
+                    if (c->agent->messages)
+                    {
+                        for (int i = 0; i < s->messages_count; i++)
+                        {
+                            if (message_copy(&c->agent->messages[i], &s->messages[i]) != 0)
+                            {
+                                message_free_all(c->agent->messages, i);
+                                c->agent->messages = NULL;
+                                c->agent->messages_count = 0;
+                                break;
+                            }
+                        }
+                        if (c->agent->messages)
+                            c->agent->messages_count = s->messages_count;
+                    }
+
+                    cJSON *hist = cJSON_CreateObject();
+                    cJSON_AddStringToObject(hist, "type", "history");
+                    cJSON *arr = cJSON_CreateArray();
+                    for (int i = 0; i < s->messages_count; i++)
+                    {
+                        cJSON *m = cJSON_CreateObject();
+                        cJSON_AddStringToObject(m, "role",
+                            s->messages[i].role ? s->messages[i].role : "unknown");
+                        cJSON_AddStringToObject(m, "content",
+                            s->messages[i].content ? s->messages[i].content : "");
+                        cJSON_AddItemToArray(arr, m);
+                    }
+                    cJSON_AddItemToObject(hist, "messages", arr);
+                    char *hist_str = cJSON_PrintUnformatted(hist);
+                    if (hist_str) ws_send_json(ws, hist_str);
+                    free(hist_str);
+                    cJSON_Delete(hist);
+                }
+
+                session_free(s);
+            }
         }
     }
 

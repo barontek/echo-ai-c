@@ -22,6 +22,9 @@ typedef struct {
     int thinking_open;
     void (*on_chunk)(const char *, void *);
     void *userdata;
+    ToolCall *tool_calls;
+    int tool_calls_count;
+    int tool_calls_cap;
 } WriteBuf;
 
 static void forward_chunk(WriteBuf *buf, cJSON *msg)
@@ -80,7 +83,63 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
                     if (json)
                     {
                         cJSON *msg = cJSON_GetObjectItem(json, "message");
-                        if (msg) forward_chunk(buf, msg);
+                        if (msg)
+                        {
+                            forward_chunk(buf, msg);
+                            cJSON *tc_arr = cJSON_GetObjectItem(msg, "tool_calls");
+                            if (tc_arr && cJSON_IsArray(tc_arr))
+                            {
+                                int tc_count = cJSON_GetArraySize(tc_arr);
+                                for (int t = 0; t < tc_count; t++)
+                                {
+                                    cJSON *tc = cJSON_GetArrayItem(tc_arr, t);
+                                    cJSON *fn = cJSON_GetObjectItem(tc, "function");
+                                    if (!fn) continue;
+                                    cJSON *tname = cJSON_GetObjectItem(fn, "name");
+                                    cJSON *args = cJSON_GetObjectItem(fn, "arguments");
+
+                                    if (buf->tool_calls_count >= buf->tool_calls_cap)
+                                    {
+                                        int new_cap = buf->tool_calls_cap == 0 ? 4 : buf->tool_calls_cap * 2;
+                                        ToolCall *new_tc = realloc(buf->tool_calls,
+                                                                    sizeof(ToolCall) * (size_t)new_cap);
+                                        if (new_tc)
+                                        {
+                                            memset(new_tc + buf->tool_calls_cap, 0,
+                                                   sizeof(ToolCall) * (size_t)(new_cap - buf->tool_calls_cap));
+                                            buf->tool_calls = new_tc;
+                                            buf->tool_calls_cap = new_cap;
+                                        }
+                                    }
+
+                                    if (buf->tool_calls_count < buf->tool_calls_cap)
+                                    {
+                                        ToolCall *dst = &buf->tool_calls[buf->tool_calls_count];
+                                        dst->name = str_dup(tname && cJSON_IsString(tname)
+                                                              ? cJSON_GetStringValue(tname) : "");
+                                        dst->id = str_dup("");
+                                        if (args)
+                                        {
+                                            char *args_str = cJSON_PrintUnformatted(args);
+                                            dst->arguments = args_str ? args_str : str_dup("");
+                                        }
+                                        else
+                                        {
+                                            dst->arguments = str_dup("");
+                                        }
+                                        if (dst->name && dst->id && dst->arguments && dst->name[0])
+                                            buf->tool_calls_count++;
+                                        else
+                                        {
+                                            free(dst->name);
+                                            free(dst->id);
+                                            free(dst->arguments);
+                                            memset(dst, 0, sizeof(*dst));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         cJSON_Delete(json);
                     }
                 }
@@ -111,7 +170,9 @@ static char *build_url(const char *base_url)
 static char *ollama_chat_request(const char *base_url, const char *json_body,
                                  int timeout, int stream,
                                  void (*on_chunk)(const char *, void *),
-                                 void *userdata)
+                                 void *userdata,
+                                 ToolCall **out_tool_calls,
+                                 int *out_tool_calls_count)
 {
     CURL *curl = curl_easy_init();
     if (!curl) return NULL;
@@ -146,6 +207,12 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
     if (res != CURLE_OK)
     {
         log_error("ollama request failed", "error", curl_easy_strerror(res), NULL);
+        if (buf.tool_calls)
+        {
+            for (int i = 0; i < buf.tool_calls_count; i++)
+                tool_call_free(&buf.tool_calls[i]);
+            free(buf.tool_calls);
+        }
         free(buf.data);
         return NULL;
     }
@@ -162,8 +229,20 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
                 cJSON_Delete(json);
             }
         }
+        if (out_tool_calls && out_tool_calls_count)
+        {
+            *out_tool_calls = buf.tool_calls;
+            *out_tool_calls_count = buf.tool_calls_count;
+        }
         free(buf.data);
         return str_dup("");
+    }
+    /* non-streaming: caller frees the body; tool_calls in buf are never populated */
+    if (buf.tool_calls)
+    {
+        for (int i = 0; i < buf.tool_calls_count; i++)
+            tool_call_free(&buf.tool_calls[i]);
+        free(buf.tool_calls);
     }
 
     return buf.data;
@@ -286,7 +365,7 @@ static LLMResponse *ollama_chat(LLMProvider *self, Message *messages, int count,
 
     log_debug("ollama request", "model", model, NULL);
 
-    char *raw = ollama_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL);
+    char *raw = ollama_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL, NULL, NULL);
     free(body);
 
     if (!raw) return NULL;
@@ -368,16 +447,30 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
     sctx.resp = llm_response_create();
     if (!sctx.resp) { free(body); return NULL; }
 
+    ToolCall *tc_from_stream = NULL;
+    int tc_count = 0;
     char *raw = ollama_chat_request(ctx->base_url, body, timeout, 1,
-                                    on_ollama_chunk, &sctx);
+                                    on_ollama_chunk, &sctx,
+                                    &tc_from_stream, &tc_count);
     free(body);
 
     if (!raw)
     {
+        if (tc_from_stream)
+        {
+            for (int i = 0; i < tc_count; i++)
+                tool_call_free(&tc_from_stream[i]);
+            free(tc_from_stream);
+        }
         llm_response_free(sctx.resp);
         return NULL;
     }
 
+    if (tc_count > 0)
+    {
+        sctx.resp->tool_calls = tc_from_stream;
+        sctx.resp->tool_calls_count = tc_count;
+    }
     free(raw);
     return sctx.resp;
 }
@@ -414,7 +507,7 @@ static LLMResponse *ollama_extract_structured(LLMProvider *self, Message *messag
     }
     free(msgs_json);
 
-    char *raw = ollama_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL);
+    char *raw = ollama_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL, NULL, NULL);
     free(body);
 
     if (!raw) return NULL;
