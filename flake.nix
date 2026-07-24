@@ -23,6 +23,7 @@
             openssl
             cjson
             check
+            valgrind
             nodejs_22
           ];
 
