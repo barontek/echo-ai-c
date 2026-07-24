@@ -330,6 +330,7 @@ static void agent_generate_title(Agent *agent)
 {
     if (!agent || !agent->provider) return;
     if (!agent->sm || !agent->session_id) return;
+    if (agent->messages_count == 0) return;
 
     Session *s = session_manager_load_session(agent->sm, agent->session_id);
     if (!s || s->title_generation_attempted) { if (s) session_free(s); return; }
@@ -368,6 +369,18 @@ static void agent_generate_title(Agent *agent)
         used += (size_t)n;
     }
 
+    /* refuse to generate a title from an empty excerpt — produces
+     * placeholder garbage like "Conversation Title Request" */
+    if (used == 0)
+    {
+        free(text);
+        free(title_msgs[0].role);
+        free(title_msgs[0].content);
+        return;
+    }
+
+    log_info("title excerpt", "text", text, NULL);
+
     /* instruction lives in the user message with the conversation clearly
      * delimited; small models paraphrase a bare system instruction instead
      * of following it (produced titles like "Conversation Title Request") */
@@ -399,19 +412,20 @@ static void agent_generate_title(Agent *agent)
 
     if (resp && resp->content)
     {
-        char *title = str_trim(resp->content);
-        if (title && title[0])
+        log_info("title from model", "title", resp->content, NULL);
+        char *title_str = str_trim(resp->content);
+        if (title_str && title_str[0])
         {
             Session *s2 = session_manager_load_session(agent->sm, agent->session_id);
             if (s2)
             {
                 free(s2->title);
-                s2->title = str_dup(title);
+                s2->title = str_dup(title_str);
                 session_manager_save_session(agent->sm, s2);
                 session_free(s2);
 
                 if (agent->on_title_update)
-                    agent->on_title_update(agent->session_id, title, agent->title_userdata);
+                    agent->on_title_update(agent->session_id, title_str, agent->title_userdata);
             }
         }
         llm_response_free(resp);
