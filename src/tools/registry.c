@@ -9,6 +9,26 @@
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 
+#ifdef REGISTRY_TEST
+static int reg_alloc_counter = 0;
+static int reg_alloc_fail_at = -1;
+
+void registry_test_set_alloc_fail(int nth_allocation)
+{
+    reg_alloc_counter = 0;
+    reg_alloc_fail_at = nth_allocation;
+}
+
+static char *reg_test_strdup(const char *s)
+{
+    reg_alloc_counter++;
+    if (reg_alloc_counter == reg_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define str_dup reg_test_strdup
+#endif
+
 #define MAX_TOOLS 32
 
 static Tool *tools[MAX_TOOLS];
@@ -57,6 +77,7 @@ Tool *tool_sqlite_schema_create(SafetyConfig *safety);
 Tool *tool_ask_user_create(SafetyConfig *safety);
 Tool *tool_humanizer_create(SafetyConfig *safety);
 
+#ifndef REGISTRY_TEST
 void registry_init(SafetyConfig *safety)
 {
     safety_global = safety;
@@ -85,6 +106,7 @@ void registry_init(SafetyConfig *safety)
     registry_register(tool_ask_user_create(safety));
     registry_register(tool_humanizer_create(safety));
 }
+#endif
 
 void registry_register(Tool *tool)
 {
@@ -137,6 +159,7 @@ int registry_count(void)
     return tool_count;
 }
 
+#ifndef REGISTRY_TEST
 void registry_set_change_tracker(ChangeTracker *ct)
 {
     void tool_write_file_set_change_tracker(Tool *tool, ChangeTracker *ct);
@@ -146,6 +169,7 @@ void registry_set_change_tracker(ChangeTracker *ct)
             tool_write_file_set_change_tracker(tools[i], ct);
     }
 }
+#endif
 
 void registry_set_search_provider(SearchProvider *sp)
 {
@@ -171,12 +195,19 @@ void registry_set_delegate_config(const char *provider_name, const char *base_ur
                                    const char *model, int num_ctx, int keep_alive_secs,
                                    double temperature, int timeout, int max_iterations)
 {
+    char *pn = provider_name ? str_dup(provider_name) : NULL;
+    char *bu = base_url ? str_dup(base_url) : NULL;
+    char *md = model ? str_dup(model) : NULL;
+    if ((provider_name && !pn) || (base_url && !bu) || (model && !md))
+    {
+        free(pn); free(bu); free(md); return;
+    }
     free(delegate_config.provider_name);
     free(delegate_config.base_url);
     free(delegate_config.model);
-    delegate_config.provider_name = provider_name ? str_dup(provider_name) : NULL;
-    delegate_config.base_url = base_url ? str_dup(base_url) : NULL;
-    delegate_config.model = model ? str_dup(model) : NULL;
+    delegate_config.provider_name = pn;
+    delegate_config.base_url = bu;
+    delegate_config.model = md;
     delegate_config.num_ctx = num_ctx;
     delegate_config.keep_alive_secs = keep_alive_secs;
     delegate_config.temperature = temperature;

@@ -7,6 +7,26 @@
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 
+#ifdef MEMORY_TEST
+static int mem_alloc_counter = 0;
+static int mem_alloc_fail_at = -1;
+
+void memory_test_set_alloc_fail(int nth_allocation)
+{
+    mem_alloc_counter = 0;
+    mem_alloc_fail_at = nth_allocation;
+}
+
+static char *memory_test_strdup(const char *s)
+{
+    mem_alloc_counter++;
+    if (mem_alloc_counter == mem_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define str_dup memory_test_strdup
+#endif
+
 int memory_table_init(sqlite3 *db)
 {
     const char *sql = "CREATE TABLE IF NOT EXISTS user_memory ("
@@ -106,8 +126,18 @@ MemoryFact *memory_list_all(sqlite3 *db, int *count)
         }
         const char *k = (const char *)sqlite3_column_text(stmt, 0);
         const char *v = (const char *)sqlite3_column_text(stmt, 1);
-        facts[*count].key = str_dup(k ? k : "");
-        facts[*count].value = str_dup(v ? v : "");
+        char *key_dup = str_dup(k ? k : "");
+        char *val_dup = str_dup(v ? v : "");
+        if (!key_dup || !val_dup)
+        {
+            free(key_dup);
+            free(val_dup);
+            memory_facts_free(facts, *count);
+            sqlite3_finalize(stmt);
+            return NULL;
+        }
+        facts[*count].key = key_dup;
+        facts[*count].value = val_dup;
         (*count)++;
     }
 

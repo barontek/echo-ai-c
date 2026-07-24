@@ -27,4 +27,8 @@ void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *use
 char *registry_invoke_ask_user(const char *question);
 void registry_destroy(void);
 
+#ifdef REGISTRY_TEST
+void registry_test_set_alloc_fail(int nth_allocation);
+#endif
+
 #endif

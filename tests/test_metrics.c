@@ -49,6 +49,45 @@ START_TEST(test_metrics_histogram)
 }
 END_TEST
 
+START_TEST(test_metrics_counter_alloc_fail_mid)
+{
+    Metrics *m = metrics_create();
+    metrics_test_set_alloc_fail(2);
+    metrics_counter_inc(m, "test_total", "Test counter");
+    char *out = metrics_render(m);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "");
+    free(out);
+    metrics_test_set_alloc_fail(-1);
+    metrics_counter_inc(m, "other_total", "Other");
+    out = metrics_render(m);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_ptr_ne(strstr(out, "other_total 1"), NULL);
+    free(out);
+    metrics_destroy(m);
+}
+END_TEST
+
+START_TEST(test_metrics_histogram_alloc_fail_mid)
+{
+    Metrics *m = metrics_create();
+    metrics_test_set_alloc_fail(3);
+    double buckets[] = {1, 5, 10};
+    metrics_histogram_observe(m, "test_duration", "Test", 2, buckets, 3);
+    char *out = metrics_render(m);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "");
+    free(out);
+    metrics_test_set_alloc_fail(-1);
+    metrics_histogram_observe(m, "test_duration2", "Test", 2, buckets, 3);
+    out = metrics_render(m);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_ptr_ne(strstr(out, "test_duration2_count 1"), NULL);
+    free(out);
+    metrics_destroy(m);
+}
+END_TEST
+
 Suite *metrics_suite(void)
 {
     Suite *s = suite_create("Metrics");
@@ -56,6 +95,8 @@ Suite *metrics_suite(void)
     tcase_add_test(tc, test_metrics_empty);
     tcase_add_test(tc, test_metrics_counter);
     tcase_add_test(tc, test_metrics_histogram);
+    tcase_add_test(tc, test_metrics_counter_alloc_fail_mid);
+    tcase_add_test(tc, test_metrics_histogram_alloc_fail_mid);
     suite_add_tcase(s, tc);
     return s;
 }

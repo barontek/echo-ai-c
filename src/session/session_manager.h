@@ -45,4 +45,8 @@ int session_manager_log_event(SessionManager *sm, const char *session_id,
 
 int migration_change_password(SessionManager *sm, const char *new_password);
 
+#ifdef SESSION_MANAGER_TEST
+void session_manager_test_set_alloc_fail(int nth_allocation);
+#endif
+
 #endif

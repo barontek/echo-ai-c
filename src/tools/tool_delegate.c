@@ -12,6 +12,30 @@
 #include "../llm/provider.h"
 #include "../utils/logging.h"
 
+#ifdef TOOL_DELEGATE_TEST
+static int td_alloc_counter = 0;
+static int td_alloc_fail_at = -1;
+
+void tool_delegate_test_set_alloc_fail(int nth_allocation)
+{
+    td_alloc_counter = 0;
+    td_alloc_fail_at = nth_allocation;
+}
+
+static char *td_test_strdup(const char *s)
+{
+    td_alloc_counter++;
+    if (td_alloc_counter == td_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define str_dup td_test_strdup
+
+LLMProvider *td_test_get_provider(const char *name, const char *model,
+                                   const char *base_url, int num_ctx, int keep_alive_secs);
+#define get_provider td_test_get_provider
+#endif
+
 typedef struct {
     SafetyConfig *safety;
 } DelegateToolCtx;
@@ -62,26 +86,40 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
         iterations = iter->valuedouble;
     if (iterations < 1) iterations = 1;
     if (iterations > 50) iterations = 50;
-    const char *task_str = cJSON_GetStringValue(task);
+    char *task_str = str_dup(cJSON_GetStringValue(task));
     cJSON_Delete(args);
+    if (!task_str) return tool_result_error("oom", "execution_error");
 
     LLMProvider *provider = get_provider(provider_name, model,
                                           base_url, num_ctx, keep_alive_secs);
     if (!provider)
+    {
+        free(task_str);
         return tool_result_error("failed to create sub-agent provider", "execution_error");
+    }
 
     Message *msgs = NULL;
     int msgs_count = 0;
     int msgs_cap = 0;
 
+    char *sys_role = str_dup("system");
+    char *sys_content = str_dup("You are a helpful sub-agent. Complete the task given by the user. "
+                                "Use tools when needed. Keep responses concise.");
+    char *user_role = str_dup("user");
+    if (!sys_role || !sys_content || !user_role)
+    {
+        free(sys_role); free(sys_content); free(user_role); free(task_str);
+        provider->destroy(provider);
+        return tool_result_error("oom", "execution_error");
+    }
+    char *user_content = task_str;
     Message sys_msg = {0};
-    sys_msg.role = str_dup("system");
-    sys_msg.content = str_dup("You are a helpful sub-agent. Complete the task given by the user. "
-                               "Use tools when needed. Keep responses concise.");
+    sys_msg.role = sys_role;
+    sys_msg.content = sys_content;
 
     Message user_msg = {0};
-    user_msg.role = str_dup("user");
-    user_msg.content = str_dup(task_str);
+    user_msg.role = user_role;
+    user_msg.content = user_content;
 
     msgs = malloc(sizeof(Message) * 4);
     if (!msgs) { provider->destroy(provider); return tool_result_error("oom", "execution_error"); }
@@ -110,33 +148,42 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
             Message *assistant_msg = calloc(1, sizeof(Message));
             if (assistant_msg)
             {
-                assistant_msg->role = str_dup("assistant");
-                assistant_msg->content = str_dup(resp->content ? resp->content : "");
-                if (resp->tool_calls_count > 0)
+                char *role = str_dup("assistant");
+                char *content = str_dup(resp->content ? resp->content : "");
+                if (!role || !content)
                 {
-                    assistant_msg->tool_calls = malloc(sizeof(ToolCall) * resp->tool_calls_count);
-                    if (assistant_msg->tool_calls)
+                    free(role); free(content); free(assistant_msg->tool_calls); free(assistant_msg);
+                }
+                else
+                {
+                    assistant_msg->role = role;
+                    assistant_msg->content = content;
+                    if (resp->tool_calls_count > 0)
                     {
-                        assistant_msg->tool_calls_count = resp->tool_calls_count;
-                        for (int j = 0; j < resp->tool_calls_count; j++)
+                        assistant_msg->tool_calls = malloc(sizeof(ToolCall) * resp->tool_calls_count);
+                        if (assistant_msg->tool_calls)
                         {
-                            assistant_msg->tool_calls[j] = resp->tool_calls[j];
-                            resp->tool_calls[j].name = NULL;
-                            resp->tool_calls[j].arguments = NULL;
-                            resp->tool_calls[j].id = NULL;
+                            assistant_msg->tool_calls_count = resp->tool_calls_count;
+                            for (int j = 0; j < resp->tool_calls_count; j++)
+                            {
+                                assistant_msg->tool_calls[j] = resp->tool_calls[j];
+                                resp->tool_calls[j].name = NULL;
+                                resp->tool_calls[j].arguments = NULL;
+                                resp->tool_calls[j].id = NULL;
+                            }
                         }
                     }
-                }
 
-                if (msgs_count >= msgs_cap)
-                {
-                    msgs_cap *= 2;
-                    Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
-                    if (!new_msgs) { free(assistant_msg->role); free(assistant_msg->content); free(assistant_msg->tool_calls); free(assistant_msg); break; }
-                    msgs = new_msgs;
+                    if (msgs_count >= msgs_cap)
+                    {
+                        msgs_cap *= 2;
+                        Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
+                        if (!new_msgs) { free(role); free(content); free(assistant_msg->tool_calls); free(assistant_msg); break; }
+                        msgs = new_msgs;
+                    }
+                    msgs[msgs_count++] = *assistant_msg;
+                    free(assistant_msg);
                 }
-                msgs[msgs_count++] = *assistant_msg;
-                free(assistant_msg);
             }
         }
 
@@ -160,20 +207,32 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
                 Message *tool_msg = calloc(1, sizeof(Message));
                 if (tool_msg)
                 {
-                    tool_msg->role = str_dup("tool");
-                    tool_msg->content = str_dup("tool not found");
-                    tool_msg->tool_call_id = str_dup(tc->id ? tc->id : "");
-                    tool_msg->tool_name = str_dup(tname);
-                    tool_msg->error_category = str_dup("tool_not_found");
-                    if (msgs_count >= msgs_cap)
+                    char *t_role = str_dup("tool");
+                    char *t_content = str_dup("tool not found");
+                    char *t_call_id = str_dup(tc->id ? tc->id : "");
+                    char *t_name = str_dup(tname);
+                    char *t_err_cat = str_dup("tool_not_found");
+                    if (!t_role || !t_content || !t_call_id || !t_name || !t_err_cat)
                     {
-                        msgs_cap *= 2;
-                        Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
-                        if (!new_msgs) { free(tool_msg->role); free(tool_msg->content); free(tool_msg->tool_call_id); free(tool_msg->tool_name); free(tool_msg->error_category); free(tool_msg); break; }
-                        msgs = new_msgs;
+                        free(t_role); free(t_content); free(t_call_id); free(t_name); free(t_err_cat); free(tool_msg);
                     }
-                    msgs[msgs_count++] = *tool_msg;
-                    free(tool_msg);
+                    else
+                    {
+                        tool_msg->role = t_role;
+                        tool_msg->content = t_content;
+                        tool_msg->tool_call_id = t_call_id;
+                        tool_msg->tool_name = t_name;
+                        tool_msg->error_category = t_err_cat;
+                        if (msgs_count >= msgs_cap)
+                        {
+                            msgs_cap *= 2;
+                            Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
+                            if (!new_msgs) { free(t_role); free(t_content); free(t_call_id); free(t_name); free(t_err_cat); free(tool_msg); break; }
+                            msgs = new_msgs;
+                        }
+                        msgs[msgs_count++] = *tool_msg;
+                        free(tool_msg);
+                    }
                 }
                 continue;
             }
@@ -185,24 +244,34 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
             Message *tool_msg = calloc(1, sizeof(Message));
             if (tool_msg)
             {
-                tool_msg->role = str_dup("tool");
-                tool_msg->content = str_dup(result->content ? result->content : "");
-                tool_msg->tool_call_id = str_dup(tc->id ? tc->id : "");
-                tool_msg->tool_name = str_dup(tname);
+                char *t_role = str_dup("tool");
+                char *t_content = str_dup(result->content ? result->content : "");
+                char *t_call_id = str_dup(tc->id ? tc->id : "");
+                char *t_name = str_dup(tname);
+                char *t_err_cat = NULL;
                 if (result->error)
                 {
-                    tool_msg->error_category = str_dup(result->error_category ? result->error_category : "execution_error");
+                    t_err_cat = str_dup(result->error_category ? result->error_category : "execution_error");
                     char *err = NULL;
                     if (asprintf(&err, "Error: %s", result->error) < 0)
                         err = str_dup("Error");
-                    free(tool_msg->content);
-                    tool_msg->content = err;
+                    free(t_content);
+                    t_content = err;
                 }
+                if (!t_role || !t_content || !t_call_id || !t_name || (result->error && !t_err_cat))
+                {
+                    free(t_role); free(t_content); free(t_call_id); free(t_name); free(t_err_cat); free(tool_msg); tool_result_free(result); continue;
+                }
+                tool_msg->role = t_role;
+                tool_msg->content = t_content;
+                tool_msg->tool_call_id = t_call_id;
+                tool_msg->tool_name = t_name;
+                tool_msg->error_category = t_err_cat;
                 if (msgs_count >= msgs_cap)
                 {
                     msgs_cap *= 2;
                     Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
-                    if (!new_msgs) { free(tool_msg->role); free(tool_msg->content); free(tool_msg->tool_call_id); free(tool_msg->tool_name); free(tool_msg->error_category); free(tool_msg); tool_result_free(result); break; }
+                    if (!new_msgs) { free(t_role); free(t_content); free(t_call_id); free(t_name); free(t_err_cat); free(tool_msg); tool_result_free(result); break; }
                     msgs = new_msgs;
                 }
                 msgs[msgs_count++] = *tool_msg;

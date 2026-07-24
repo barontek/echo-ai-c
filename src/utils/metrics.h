@@ -13,4 +13,8 @@ void metrics_histogram_observe(Metrics *m, const char *name, const char *help,
                                double value, const double *buckets, int bucket_count);
 char *metrics_render(Metrics *m);
 
+#ifdef METRICS_TEST
+void metrics_test_set_alloc_fail(int nth_allocation);
+#endif
+
 #endif

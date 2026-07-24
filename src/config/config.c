@@ -7,6 +7,26 @@
 #include "config.h"
 #include "../utils/string_utils.h"
 
+#ifdef CONFIG_TEST
+static int conf_alloc_counter = 0;
+static int conf_alloc_fail_at = -1;
+
+void config_test_set_alloc_fail(int nth_allocation)
+{
+    conf_alloc_counter = 0;
+    conf_alloc_fail_at = nth_allocation;
+}
+
+static char *config_test_strdup(const char *s)
+{
+    conf_alloc_counter++;
+    if (conf_alloc_counter == conf_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define str_dup config_test_strdup
+#endif
+
 #define MAX_ENTRIES 256
 
 typedef struct {
@@ -83,9 +103,19 @@ Conf *conf_load(const char *path)
 
         if (conf->count < MAX_ENTRIES)
         {
-            conf->entries[conf->count].key = str_dup(full_key);
-            conf->entries[conf->count].value = str_dup(value);
-            conf->count++;
+            char *k = str_dup(full_key);
+            char *v = str_dup(value);
+            if (k && v)
+            {
+                conf->entries[conf->count].key = k;
+                conf->entries[conf->count].value = v;
+                conf->count++;
+            }
+            else
+            {
+                free(k);
+                free(v);
+            }
         }
         free(full_key);
     }

@@ -6,6 +6,34 @@
 #include "metrics.h"
 #include "string_utils.h"
 
+#ifdef METRICS_TEST
+static int metrics_alloc_counter = 0;
+static int metrics_alloc_fail_at = -1;
+
+void metrics_test_set_alloc_fail(int nth_allocation)
+{
+    metrics_alloc_counter = 0;
+    metrics_alloc_fail_at = nth_allocation;
+}
+
+static void *metrics_test_calloc(size_t nmemb, size_t size)
+{
+    metrics_alloc_counter++;
+    if (metrics_alloc_counter == metrics_alloc_fail_at) return NULL;
+    return calloc(nmemb, size);
+}
+
+static char *metrics_test_strdup(const char *s)
+{
+    metrics_alloc_counter++;
+    if (metrics_alloc_counter == metrics_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define calloc metrics_test_calloc
+#define str_dup metrics_test_strdup
+#endif
+
 #define MAX_METRICS 64
 
 typedef struct {
@@ -44,6 +72,7 @@ void metrics_destroy(Metrics *m)
     {
         free(m->counters[i].name);
         free(m->counters[i].help);
+        free(m->counters[i].type);
     }
     for (int i = 0; i < m->histograms_count; i++)
     {
@@ -67,10 +96,21 @@ void metrics_counter_inc(Metrics *m, const char *name, const char *help)
         }
     }
     if (m->counters_count >= MAX_METRICS) return;
+
+    char *n = str_dup(name);
+    char *h = str_dup(help ? help : "");
+    char *t = str_dup("counter");
+    if (!n || !h || !t)
+    {
+        free(n);
+        free(h);
+        free(t);
+        return;
+    }
     CounterMetric *cm = &m->counters[m->counters_count++];
-    cm->name = str_dup(name);
-    cm->help = str_dup(help ? help : "");
-    cm->type = str_dup("counter");
+    cm->name = n;
+    cm->help = h;
+    cm->type = t;
     cm->count = 1;
 }
 
@@ -90,13 +130,25 @@ void metrics_histogram_observe(Metrics *m, const char *name, const char *help,
     if (idx < 0)
     {
         if (m->histograms_count >= MAX_METRICS) return;
+
+        char *n = str_dup(name);
+        char *h = str_dup(help ? help : "");
+        double *b = calloc((size_t)bucket_count, sizeof(double));
+        long long *bc = calloc((size_t)bucket_count, sizeof(long long));
+        if (!n || !h || !b || !bc)
+        {
+            free(n);
+            free(h);
+            free(b);
+            free(bc);
+            return;
+        }
         HistogramMetric *hm = &m->histograms[m->histograms_count++];
-        hm->name = str_dup(name);
-        hm->help = str_dup(help ? help : "");
+        hm->name = n;
+        hm->help = h;
         hm->bucket_count = bucket_count;
-        hm->buckets = calloc(bucket_count, sizeof(double));
-        hm->bucket_counts = calloc(bucket_count, sizeof(long long));
-        if (!hm->buckets || !hm->bucket_counts) return;
+        hm->buckets = b;
+        hm->bucket_counts = bc;
         for (int i = 0; i < bucket_count; i++)
             hm->buckets[i] = buckets[i];
         idx = m->histograms_count - 1;

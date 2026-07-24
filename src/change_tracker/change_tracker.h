@@ -24,4 +24,8 @@ int ct_snapshot(ChangeTracker *ct, const char *file_path);
 int ct_undo(ChangeTracker *ct);
 int ct_redo(ChangeTracker *ct);
 
+#ifdef CHANGE_TRACKER_TEST
+void change_tracker_test_set_alloc_fail(int nth_allocation);
+#endif
+
 #endif

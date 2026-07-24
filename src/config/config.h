@@ -8,4 +8,8 @@ const char *conf_get(const Conf *conf, const char *key);
 int conf_get_int(const Conf *conf, const char *key, int def);
 void conf_free(Conf *conf);
 
+#ifdef CONFIG_TEST
+void config_test_set_alloc_fail(int nth_allocation);
+#endif
+
 #endif

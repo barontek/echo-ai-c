@@ -14,6 +14,26 @@
 #include "../utils/logging.h"
 #include "../utils/string_utils.h"
 
+#ifdef SESSION_MANAGER_TEST
+static int sm_alloc_counter = 0;
+static int sm_alloc_fail_at = -1;
+
+void session_manager_test_set_alloc_fail(int nth_allocation)
+{
+    sm_alloc_counter = 0;
+    sm_alloc_fail_at = nth_allocation;
+}
+
+static char *sm_test_strdup(const char *s)
+{
+    sm_alloc_counter++;
+    if (sm_alloc_counter == sm_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define str_dup sm_test_strdup
+#endif
+
 #define SALT_FILE "salt"
 #define DB_FILE "echo-ai.db"
 
@@ -450,9 +470,19 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
         int tga = sqlite3_column_int(stmt, 2);
         const char *created = (const char *)sqlite3_column_text(stmt, 3);
 
-        list->ids[list->count] = str_dup(id ? id : "");
-        list->titles[list->count] = str_dup(title ? title : "");
-        list->created_ats[list->count] = str_dup(created ? created : "");
+        char *id_dup = str_dup(id ? id : "");
+        char *title_dup = str_dup(title ? title : "");
+        char *created_dup = str_dup(created ? created : "");
+        if (!id_dup || !title_dup || !created_dup)
+        {
+            free(id_dup);
+            free(title_dup);
+            free(created_dup);
+            break;
+        }
+        list->ids[list->count] = id_dup;
+        list->titles[list->count] = title_dup;
+        list->created_ats[list->count] = created_dup;
         list->title_generation_attempteds[list->count] = tga;
         list->count++;
     }

@@ -6,6 +6,26 @@
 #include "change_tracker.h"
 #include "../utils/string_utils.h"
 
+#ifdef CHANGE_TRACKER_TEST
+static int ct_alloc_counter = 0;
+static int ct_alloc_fail_at = -1;
+
+void change_tracker_test_set_alloc_fail(int nth_allocation)
+{
+    ct_alloc_counter = 0;
+    ct_alloc_fail_at = nth_allocation;
+}
+
+static char *ct_test_strdup(const char *s)
+{
+    ct_alloc_counter++;
+    if (ct_alloc_counter == ct_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define str_dup ct_test_strdup
+#endif
+
 ChangeTracker *ct_create(void)
 {
     return calloc(1, sizeof(ChangeTracker));
@@ -55,8 +75,11 @@ int ct_snapshot(ChangeTracker *ct, const char *file_path)
         ct->undo_count--;
     }
 
+    char *fp = str_dup(file_path);
+    if (!fp) { free(content); return -1; }
+
     int idx = ct->undo_count++;
-    ct->undo_stack[idx].file_path = str_dup(file_path);
+    ct->undo_stack[idx].file_path = fp;
     ct->undo_stack[idx].previous_content = content;
     ct->undo_stack[idx].content_len = (size_t)read;
 
@@ -115,8 +138,11 @@ int ct_undo(ChangeTracker *ct)
         ct->redo_count--;
     }
 
+    char *fp = str_dup(entry->file_path);
+    if (!fp) { free(current); return -1; }
+
     int rdx = ct->redo_count++;
-    ct->redo_stack[rdx].file_path = str_dup(entry->file_path);
+    ct->redo_stack[rdx].file_path = fp;
     ct->redo_stack[rdx].previous_content = current;
     ct->redo_stack[rdx].content_len = current ? strlen(current) : 0;
 

@@ -3,16 +3,22 @@
 #include <stdio.h>
 #include "config/config.h"
 
+static void write_conf(const char *path, const char *content)
+{
+    FILE *fp = fopen(path, "w");
+    ck_assert_ptr_nonnull(fp);
+    fprintf(fp, "%s", content);
+    fclose(fp);
+}
+
 START_TEST(test_conf_load_and_get)
 {
-    FILE *fp = fopen("/tmp/test_config.conf", "w");
-    ck_assert_ptr_nonnull(fp);
-    fprintf(fp, "# comment\n");
-    fprintf(fp, "key1 = value1\n");
-    fprintf(fp, "\n");
-    fprintf(fp, "[section]\n");
-    fprintf(fp, "nested = nested_val\n");
-    fclose(fp);
+    write_conf("/tmp/test_config.conf",
+        "# comment\n"
+        "key1 = value1\n"
+        "\n"
+        "[section]\n"
+        "nested = nested_val\n");
 
     Conf *conf = conf_load("/tmp/test_config.conf");
     ck_assert_ptr_nonnull(conf);
@@ -43,12 +49,35 @@ START_TEST(test_conf_load_nonexistent)
 }
 END_TEST
 
+START_TEST(test_conf_alloc_fail_mid)
+{
+    write_conf("/tmp/test_config_fail.conf",
+        "alpha = first\n"
+        "beta = second\n");
+
+    config_test_set_alloc_fail(2);
+    Conf *conf = conf_load("/tmp/test_config_fail.conf");
+    ck_assert_ptr_nonnull(conf);
+
+    const char *v = conf_get(conf, "alpha");
+    ck_assert_ptr_null(v);
+
+    v = conf_get(conf, "beta");
+    ck_assert_ptr_nonnull(v);
+    ck_assert_str_eq(v, "second");
+
+    conf_free(conf);
+    remove("/tmp/test_config_fail.conf");
+}
+END_TEST
+
 Suite *config_suite(void)
 {
     Suite *s = suite_create("Config");
     TCase *tc = tcase_create("Core");
     tcase_add_test(tc, test_conf_load_and_get);
     tcase_add_test(tc, test_conf_load_nonexistent);
+    tcase_add_test(tc, test_conf_alloc_fail_mid);
     suite_add_tcase(s, tc);
     return s;
 }

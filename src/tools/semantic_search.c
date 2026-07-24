@@ -9,6 +9,20 @@
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 
+#ifdef SEMANTIC_SEARCH_TEST
+static int sem_alloc_counter = 0;
+static int sem_alloc_fail_at = -1;
+
+static char *sem_test_strdup(const char *s)
+{
+    sem_alloc_counter++;
+    if (sem_alloc_counter == sem_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define str_dup sem_test_strdup
+#endif
+
 #define MAX_DOCS 256
 #define MAX_TOKENS 8192
 #define MAX_TOKEN_LEN 128
@@ -23,6 +37,34 @@ typedef struct {
 } SearchIndex;
 
 static SearchIndex search_index = {0};
+
+#ifdef SEMANTIC_SEARCH_TEST
+void semantic_search_test_set_alloc_fail(int nth_allocation)
+{
+    sem_alloc_counter = 0;
+    sem_alloc_fail_at = nth_allocation;
+}
+
+void semantic_search_test_reset(void)
+{
+    for (int i = 0; i < search_index.doc_count; i++) {
+        free(search_index.documents[i]);
+        free(search_index.term_freqs[i]);
+    }
+    for (int i = 0; i < search_index.term_count; i++)
+        free(search_index.all_terms[i]);
+    free(search_index.documents);
+    free(search_index.all_terms);
+    free(search_index.term_freqs);
+    free(search_index.doc_lengths);
+    search_index.documents = NULL;
+    search_index.all_terms = NULL;
+    search_index.term_freqs = NULL;
+    search_index.doc_lengths = NULL;
+    search_index.doc_count = 0;
+    search_index.term_count = 0;
+}
+#endif
 
 static void tokenize(const char *text, char tokens[MAX_TOKENS][MAX_TOKEN_LEN], int *count)
 {
@@ -74,9 +116,10 @@ static int add_term(const char *term)
     if (idx >= 0) return idx;
 
     if (search_index.term_count >= MAX_TOKENS) return -1;
-    int t = search_index.term_count;
-    search_index.all_terms[t] = str_dup(term);
-    search_index.term_count++;
+    char *dup = str_dup(term);
+    if (!dup) return -1;
+    int t = search_index.term_count++;
+    search_index.all_terms[t] = dup;
 
     for (int i = 0; i < search_index.doc_count; i++)
     {
@@ -95,20 +138,44 @@ void semantic_search_index_document(const char *content)
 {
     if (search_index.doc_count >= MAX_DOCS) return;
 
+    if (!search_index.documents)
+    {
+        search_index.documents = calloc(MAX_DOCS, sizeof(char *));
+        if (!search_index.documents) return;
+    }
+    if (!search_index.all_terms)
+    {
+        search_index.all_terms = calloc(MAX_TOKENS, sizeof(char *));
+        if (!search_index.all_terms) return;
+    }
+    if (!search_index.term_freqs)
+    {
+        search_index.term_freqs = calloc(MAX_DOCS, sizeof(int *));
+        if (!search_index.term_freqs) return;
+    }
+    if (!search_index.doc_lengths)
+    {
+        search_index.doc_lengths = calloc(MAX_DOCS, sizeof(int));
+        if (!search_index.doc_lengths) return;
+    }
+
     int idx = search_index.doc_count;
-    search_index.documents[idx] = str_dup(content);
+    char *doc_dup = str_dup(content);
+    if (!doc_dup) return;
+    search_index.documents[idx] = doc_dup;
 
     char tokens[MAX_TOKENS][MAX_TOKEN_LEN];
     int token_count = 0;
     tokenize(content, tokens, &token_count);
 
-    search_index.term_freqs[idx] = calloc(search_index.term_count ? search_index.term_count : 1, sizeof(int));
+    search_index.term_freqs[idx] = calloc(MAX_TOKENS, sizeof(int));
     if (!search_index.term_freqs[idx])
     {
         free(search_index.documents[idx]);
         search_index.documents[idx] = NULL;
         return;
     }
+
     search_index.doc_lengths[idx] = 0;
 
     for (int i = 0; i < token_count; i++)
@@ -154,17 +221,26 @@ ToolResult *semantic_search_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'query' argument", "validation_error");
     }
 
-    const char *query = cJSON_GetStringValue(query_json);
+    const char *query_raw = cJSON_GetStringValue(query_json);
     cJSON *top_json = cJSON_GetObjectItem(args, "top_k");
     int top_k = top_json && cJSON_IsNumber(top_json) ? top_json->valueint : 5;
+
+    char *query = str_dup(query_raw);
     cJSON_Delete(args);
 
+    if (!query)
+        return tool_result_error("oom", "execution_error");
+
     if (search_index.doc_count == 0)
+    {
+        free(query);
         return tool_result_create("(no documents indexed. Use ingest_document first.)");
+    }
 
     char query_tokens[MAX_TOKENS][MAX_TOKEN_LEN];
     int query_token_count = 0;
     tokenize(query, query_tokens, &query_token_count);
+    free(query);
 
     if (query_token_count == 0)
         return tool_result_error("query too short", "validation_error");
@@ -252,6 +328,14 @@ void semantic_search_destroy(Tool *self)
         free(search_index.all_terms[i]);
     for (int i = 0; i < search_index.doc_count; i++)
         free(search_index.term_freqs[i]);
+    free(search_index.documents);
+    free(search_index.all_terms);
+    free(search_index.term_freqs);
+    free(search_index.doc_lengths);
+    search_index.documents = NULL;
+    search_index.all_terms = NULL;
+    search_index.term_freqs = NULL;
+    search_index.doc_lengths = NULL;
     search_index.doc_count = 0;
     search_index.term_count = 0;
 
