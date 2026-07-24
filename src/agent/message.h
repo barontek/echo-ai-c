@@ -31,6 +31,12 @@ typedef struct {
 
 Message *message_create(const char *role, const char *content);
 void message_set_tool_calls(Message *msg, ToolCall *calls, int count);
+
+/* Deep-copies src into dst (dst is overwritten). On success dst owns its
+ * copies and must be freed via message_free_all-style cleanup; src is left
+ * untouched. On failure dst is zeroed and safe to free; returns -1. */
+int message_copy(Message *dst, const Message *src);
+
 void message_free(Message *msg);
 void message_free_all(Message *msgs, int count);
 

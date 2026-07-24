@@ -32,6 +32,65 @@ void message_set_tool_calls(Message *msg, ToolCall *calls, int count)
     msg->tool_calls_count = count;
 }
 
+int message_copy(Message *dst, const Message *src)
+{
+    if (!dst || !src) return -1;
+    memset(dst, 0, sizeof(*dst));
+
+    dst->role = str_dup(src->role);
+    dst->content = str_dup(src->content);
+    dst->id = str_dup(src->id);
+    dst->tool_call_id = str_dup(src->tool_call_id);
+    dst->tool_name = str_dup(src->tool_name);
+    dst->error_category = str_dup(src->error_category);
+    dst->thinking = str_dup(src->thinking);
+    dst->timestamp = src->timestamp;
+
+    if ((src->role && !dst->role) || (src->content && !dst->content) ||
+        (src->id && !dst->id) || (src->tool_call_id && !dst->tool_call_id) ||
+        (src->tool_name && !dst->tool_name) ||
+        (src->error_category && !dst->error_category) ||
+        (src->thinking && !dst->thinking))
+        goto cleanup;
+
+    if (src->tool_calls && src->tool_calls_count > 0)
+    {
+        dst->tool_calls = calloc((size_t)src->tool_calls_count, sizeof(ToolCall));
+        if (!dst->tool_calls) goto cleanup;
+        dst->tool_calls_count = src->tool_calls_count;
+        for (int i = 0; i < src->tool_calls_count; i++)
+        {
+            dst->tool_calls[i].id = str_dup(src->tool_calls[i].id);
+            dst->tool_calls[i].name = str_dup(src->tool_calls[i].name);
+            dst->tool_calls[i].arguments = str_dup(src->tool_calls[i].arguments);
+            if ((src->tool_calls[i].id && !dst->tool_calls[i].id) ||
+                (src->tool_calls[i].name && !dst->tool_calls[i].name) ||
+                (src->tool_calls[i].arguments && !dst->tool_calls[i].arguments))
+                goto cleanup;
+        }
+    }
+
+    return 0;
+
+cleanup:
+    /* every field is either a valid copy or NULL (calloc/memset), so this is safe */
+    free(dst->role);
+    free(dst->content);
+    free(dst->id);
+    free(dst->tool_call_id);
+    free(dst->tool_name);
+    free(dst->error_category);
+    free(dst->thinking);
+    if (dst->tool_calls)
+    {
+        for (int i = 0; i < dst->tool_calls_count; i++)
+            tool_call_free(&dst->tool_calls[i]);
+        free(dst->tool_calls);
+    }
+    memset(dst, 0, sizeof(*dst));
+    return -1;
+}
+
 void message_free(Message *msg)
 {
     if (!msg) return;

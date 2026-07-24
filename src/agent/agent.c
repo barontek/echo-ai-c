@@ -626,22 +626,16 @@ static void agent_save_session(Agent *agent)
 
     if (agent->messages_count > 0)
     {
-        s->messages = calloc(agent->messages_count, sizeof(Message));
+        s->messages = calloc((size_t)agent->messages_count, sizeof(Message));
         if (s->messages)
         {
-            s->messages_count = agent->messages_count;
+            /* deep-copy: the agent keeps its messages for the live
+             * conversation; the session owns the copies it serializes */
             for (int i = 0; i < agent->messages_count; i++)
             {
-                s->messages[i] = agent->messages[i];
-                agent->messages[i].role = NULL;
-                agent->messages[i].content = NULL;
-                agent->messages[i].id = NULL;
-                agent->messages[i].tool_call_id = NULL;
-                agent->messages[i].tool_name = NULL;
-                agent->messages[i].error_category = NULL;
-                agent->messages[i].thinking = NULL;
-                agent->messages[i].tool_calls = NULL;
-                agent->messages[i].tool_calls_count = 0;
+                if (message_copy(&s->messages[i], &agent->messages[i]) != 0)
+                    break;
+                s->messages_count = i + 1;
             }
         }
     }
