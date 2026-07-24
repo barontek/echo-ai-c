@@ -89,13 +89,12 @@ target_link_libraries(echo-ai PRIVATE
 
 option(ENABLE_SANITIZERS "Build with ASan/UBSan" ON)
 
-if(ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
-    add_link_options(-fsanitize=address,undefined)
-endif()
-
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(echo-ai PRIVATE -Wall -Wextra -Wpedantic -Werror -g)
+    if(ENABLE_SANITIZERS)
+        target_compile_options(echo-ai PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(echo-ai PRIVATE -fsanitize=address,undefined)
+    endif()
 else()
     target_compile_options(echo-ai PRIVATE -Wall -Wextra -O2)
 endif()

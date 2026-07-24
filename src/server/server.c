@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <cjson/cJSON.h>
 
@@ -486,6 +487,7 @@ static void on_connection(uv_stream_t *server, int status)
 int server_start(ServerContext *ctx)
 {
     ctx->loop = uv_default_loop();
+    (void)signal(SIGPIPE, SIG_IGN);
 
     uv_tcp_t *server = malloc(sizeof(uv_tcp_t));
     if (!server) return -1;
