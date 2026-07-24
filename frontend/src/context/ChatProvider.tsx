@@ -17,8 +17,8 @@ function combineAssistantMessages(
   const combined: ChatContextValue['messages'] = [];
 
   for (const msg of messages) {
+    if (msg.role === 'system') continue;
     const last = combined[combined.length - 1];
-    // Combine consecutive assistant messages
     if (last && last.role === 'assistant' && msg.role === 'assistant') {
       last.content += '\n' + msg.content;
       if (msg.has_tools) last.has_tools = msg.has_tools;

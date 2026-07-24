@@ -11,7 +11,7 @@ export interface ChatContextValue {
   models: string[];
   providers: string[];
   messages: Array<{
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'system';
     content: string;
     id?: string;
     timestamp?: string;
