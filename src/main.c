@@ -463,6 +463,7 @@ static void run_web(Conf *conf, const char *config_path)
     {
         registry_set_session_manager(g_session_manager);
         memory_table_init(g_session_manager->db);
+        agent_set_session_manager(agent, g_session_manager);
     }
 
     int port = conf_get_int(conf, "server.port", 8080);
