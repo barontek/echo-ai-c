@@ -19,9 +19,35 @@ typedef struct {
     char *data;
     size_t len;
     size_t cap;
+    int thinking_open;
     void (*on_chunk)(const char *, void *);
     void *userdata;
 } WriteBuf;
+
+static void forward_chunk(WriteBuf *buf, cJSON *msg)
+{
+    cJSON *thinking = cJSON_GetObjectItem(msg, "thinking");
+    if (thinking && cJSON_IsString(thinking) && strlen(cJSON_GetStringValue(thinking)) > 0)
+    {
+        if (!buf->thinking_open)
+        {
+            buf->on_chunk("<think>\n", buf->userdata);
+            buf->thinking_open = 1;
+        }
+        buf->on_chunk(cJSON_GetStringValue(thinking), buf->userdata);
+    }
+
+    cJSON *content = cJSON_GetObjectItem(msg, "content");
+    if (content && cJSON_IsString(content) && strlen(cJSON_GetStringValue(content)) > 0)
+    {
+        if (buf->thinking_open)
+        {
+            buf->on_chunk("\n</think>\n\n", buf->userdata);
+            buf->thinking_open = 0;
+        }
+        buf->on_chunk(cJSON_GetStringValue(content), buf->userdata);
+    }
+}
 
 static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
 {
@@ -54,9 +80,7 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
                     if (json)
                     {
                         cJSON *msg = cJSON_GetObjectItem(json, "message");
-                        cJSON *content = msg ? cJSON_GetObjectItem(msg, "content") : NULL;
-                        if (content && cJSON_IsString(content))
-                            buf->on_chunk(cJSON_GetStringValue(content), buf->userdata);
+                        if (msg) forward_chunk(buf, msg);
                         cJSON_Delete(json);
                     }
                 }
@@ -134,9 +158,7 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
             if (json)
             {
                 cJSON *msg = cJSON_GetObjectItem(json, "message");
-                cJSON *content = msg ? cJSON_GetObjectItem(msg, "content") : NULL;
-                if (content && cJSON_IsString(content))
-                    on_chunk(cJSON_GetStringValue(content), userdata);
+                if (msg) forward_chunk(&buf, msg);
                 cJSON_Delete(json);
             }
         }
@@ -169,8 +191,21 @@ static LLMResponse *ollama_parse_response(const char *raw)
     }
 
     cJSON *content = cJSON_GetObjectItem(msg, "content");
-    if (content && cJSON_IsString(content))
+    cJSON *thinking = cJSON_GetObjectItem(msg, "thinking");
+
+    resp->thinking = NULL;
+    if (thinking && cJSON_IsString(thinking) && strlen(cJSON_GetStringValue(thinking)) > 0)
+    {
+        resp->thinking = str_dup(cJSON_GetStringValue(thinking));
+        const char *ct_str = content && cJSON_IsString(content) ? cJSON_GetStringValue(content) : "";
+        if (asprintf(&resp->content, "<think>\n%s\n</think>\n\n%s",
+                     cJSON_GetStringValue(thinking), ct_str) < 0)
+            resp->content = NULL;
+    }
+    else if (content && cJSON_IsString(content))
+    {
         resp->content = str_dup(cJSON_GetStringValue(content));
+    }
 
     cJSON *tc_arr = cJSON_GetObjectItem(msg, "tool_calls");
     if (tc_arr && cJSON_IsArray(tc_arr))
