@@ -381,14 +381,6 @@ static void handle_create_session(HTTPRequest *req, Client *client, ServerContex
         return;
     }
 
-    /* bind the new session to the agent so subsequent WebSocket messages
-     * use this session instead of auto-creating a different one */
-    if (ctx->agent)
-    {
-        free(ctx->agent->session_id);
-        ctx->agent->session_id = str_dup(s->id);
-    }
-
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "session_id", s->id);
     cJSON_AddStringToObject(resp, "title", s->title);
@@ -1198,19 +1190,6 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
             ws_send_json(ws, "{\"type\":\"error\",\"message\":\"stale session_id\"}");
             cJSON_Delete(json);
             return;
-        }
-    }
-
-    /* bind the message's session_id to the agent so agent_save_session
-     * loads the existing session instead of auto-creating a different one */
-    if (session_id_item && session_id_item->valuestring && c->agent
-        && (!c->agent->session_id || strcmp(c->agent->session_id, session_id_item->valuestring) != 0))
-    {
-        free(c->agent->session_id);
-        c->agent->session_id = str_dup(session_id_item->valuestring);
-        if (!c->active_session_id)
-        {
-            c->active_session_id = str_dup(session_id_item->valuestring);
         }
     }
 
