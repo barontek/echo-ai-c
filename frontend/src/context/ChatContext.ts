@@ -30,7 +30,7 @@ export interface ChatContextValue {
   stopGeneration: () => void;
   editMessage: (index: number, newText: string, msgId?: string) => void;
   retryMessage: (index: number) => void;
-  createSession: () => Promise<void>;
+  createSession: () => void;
   selectSession: (sessionId: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, newTitle: string) => Promise<void>;
