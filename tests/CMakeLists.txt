@@ -108,3 +108,8 @@ target_compile_definitions(test_registry PRIVATE REGISTRY_TEST=1)
 target_include_directories(test_registry PRIVATE ${CHECK_INCLUDE_DIRS} ${CJSON_INCLUDE_DIRS} ../src)
 target_link_libraries(test_registry PRIVATE ${CHECK_LIBRARIES} ${CJSON_LIBRARIES})
 add_test(NAME test_registry COMMAND test_registry)
+
+add_executable(test_ollama_tool_calls test_ollama_tool_calls.c)
+target_include_directories(test_ollama_tool_calls PRIVATE ${CHECK_INCLUDE_DIRS} ${CJSON_INCLUDE_DIRS} ../src)
+target_link_libraries(test_ollama_tool_calls PRIVATE ${CHECK_LIBRARIES} ${CJSON_LIBRARIES})
+add_test(NAME test_ollama_tool_calls COMMAND test_ollama_tool_calls)

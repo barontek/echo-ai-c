@@ -27,6 +27,69 @@ typedef struct {
     int tool_calls_cap;
 } WriteBuf;
 
+static void parse_stream_tool_calls(WriteBuf *buf, cJSON *msg)
+{
+    cJSON *tc_arr = cJSON_GetObjectItem(msg, "tool_calls");
+    if (!tc_arr || !cJSON_IsArray(tc_arr)) return;
+
+    int tc_count = cJSON_GetArraySize(tc_arr);
+    for (int t = 0; t < tc_count; t++)
+    {
+        cJSON *tc = cJSON_GetArrayItem(tc_arr, t);
+        cJSON *fn = cJSON_GetObjectItem(tc, "function");
+        if (!fn) continue;
+        cJSON *tname = cJSON_GetObjectItem(fn, "name");
+        cJSON *args = cJSON_GetObjectItem(fn, "arguments");
+
+        if (buf->tool_calls_count >= buf->tool_calls_cap)
+        {
+            int new_cap = buf->tool_calls_cap == 0 ? 4 : buf->tool_calls_cap * 2;
+            ToolCall *new_tc = realloc(buf->tool_calls,
+                                        sizeof(ToolCall) * (size_t)new_cap);
+            if (new_tc)
+            {
+                memset(new_tc + buf->tool_calls_cap, 0,
+                       sizeof(ToolCall) * (size_t)(new_cap - buf->tool_calls_cap));
+                buf->tool_calls = new_tc;
+                buf->tool_calls_cap = new_cap;
+            }
+        }
+
+        if (buf->tool_calls_count < buf->tool_calls_cap)
+        {
+            ToolCall *dst = &buf->tool_calls[buf->tool_calls_count];
+            dst->name = str_dup(tname && cJSON_IsString(tname)
+                                  ? cJSON_GetStringValue(tname) : "");
+            dst->id = str_dup("");
+            if (args)
+            {
+                char *args_str = cJSON_PrintUnformatted(args);
+                dst->arguments = args_str ? args_str : str_dup("");
+            }
+            else
+            {
+                dst->arguments = str_dup("");
+            }
+            if (dst->name && dst->id && dst->arguments && dst->name[0])
+                buf->tool_calls_count++;
+            else
+            {
+                free(dst->name);
+                free(dst->id);
+                free(dst->arguments);
+                memset(dst, 0, sizeof(*dst));
+            }
+        }
+    }
+}
+
+#ifdef OLLAMA_TEST
+void ollama_test_parse_stream_tool_calls(WriteBuf *buf, cJSON *msg)
+{
+    parse_stream_tool_calls(buf, msg);
+}
+#endif
+
 static void forward_chunk(WriteBuf *buf, cJSON *msg)
 {
     cJSON *thinking = cJSON_GetObjectItem(msg, "thinking");
@@ -86,59 +149,7 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
                         if (msg)
                         {
                             forward_chunk(buf, msg);
-                            cJSON *tc_arr = cJSON_GetObjectItem(msg, "tool_calls");
-                            if (tc_arr && cJSON_IsArray(tc_arr))
-                            {
-                                int tc_count = cJSON_GetArraySize(tc_arr);
-                                for (int t = 0; t < tc_count; t++)
-                                {
-                                    cJSON *tc = cJSON_GetArrayItem(tc_arr, t);
-                                    cJSON *fn = cJSON_GetObjectItem(tc, "function");
-                                    if (!fn) continue;
-                                    cJSON *tname = cJSON_GetObjectItem(fn, "name");
-                                    cJSON *args = cJSON_GetObjectItem(fn, "arguments");
-
-                                    if (buf->tool_calls_count >= buf->tool_calls_cap)
-                                    {
-                                        int new_cap = buf->tool_calls_cap == 0 ? 4 : buf->tool_calls_cap * 2;
-                                        ToolCall *new_tc = realloc(buf->tool_calls,
-                                                                    sizeof(ToolCall) * (size_t)new_cap);
-                                        if (new_tc)
-                                        {
-                                            memset(new_tc + buf->tool_calls_cap, 0,
-                                                   sizeof(ToolCall) * (size_t)(new_cap - buf->tool_calls_cap));
-                                            buf->tool_calls = new_tc;
-                                            buf->tool_calls_cap = new_cap;
-                                        }
-                                    }
-
-                                    if (buf->tool_calls_count < buf->tool_calls_cap)
-                                    {
-                                        ToolCall *dst = &buf->tool_calls[buf->tool_calls_count];
-                                        dst->name = str_dup(tname && cJSON_IsString(tname)
-                                                              ? cJSON_GetStringValue(tname) : "");
-                                        dst->id = str_dup("");
-                                        if (args)
-                                        {
-                                            char *args_str = cJSON_PrintUnformatted(args);
-                                            dst->arguments = args_str ? args_str : str_dup("");
-                                        }
-                                        else
-                                        {
-                                            dst->arguments = str_dup("");
-                                        }
-                                        if (dst->name && dst->id && dst->arguments && dst->name[0])
-                                            buf->tool_calls_count++;
-                                        else
-                                        {
-                                            free(dst->name);
-                                            free(dst->id);
-                                            free(dst->arguments);
-                                            memset(dst, 0, sizeof(*dst));
-                                        }
-                                    }
-                                }
-                            }
+                            parse_stream_tool_calls(buf, msg);
                         }
                         cJSON_Delete(json);
                     }
