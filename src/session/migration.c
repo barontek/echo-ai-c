@@ -133,25 +133,25 @@ int migration_change_password(SessionManager *sm, const char *new_password)
         return -1;
     }
 
-    /* re-encrypt all sessions */
+    /* re-encrypt all sessions: load with old key, save with new key */
+    EncryptionKey old_key = sm->enc_key;
+
     SessionList *list = session_manager_list_sessions(sm);
     if (list)
     {
-        EncryptionKey old_key = sm->enc_key;
-        sm->enc_key = new_key;
-
         for (int i = 0; i < list->count; i++)
         {
+            sm->enc_key = old_key;
             Session *s = session_manager_load_session(sm, list->ids[i]);
             if (!s) continue;
 
+            sm->enc_key = new_key;
             if (session_manager_save_session(sm, s) != 0)
                 log_warn("failed to re-encrypt session", "id", list->ids[i], NULL);
 
             session_free(s);
         }
 
-        sm->enc_key = old_key;
         session_list_free(list);
     }
 

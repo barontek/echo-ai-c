@@ -23,6 +23,7 @@ add_executable(echo-ai
     src/agent/agent.c
     src/agent/context.c
     src/llm/ollama.c
+    src/llm/lmstudio.c
     src/llm/factory.c
     src/tools/tool.c
     src/tools/registry.c
@@ -34,13 +35,33 @@ add_executable(echo-ai
     src/tools/grep_tool.c
     src/tools/web_fetch.c
     src/tools/web_search.c
+    src/tools/replace_in_file.c
+    src/tools/python_execute.c
+    src/tools/rest_api.c
+    src/tools/notes.c
+    src/tools/git.c
+    src/tools/ingest_document.c
+    src/tools/semantic_search.c
+    src/tools/deep_search.c
+    src/tools/tool_memory.c
+    src/tools/tool_delegate.c
+    src/tools/tool_sqlite_query.c
+    src/tools/tool_sqlite_schema.c
+    src/tools/tool_ask_user.c
+    src/tools/tool_humanizer.c
+    src/tools/search_provider.c
+    src/tools/search_brave.c
+    src/tools/search_duckduckgo.c
+    src/tools/search_tavily.c
     src/safety/safety.c
     src/session/session.c
     src/session/encryption.c
     src/session/session_manager.c
+    src/session/memory.c
     src/session/migration.c
     src/utils/rate_limiter.c
     src/utils/circuit_breaker.c
+    src/utils/callbacks.c
     src/utils/metrics.c
     src/change_tracker/change_tracker.c
     src/server/server.c
@@ -63,6 +84,7 @@ target_link_libraries(echo-ai PRIVATE
     ${SQLITE3_LIBRARIES}
     ${OPENSSL_LIBRARIES}
     ${CJSON_LIBRARIES}
+    m
 )
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -70,6 +92,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 else()
     target_compile_options(echo-ai PRIVATE -Wall -Wextra -O2)
 endif()
+
+# Frontend build (requires Node.js)
+set(FRONTEND_DIR "${CMAKE_SOURCE_DIR}/frontend")
+add_custom_target(frontend-build
+    COMMAND npm ci
+    COMMAND npm run build
+    WORKING_DIRECTORY "${FRONTEND_DIR}"
+    COMMENT "Building frontend..."
+)
 
 # Tests
 option(BUILD_TESTS "Build unit tests" ON)

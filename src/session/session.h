@@ -7,6 +7,7 @@
 typedef struct {
     char *id;
     char *title;
+    int title_generation_attempted;
     char *created_at;
     Message *messages;
     int messages_count;
@@ -20,5 +21,7 @@ char *session_serialize_messages(const Session *session);
 int session_deserialize_messages(Session *session, const char *json_str);
 char *session_serialize_metadata(const Session *session);
 int session_deserialize_metadata(Session *session, const char *json_str);
+char *session_serialize_events(const Session *session);
+int session_deserialize_events(Session *session, const char *json_str);
 
 #endif

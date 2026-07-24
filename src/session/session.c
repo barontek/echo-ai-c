@@ -23,6 +23,7 @@ Session *session_create(const char *title)
         s->id = tmp;
     }
     s->title = str_dup(title ? title : "New Session");
+    s->title_generation_attempted = 0;
 
     char ts[64];
     struct tm *tm_ptr = localtime(&now);
@@ -160,5 +161,31 @@ int session_deserialize_metadata(Session *session, const char *json_str)
     if (session->metadata) cJSON_Delete(session->metadata);
     session->metadata = cJSON_Parse(json_str);
     if (!session->metadata) { session->metadata = cJSON_CreateObject(); return -1; }
+    return 0;
+}
+
+char *session_serialize_events(const Session *session)
+{
+    if (!session->events) return NULL;
+    char *json = cJSON_PrintUnformatted(session->events);
+    if (json)
+    {
+        int len = strlen(json);
+        if (len <= 2) { free(json); return str_dup("[]"); }
+    }
+    return json;
+}
+
+int session_deserialize_events(Session *session, const char *json_str)
+{
+    if (!json_str) return -1;
+    if (session->events) cJSON_Delete(session->events);
+    session->events = cJSON_Parse(json_str);
+    if (!session->events || !cJSON_IsArray(session->events))
+    {
+        if (session->events) cJSON_Delete(session->events);
+        session->events = cJSON_CreateArray();
+        return -1;
+    }
     return 0;
 }

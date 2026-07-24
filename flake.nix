@@ -23,12 +23,14 @@
             openssl
             cjson
             check
+            nodejs_22
           ];
 
           shellHook = ''
             echo "Echo AI dev environment ready"
             echo "  cmake:  $(cmake --version | head -1)"
             echo "  deps:   libuv curl sqlite openssl cjson check"
+            echo "  node:   $(node --version 2>/dev/null || echo 'not found')"
           '';
         };
       });

@@ -59,6 +59,13 @@ model = gemma2:2b
 # Requires ECHO_PASSWORD env var or ~/.config/echo-ai/password file
 # enabled = true
 
+[search]
+# Search provider for web_search tool: brave, duckduckgo, or tavily
+# provider = brave
+
+# API key for Brave or Tavily (not needed for DuckDuckGo)
+# api_key = your-api-key-here
+
 [server]
 # HTTP server port (default: 8080)
 # port = 8080

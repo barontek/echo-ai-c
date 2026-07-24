@@ -12,9 +12,12 @@
 #include "utils/string_utils.h"
 #include "agent/agent.h"
 #include "tools/registry.h"
+#include "tools/search_provider.h"
 #include "safety/safety.h"
 #include "session/session_manager.h"
 #include "session/encryption.h"
+#include "session/memory.h"
+#include "change_tracker/change_tracker.h"
 #include "server/server.h"
 
 static void print_usage(const char *prog)
@@ -33,16 +36,8 @@ static SafetyConfig *load_safety_config(Conf *conf)
 {
     SafetyConfig *safety = safety_config_create();
     if (!safety) return NULL;
-
-    const char *v = conf_get(conf, "safety.workspace");
-    safety->workspace = str_dup(v ? v : ".");
-
-    v = conf_get(conf, "safety.allow_network");
-    safety->allow_network = v ? (strcmp(v, "true") == 0 || strcmp(v, "1") == 0) : 1;
-
-    safety->max_file_size = (size_t)conf_get_int(conf, "safety.max_file_size", 10485760);
-    safety->max_execution_time = conf_get_int(conf, "safety.max_execution_time", 300);
-
+    safety_load_from_conf(safety, conf);
+    if (!safety->workspace) safety->workspace = str_dup(".");
     return safety;
 }
 
@@ -91,10 +86,6 @@ static SessionManager *init_session_manager(Conf *conf)
     if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0) return NULL;
 
     mkdir(data_dir, 0755);
-    char *sessions_dir = NULL;
-    if (asprintf(&sessions_dir, "%s/sessions", data_dir) < 0) { free(data_dir); return NULL; }
-    mkdir(sessions_dir, 0755);
-    free(sessions_dir);
 
     char *password = encryption_resolve_password();
     if (!password)
@@ -123,12 +114,20 @@ static SessionManager *init_session_manager(Conf *conf)
 
 static SessionManager *g_session_manager = NULL;
 
-static void run_cli(Conf *conf)
+static void run_chat(Conf *conf)
 {
     SafetyConfig *safety = load_safety_config(conf);
     if (!safety) { log_error("failed to load safety config", NULL); return; }
 
     registry_init(safety);
+
+    const char *sp_name = conf_get(conf, "search.provider");
+    if (sp_name)
+    {
+        const char *api_key = conf_get(conf, "search.api_key");
+        SearchProvider *sp = search_provider_create(sp_name, api_key);
+        if (sp) registry_set_search_provider(sp);
+    }
 
     AgentConfig *cfg = load_agent_config(conf);
     if (!cfg) { log_error("failed to load agent config", NULL); registry_destroy(); safety_config_free(safety); return; }
@@ -136,9 +135,97 @@ static void run_cli(Conf *conf)
     Agent *agent = agent_create(cfg);
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
 
+    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
+                                  cfg->num_ctx, cfg->keep_alive_secs,
+                                  cfg->temperature, cfg->timeout, cfg->max_iterations);
+    free(cfg);
+
+    printf("Echo AI -- Chat mode (type '/exit' to quit)\n");
+    printf("Model: %s\n", agent->model);
+    printf("Tools: %d registered\n\n", registry_count());
+
+    char *line = NULL;
+    size_t line_cap = 0;
+
+    while (1)
+    {
+        printf("> ");
+        fflush(stdout);
+
+        ssize_t len = getline(&line, &line_cap, stdin);
+        if (len < 0) break;
+
+        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+
+        if (strcmp(line, "/exit") == 0 || strcmp(line, "/quit") == 0) break;
+        if (line[0] == '\0') continue;
+
+        printf("\n");
+        LLMResponse *resp = agent_run(agent, line);
+
+        if (resp && resp->content)
+            printf("%s\n\n", resp->content);
+        else if (resp)
+            printf("[no text response]\n\n");
+        else
+            printf("[error getting response]\n\n");
+
+        llm_response_free(resp);
+    }
+
+    free(line);
+    agent_destroy(agent);
+    registry_destroy();
+    safety_config_free(safety);
+}
+
+static void print_cli_help(void)
+{
+    printf("Commands:\n");
+    printf("  /exit           Quit the REPL\n");
+    printf("  /new            Reset conversation\n");
+    printf("  /save <name>    Save current session\n");
+    printf("  /load <id>      Load a session by ID\n");
+    printf("  /model <name>   Switch model\n");
+    printf("  /undo           Undo last file change\n");
+    printf("  /redo           Redo last undone file change\n");
+    printf("  /clear          Clear the screen\n");
+    printf("  /sessions       List saved sessions\n");
+    printf("  /help           Show this message\n");
+}
+
+static void run_cli(Conf *conf)
+{
+    SafetyConfig *safety = load_safety_config(conf);
+    if (!safety) { log_error("failed to load safety config", NULL); return; }
+
+    registry_init(safety);
+
+    {
+        const char *sp_name = conf_get(conf, "search.provider");
+        if (sp_name)
+        {
+            const char *api_key = conf_get(conf, "search.api_key");
+            SearchProvider *sp = search_provider_create(sp_name, api_key);
+            if (sp) registry_set_search_provider(sp);
+        }
+    }
+
+    AgentConfig *cfg = load_agent_config(conf);
+    if (!cfg) { log_error("failed to load agent config", NULL); registry_destroy(); safety_config_free(safety); return; }
+
+    Agent *agent = agent_create(cfg);
+    if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
+
+    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
+                                  cfg->num_ctx, cfg->keep_alive_secs,
+                                  cfg->temperature, cfg->timeout, cfg->max_iterations);
+
     g_session_manager = init_session_manager(conf);
     if (g_session_manager)
     {
+        registry_set_session_manager(g_session_manager);
+        memory_table_init(g_session_manager->db);
         agent_set_session_manager(agent, g_session_manager);
         Session *s = session_manager_create_session(g_session_manager, "CLI Session");
         if (s)
@@ -150,9 +237,11 @@ static void run_cli(Conf *conf)
         }
     }
 
+    ChangeTracker *ct = ct_create();
+
     free(cfg);
 
-    printf("Echo AI -- CLI mode (type '/exit' to quit, '/new' to reset)\n");
+    printf("Echo AI -- CLI mode (type '/help' for commands)\n");
     printf("Model: %s\n", agent->model);
     printf("Tools: %d registered\n", registry_count());
     if (g_session_manager)
@@ -197,6 +286,108 @@ static void run_cli(Conf *conf)
             }
             if (!agent) { log_error("failed to recreate agent", NULL); break; }
             printf("Session reset.\n\n");
+            continue;
+        }
+
+        if (strcmp(line, "/help") == 0)
+        {
+            print_cli_help();
+            printf("\n");
+            continue;
+        }
+
+        if (strcmp(line, "/clear") == 0)
+        {
+            printf("\033[2J\033[H");
+            continue;
+        }
+
+        if (strcmp(line, "/undo") == 0)
+        {
+            int rc = ct_undo(ct);
+            if (rc < 0)
+                printf("Nothing to undo.\n\n");
+            else
+                printf("Undone (%d bytes restored).\n\n", rc);
+            continue;
+        }
+
+        if (strcmp(line, "/redo") == 0)
+        {
+            int rc = ct_redo(ct);
+            if (rc < 0)
+                printf("Nothing to redo.\n\n");
+            else
+                printf("Redone (%d bytes written).\n\n", rc);
+            continue;
+        }
+
+        if (strncmp(line, "/save ", 6) == 0)
+        {
+            if (!g_session_manager)
+            {
+                printf("Session persistence disabled.\n\n");
+                continue;
+            }
+            const char *name = line + 6;
+            if (name[0] == '\0')
+            {
+                printf("Usage: /save <name>\n\n");
+                continue;
+            }
+            Session *s = session_manager_load_session(g_session_manager, agent->session_id);
+            if (s)
+            {
+                free(s->title);
+                s->title = str_dup(name);
+                if (session_manager_save_session(g_session_manager, s) == 0)
+                    printf("Session saved as '%s'.\n\n", name);
+                else
+                    printf("Failed to save session.\n\n");
+                session_free(s);
+            }
+            else
+                printf("No active session to save.\n\n");
+            continue;
+        }
+
+        if (strncmp(line, "/load ", 6) == 0)
+        {
+            if (!g_session_manager)
+            {
+                printf("Session persistence disabled.\n\n");
+                continue;
+            }
+            const char *sid = line + 6;
+            if (sid[0] == '\0')
+            {
+                printf("Usage: /load <id>\n\n");
+                continue;
+            }
+            Session *s = session_manager_load_session(g_session_manager, sid);
+            if (!s)
+            {
+                printf("Session '%s' not found.\n\n", sid);
+                continue;
+            }
+            free(agent->session_id);
+            agent->session_id = str_dup(sid);
+            printf("Loaded session: %s (%s)\n\n", s->title, sid);
+            session_free(s);
+            continue;
+        }
+
+        if (strncmp(line, "/model ", 7) == 0)
+        {
+            const char *model = line + 7;
+            if (model[0] == '\0')
+            {
+                printf("Current model: %s\n\n", agent->model);
+                continue;
+            }
+            free(agent->model);
+            agent->model = str_dup(model);
+            printf("Switched to model: %s\n\n", model);
             continue;
         }
 
@@ -246,6 +437,7 @@ static void run_cli(Conf *conf)
     }
 
     free(line);
+    ct_destroy(ct);
     agent_destroy(agent);
     if (g_session_manager) session_manager_free(g_session_manager);
     registry_destroy();
@@ -259,14 +451,33 @@ static void run_web(Conf *conf, const char *config_path)
 
     registry_init(safety);
 
+    {
+        const char *sp_name = conf_get(conf, "search.provider");
+        if (sp_name)
+        {
+            const char *api_key = conf_get(conf, "search.api_key");
+            SearchProvider *sp = search_provider_create(sp_name, api_key);
+            if (sp) registry_set_search_provider(sp);
+        }
+    }
+
     AgentConfig *cfg = load_agent_config(conf);
     if (!cfg) { log_error("failed to load agent config", NULL); registry_destroy(); safety_config_free(safety); return; }
 
     Agent *agent = agent_create(cfg);
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
+
+    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
+                                  cfg->num_ctx, cfg->keep_alive_secs,
+                                  cfg->temperature, cfg->timeout, cfg->max_iterations);
     free(cfg);
 
     g_session_manager = init_session_manager(conf);
+    if (g_session_manager)
+    {
+        registry_set_session_manager(g_session_manager);
+        memory_table_init(g_session_manager->db);
+    }
 
     int port = conf_get_int(conf, "server.port", 8080);
 
@@ -284,8 +495,21 @@ static void run_web(Conf *conf, const char *config_path)
     ctx.safety = safety;
     ctx.conf = (Conf *)conf;
     ctx.port = port;
-    ctx.rate_limiter = rate_limiter_create(60, 60);
+    {
+        const char *home = getenv("HOME");
+        char *rl_db = NULL;
+        if (home && asprintf(&rl_db, "%s/.config/echo-ai/rate_limits.db", home) >= 0)
+        {
+            ctx.rate_limiter = rate_limiter_create(60, 60, rl_db);
+            free(rl_db);
+        }
+        else
+        {
+            ctx.rate_limiter = rate_limiter_create(60, 60, NULL);
+        }
+    }
     ctx.metrics = metrics_create();
+    if (agent) agent_set_metrics(agent, ctx.metrics);
     ctx.change_tracker = ct_create();
 
     registry_set_change_tracker(ctx.change_tracker);
@@ -355,7 +579,7 @@ int main(int argc, char *argv[])
         run_cli(conf);
         break;
     case MODE_CHAT:
-        log_info("chat mode not yet implemented", NULL);
+        run_chat(conf);
         break;
     case MODE_WEB:
         run_web(conf, config_path);

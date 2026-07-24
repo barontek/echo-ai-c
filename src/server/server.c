@@ -187,20 +187,20 @@ static void serve_static(Client *client, const char *path, ServerContext *ctx)
     (void)ctx;
     char filepath[2048];
     if (strcmp(path, "/") == 0 || strcmp(path, "") == 0)
-        snprintf(filepath, sizeof(filepath), "web/index.html");
+        snprintf(filepath, sizeof(filepath), "frontend/dist/index.html");
     else
-        snprintf(filepath, sizeof(filepath), "web%s", path);
+        snprintf(filepath, sizeof(filepath), "frontend/dist%s", path);
 
     struct stat st;
     if (stat(filepath, &st) != 0 || !S_ISREG(st.st_mode))
     {
         char *nf_path = NULL;
-        if (asprintf(&nf_path, "web%s/index.html", path) < 0)
+        if (asprintf(&nf_path, "frontend/dist%s/index.html", path) < 0)
         { server_response_error(client, 404, "not found"); return; }
         if (stat(nf_path, &st) == 0 && S_ISREG(st.st_mode))
         {
             free(nf_path);
-            snprintf(filepath, sizeof(filepath), "web%s/index.html", path);
+            snprintf(filepath, sizeof(filepath), "frontend/dist%s/index.html", path);
         }
         else
         {

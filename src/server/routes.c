@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 
+#include <curl/curl.h>
 #include <cjson/cJSON.h>
 
 #include "routes.h"
@@ -12,15 +13,25 @@
 #include "../agent/agent.h"
 #include "../safety/safety.h"
 #include "../session/encryption.h"
+#include "../session/session_manager.h"
+#include "../session/memory.h"
 #include "../utils/logging.h"
 #include "../utils/string_utils.h"
+#include "../utils/rate_limiter.h"
+#include "../tools/registry.h"
 
 static void handle_status(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
-    (void)req;
+    int locked = (ctx->state == STATE_LOCKED);
+    int needs_setup = (ctx->state == STATE_SETUP);
+
+    if (ctx->state == STATE_UNLOCKED && ctx->unlock_token &&
+        !middleware_has_valid_token(req->headers, ctx->unlock_token))
+        locked = 1;
+
     cJSON *json = cJSON_CreateObject();
-    cJSON_AddBoolToObject(json, "locked", ctx->state == STATE_LOCKED);
-    cJSON_AddBoolToObject(json, "needs_setup", ctx->state == STATE_SETUP);
+    cJSON_AddBoolToObject(json, "locked", locked);
+    cJSON_AddBoolToObject(json, "needs_setup", needs_setup);
     cJSON_AddBoolToObject(json, "session_enabled", ctx->sm != NULL);
     char *str = cJSON_PrintUnformatted(json);
     server_response_json(client, 200, str);
@@ -38,33 +49,33 @@ static void handle_health(HTTPRequest *req, Client *client, ServerContext *ctx)
 static void handle_config(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
     (void)req;
-    if (!ctx->config_path)
+    cJSON *cfg = cJSON_CreateObject();
+    cJSON *inner = cJSON_CreateObject();
+    if (ctx->agent)
     {
-        server_response_error(client, 500, "no config path");
-        return;
+        cJSON_AddStringToObject(inner, "provider", ctx->agent->model ? "ollama" : "");
+        cJSON_AddStringToObject(inner, "model", ctx->agent->model ? ctx->agent->model : "");
+        cJSON_AddNumberToObject(inner, "temperature", ctx->agent->temperature);
+        cJSON_AddNumberToObject(inner, "max_iterations", ctx->agent->max_iterations);
     }
-
-    FILE *f = fopen(ctx->config_path, "rb");
-    if (!f)
+    else
     {
-        server_response_error(client, 500, "cannot read config");
-        return;
+        cJSON_AddStringToObject(inner, "provider", "ollama");
+        cJSON_AddStringToObject(inner, "model", "");
+        cJSON_AddNumberToObject(inner, "temperature", 0.7);
+        cJSON_AddNumberToObject(inner, "max_iterations", 50);
     }
-
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    rewind(f);
-    if (fsize <= 0 || fsize > 65536) { fclose(f); server_response_error(client, 500, "config too large"); return; }
-
-    char *buf = malloc((size_t)fsize + 1);
-    if (!buf) { fclose(f); server_response_error(client, 500, "oom"); return; }
-
-    size_t read = fread(buf, 1, (size_t)fsize, f);
-    fclose(f);
-    buf[read] = '\0';
-
-    server_response(client, 200, "text/plain", buf);
-    free(buf);
+    cJSON_AddBoolToObject(inner, "session_enabled", ctx->sm != NULL);
+    cJSON_AddItemToObject(cfg, "config", inner);
+    char *str = cJSON_PrintUnformatted(cfg);
+    if (str)
+    {
+        server_response_json(client, 200, str);
+        free(str);
+    }
+    else
+        server_response_error(client, 500, "oom");
+    cJSON_Delete(cfg);
 }
 
 static void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
@@ -95,27 +106,43 @@ static void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
         server_response_error(client, 400, "password must be at least 4 characters");
         return;
     }
+    char *password = str_dup(pw->valuestring);
     cJSON_Delete(json);
+    if (!password) { server_response_error(client, 500, "oom"); return; }
 
     const char *home = getenv("HOME");
-    if (!home) { server_response_error(client, 500, "HOME not set"); return; }
+    if (!home) { free(password); server_response_error(client, 500, "HOME not set"); return; }
 
     char *salt_path = NULL;
     if (asprintf(&salt_path, "%s/.config/echo-ai/salt", home) < 0)
-    { server_response_error(client, 500, "out of memory"); return; }
+    { free(password); server_response_error(client, 500, "out of memory"); return; }
 
     if (encryption_salt_create(salt_path) != 0)
     {
         free(salt_path);
+        free(password);
         server_response_error(client, 500, "failed to create salt");
         return;
     }
     free(salt_path);
 
+    char *pw_path = NULL;
+    if (asprintf(&pw_path, "%s/.config/echo-ai/password", home) >= 0)
+    {
+        FILE *f = fopen(pw_path, "w");
+        if (f)
+        {
+            fputs(password, f);
+            fclose(f);
+        }
+        free(pw_path);
+    }
+
     char token[64];
     snprintf(token, sizeof(token), "tok_%ld_%d", (long)time(NULL), rand() % 100000);
     ctx->unlock_token = str_dup(token);
     ctx->state = STATE_UNLOCKED;
+    free(password);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "token", token);
@@ -130,9 +157,16 @@ static void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
 
 static void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
-    if (ctx->state != STATE_LOCKED)
+    if (ctx->state != STATE_LOCKED && ctx->state != STATE_UNLOCKED)
     {
         server_response_error(client, 400, "not locked");
+        return;
+    }
+
+    if (ctx->rate_limiter &&
+        !rate_limiter_unlock_allowed(ctx->rate_limiter, req->ip, 5, 20))
+    {
+        server_response_error(client, 429, "too many unlock attempts, try again later");
         return;
     }
 
@@ -197,6 +231,8 @@ static void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
     if (rc != 0)
     {
         memset(&key, 0, sizeof(key));
+        if (ctx->rate_limiter)
+            rate_limiter_record_unlock_failure(ctx->rate_limiter, req->ip);
         free(salt_path);
         free(password);
         server_response_error(client, 401, "wrong password");
@@ -205,6 +241,35 @@ static void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
 
     memset(&key, 0, sizeof(key));
     free(salt_path);
+
+    char *pw_path = NULL;
+    if (asprintf(&pw_path, "%s/.config/echo-ai/password", home) >= 0)
+    {
+        FILE *f = fopen(pw_path, "w");
+        if (f)
+        {
+            fputs(password, f);
+            fclose(f);
+        }
+        free(pw_path);
+    }
+
+    if (!ctx->sm)
+    {
+        char *data_dir = NULL;
+        if (asprintf(&data_dir, "%s/.config/echo-ai", home) >= 0)
+        {
+            SessionManager *sm = session_manager_create(data_dir, password);
+            free(data_dir);
+            if (sm)
+            {
+                ctx->sm = sm;
+                registry_set_session_manager(sm);
+                memory_table_init(sm->db);
+            }
+        }
+    }
+
     free(password);
 
     char token[64];
@@ -264,6 +329,7 @@ static void handle_sessions(HTTPRequest *req, Client *client, ServerContext *ctx
     {
         cJSON *s = cJSON_CreateObject();
         cJSON_AddStringToObject(s, "id", list->ids[i]);
+        cJSON_AddStringToObject(s, "session_id", list->ids[i]);
         cJSON_AddStringToObject(s, "title", list->titles[i]);
         cJSON_AddStringToObject(s, "created_at", list->created_ats[i]);
         cJSON_AddItemToArray(arr, s);
@@ -316,7 +382,7 @@ static void handle_create_session(HTTPRequest *req, Client *client, ServerContex
     }
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "id", s->id);
+    cJSON_AddStringToObject(resp, "session_id", s->id);
     cJSON_AddStringToObject(resp, "title", s->title);
     cJSON_AddStringToObject(resp, "created_at", s->created_at);
     char *str = cJSON_PrintUnformatted(resp);
@@ -335,6 +401,12 @@ static const char *session_id_from_path(const char *path)
     return NULL;
 }
 
+static int is_export_path(const char *sid)
+{
+    size_t slen = strlen(sid);
+    return slen > 7 && strcmp(sid + slen - 7, "/export") == 0;
+}
+
 static void handle_session_get(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
     if (!ctx->sm)
@@ -350,6 +422,23 @@ static void handle_session_get(HTTPRequest *req, Client *client, ServerContext *
         return;
     }
 
+    if (is_export_path(sid))
+    {
+        char *id_copy = str_dup(sid);
+        if (!id_copy) { server_response_error(client, 500, "oom"); return; }
+        id_copy[strlen(id_copy) - 7] = '\0';
+        char *exported = session_manager_export_session(ctx->sm, id_copy);
+        free(id_copy);
+        if (exported)
+        {
+            server_response_json(client, 200, exported);
+            free(exported);
+        }
+        else
+            server_response_error(client, 404, "session not found");
+        return;
+    }
+
     Session *s = session_manager_load_session(ctx->sm, sid);
     if (!s)
     {
@@ -359,20 +448,18 @@ static void handle_session_get(HTTPRequest *req, Client *client, ServerContext *
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "id", s->id);
+    cJSON_AddStringToObject(resp, "session_id", s->id);
     cJSON_AddStringToObject(resp, "title", s->title);
     cJSON_AddStringToObject(resp, "created_at", s->created_at);
-    if (s->messages_count > 0)
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < s->messages_count; i++)
     {
-        cJSON *arr = cJSON_CreateArray();
-        for (int i = 0; i < s->messages_count; i++)
-        {
-            cJSON *m = cJSON_CreateObject();
-            cJSON_AddStringToObject(m, "role", s->messages[i].role ? s->messages[i].role : "unknown");
-            cJSON_AddStringToObject(m, "content", s->messages[i].content ? s->messages[i].content : "");
-            cJSON_AddItemToArray(arr, m);
-        }
-        cJSON_AddItemToObject(resp, "messages", arr);
+        cJSON *m = cJSON_CreateObject();
+        cJSON_AddStringToObject(m, "role", s->messages[i].role ? s->messages[i].role : "unknown");
+        cJSON_AddStringToObject(m, "content", s->messages[i].content ? s->messages[i].content : "");
+        cJSON_AddItemToArray(arr, m);
     }
+    cJSON_AddItemToObject(resp, "messages", arr);
     char *str = cJSON_PrintUnformatted(resp);
     server_response_json(client, 200, str);
     free(str);
@@ -463,6 +550,75 @@ static void handle_session_update(HTTPRequest *req, Client *client, ServerContex
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "id", s->id);
+    cJSON_AddStringToObject(resp, "session_id", s->id);
+    cJSON_AddStringToObject(resp, "title", s->title);
+    cJSON_AddStringToObject(resp, "created_at", s->created_at);
+    char *str = cJSON_PrintUnformatted(resp);
+    server_response_json(client, 200, str);
+    free(str);
+    cJSON_Delete(resp);
+    session_free(s);
+}
+
+static void handle_sessions_rename(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    if (!middleware_check_unlock(req, ctx))
+    {
+        server_response_error(client, 401, "unauthorized");
+        return;
+    }
+
+    if (!ctx->sm)
+    {
+        server_response_error(client, 400, "session manager not available");
+        return;
+    }
+
+    if (!req->body || req->body_len == 0)
+    {
+        server_response_error(client, 400, "missing body");
+        return;
+    }
+
+    cJSON *json = cJSON_Parse(req->body);
+    if (!json)
+    {
+        server_response_error(client, 400, "invalid json");
+        return;
+    }
+
+    cJSON *sid_item = cJSON_GetObjectItem(json, "session_id");
+    cJSON *title_item = cJSON_GetObjectItem(json, "new_title");
+    if (!sid_item || !sid_item->valuestring || !title_item || !title_item->valuestring)
+    {
+        cJSON_Delete(json);
+        server_response_error(client, 400, "missing session_id or new_title");
+        return;
+    }
+
+    Session *s = session_manager_load_session(ctx->sm, sid_item->valuestring);
+    if (!s)
+    {
+        cJSON_Delete(json);
+        server_response_error(client, 404, "session not found");
+        return;
+    }
+
+    free(s->title);
+    s->title = str_dup(title_item->valuestring);
+    int rc = session_manager_save_session(ctx->sm, s);
+    cJSON_Delete(json);
+
+    if (rc != 0)
+    {
+        session_free(s);
+        server_response_error(client, 500, "failed to save session");
+        return;
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "id", s->id);
+    cJSON_AddStringToObject(resp, "session_id", s->id);
     cJSON_AddStringToObject(resp, "title", s->title);
     cJSON_AddStringToObject(resp, "created_at", s->created_at);
     char *str = cJSON_PrintUnformatted(resp);
@@ -655,23 +811,215 @@ static void handle_redo(HTTPRequest *req, Client *client, ServerContext *ctx)
     free(resp);
 }
 
+static void handle_change_password(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    if (!ctx->sm)
+    {
+        server_response_error(client, 400, "session manager not available");
+        return;
+    }
+
+    if (!req->body || req->body_len == 0)
+    {
+        server_response_error(client, 400, "missing body");
+        return;
+    }
+
+    cJSON *json = cJSON_Parse(req->body);
+    if (!json)
+    {
+        server_response_error(client, 400, "invalid json");
+        return;
+    }
+
+    cJSON *pw = cJSON_GetObjectItem(json, "new_password");
+    if (!pw || !pw->valuestring || strlen(pw->valuestring) < 4)
+    {
+        cJSON_Delete(json);
+        server_response_error(client, 400, "new password must be at least 4 characters");
+        return;
+    }
+
+    int rc = migration_change_password(ctx->sm, pw->valuestring);
+    cJSON_Delete(json);
+
+    if (rc != 0)
+    {
+        server_response_error(client, 500, "password change failed");
+        return;
+    }
+
+    server_response_json(client, 200, "{\"changed\":true}");
+}
+
+static void handle_session_import(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    if (!ctx->sm)
+    {
+        server_response_error(client, 400, "session manager not available");
+        return;
+    }
+
+    if (!req->body || req->body_len == 0)
+    {
+        server_response_error(client, 400, "missing body");
+        return;
+    }
+
+    Session *s = session_manager_import_session(ctx->sm, req->body);
+    if (!s)
+    {
+        server_response_error(client, 400, "import failed — duplicate or invalid session data");
+        return;
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "id", s->id);
+    cJSON_AddStringToObject(resp, "title", s->title);
+    char *str = cJSON_PrintUnformatted(resp);
+    server_response_json(client, 200, str);
+    free(str);
+    cJSON_Delete(resp);
+    session_free(s);
+}
+
+static void handle_health_detailed(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    (void)req;
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddBoolToObject(json, "session_enabled", ctx->sm != NULL);
+
+    if (ctx->sm)
+    {
+        SessionList *list = session_manager_list_sessions(ctx->sm);
+        cJSON_AddNumberToObject(json, "session_count", list ? list->count : 0);
+        if (list) session_list_free(list);
+    }
+
+    cJSON_AddStringToObject(json, "state",
+        ctx->state == STATE_UNLOCKED ? "unlocked" :
+        ctx->state == STATE_SETUP ? "setup" : "locked");
+
+    char *str = cJSON_PrintUnformatted(json);
+    server_response_json(client, 200, str);
+    free(str);
+    cJSON_Delete(json);
+}
+
+typedef struct {
+    char *data;
+    size_t len;
+} ModelsBuf;
+
+static size_t models_write_cb(void *contents, size_t size, size_t nmemb, void *userdata)
+{
+    size_t total = size * nmemb;
+    ModelsBuf *buf = (ModelsBuf *)userdata;
+    char *tmp = realloc(buf->data, buf->len + total + 1);
+    if (!tmp) return 0;
+    buf->data = tmp;
+    memcpy(buf->data + buf->len, contents, total);
+    buf->len += total;
+    buf->data[buf->len] = '\0';
+    return total;
+}
+
+static void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    (void)req;
+    (void)ctx;
+    cJSON *arr = cJSON_CreateArray();
+
+    CURL *curl = curl_easy_init();
+    if (curl)
+    {
+        ModelsBuf buf = {0};
+        curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:11434/api/tags");
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, models_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+        CURLcode res = curl_easy_perform(curl);
+        if (res == CURLE_OK && buf.data)
+        {
+            cJSON *root = cJSON_Parse(buf.data);
+            if (root)
+            {
+                cJSON *models = cJSON_GetObjectItem(root, "models");
+                if (models && cJSON_IsArray(models))
+                {
+                    int count = cJSON_GetArraySize(models);
+                    for (int i = 0; i < count; i++)
+                    {
+                        cJSON *m = cJSON_GetArrayItem(models, i);
+                        cJSON *name = m ? cJSON_GetObjectItem(m, "name") : NULL;
+                        if (name && cJSON_IsString(name))
+                            cJSON_AddItemToArray(arr, cJSON_CreateString(cJSON_GetStringValue(name)));
+                    }
+                }
+                cJSON_Delete(root);
+            }
+        }
+        free(buf.data);
+        curl_easy_cleanup(curl);
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddItemToObject(resp, "models", arr);
+    char *str = cJSON_PrintUnformatted(resp);
+    server_response_json(client, 200, str);
+    free(str);
+    cJSON_Delete(resp);
+}
+
+static void handle_preferences_get(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    (void)req;
+    (void)ctx;
+    cJSON *resp = cJSON_CreateObject();
+    cJSON *prefs = cJSON_CreateObject();
+    cJSON_AddItemToObject(resp, "preferences", prefs);
+    char *str = cJSON_PrintUnformatted(resp);
+    server_response_json(client, 200, str);
+    free(str);
+    cJSON_Delete(resp);
+}
+
+static void handle_preferences_set(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    (void)req;
+    (void)ctx;
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "saved", 1);
+    char *str = cJSON_PrintUnformatted(resp);
+    server_response_json(client, 200, str);
+    free(str);
+    cJSON_Delete(resp);
+}
+
 const Route routes[] = {
-    {"GET",  "/api/status",        0, 0, handle_status},
-    {"GET",  "/api/health",        0, 0, handle_health},
-    {"GET",  "/api/config",        0, 0, handle_config},
-    {"POST", "/api/setup",         0, 0, handle_setup},
-    {"POST", "/api/unlock",        0, 0, handle_unlock},
-    {"POST", "/api/logout",        0, 1, handle_logout},
-    {"GET",  "/api/sessions",      0, 1, handle_sessions},
-    {"POST", "/api/sessions",      0, 1, handle_create_session},
-    {"GET",  "/api/sessions/",     1, 1, handle_session_get},
-    {"DELETE", "/api/sessions/",   1, 1, handle_session_delete},
-    {"PUT",  "/api/sessions/",     1, 1, handle_session_update},
-    {"POST", "/api/chat",          0, 1, handle_chat},
-    {"GET",  "/api/stream",        0, 0, handle_sse_stream},
-    {"GET",  "/api/metrics",       0, 0, handle_metrics},
-    {"POST", "/api/undo",          0, 1, handle_undo},
-    {"POST", "/api/redo",          0, 1, handle_redo},
+    {"GET",  "/api/status",               0, 0, handle_status},
+    {"GET",  "/api/health",               0, 0, handle_health},
+    {"GET",  "/api/health/detailed",      0, 0, handle_health_detailed},
+    {"GET",  "/api/config",               0, 0, handle_config},
+    {"POST", "/api/setup",                0, 0, handle_setup},
+    {"POST", "/api/unlock",               0, 0, handle_unlock},
+    {"POST", "/api/logout",               0, 1, handle_logout},
+    {"GET",  "/api/models",               0, 0, handle_models},
+    {"GET",  "/api/preferences",          0, 0, handle_preferences_get},
+    {"POST", "/api/preferences",          0, 0, handle_preferences_set},
+    {"GET",  "/api/sessions",             0, 1, handle_sessions},
+    {"POST", "/api/sessions",             0, 1, handle_create_session},
+    {"POST", "/api/sessions/rename",      0, 1, handle_sessions_rename},
+    {"GET",  "/api/sessions/",            1, 1, handle_session_get},
+    {"DELETE","/api/sessions/",           1, 1, handle_session_delete},
+    {"PUT",  "/api/sessions/",            1, 1, handle_session_update},
+    {"POST", "/api/sessions/import",      0, 1, handle_session_import},
+    {"POST", "/api/change-password",      0, 1, handle_change_password},
+    {"POST", "/api/chat",                 0, 1, handle_chat},
+    {"GET",  "/api/stream",               0, 0, handle_sse_stream},
+    {"GET",  "/api/metrics",              0, 0, handle_metrics},
+    {"POST", "/api/undo",                 0, 1, handle_undo},
+    {"POST", "/api/redo",                 0, 1, handle_redo},
 };
 
 const int routes_count = sizeof(routes) / sizeof(routes[0]);
@@ -684,6 +1032,11 @@ int route_match(const char *method, const char *path, const Route *r)
     return strcmp(path, r->path) == 0;
 }
 
+typedef struct QueuedMsg {
+    char *data;
+    struct QueuedMsg *next;
+} QueuedMsg;
+
 typedef struct {
     Agent *agent;
     SessionManager *sm;
@@ -693,7 +1046,16 @@ typedef struct {
     char *pending_request_id;
     int approval_done;
     int approval_result;
+    int ready;
+    QueuedMsg *msg_queue;
+    QueuedMsg *msg_queue_tail;
+    char *active_session_id;
+    int session_start_emitted;
+    int ask_user_done;
+    char *ask_user_response;
 } WSChatCtx;
+
+static void ws_title_update_cb(const char *session_id, const char *title, void *userdata);
 
 static void ws_chat_on_chunk(const char *chunk, void *userdata)
 {
@@ -703,10 +1065,103 @@ static void ws_chat_on_chunk(const char *chunk, void *userdata)
     cJSON *frame = cJSON_CreateObject();
     cJSON_AddStringToObject(frame, "type", "content");
     cJSON_AddStringToObject(frame, "content", chunk ? chunk : "");
+    if (c->active_session_id)
+        cJSON_AddStringToObject(frame, "session_id", c->active_session_id);
     char *str = cJSON_PrintUnformatted(frame);
     if (str) ws_send_json(c->ws, str);
     free(str);
     cJSON_Delete(frame);
+}
+
+static void ws_send_done(WSClient *ws, const char *session_id, const char *title, LLMResponse *resp)
+{
+    cJSON *done = cJSON_CreateObject();
+    cJSON_AddStringToObject(done, "type", "done");
+    if (resp && resp->content)
+        cJSON_AddStringToObject(done, "content", resp->content);
+    if (session_id)
+        cJSON_AddStringToObject(done, "session_id", session_id);
+    if (title)
+        cJSON_AddStringToObject(done, "title", title);
+    if (resp)
+    {
+        cJSON_AddBoolToObject(done, "has_tools", resp->tool_calls_count > 0);
+        if (resp->tool_calls_count > 0)
+        {
+            cJSON *tc_arr = cJSON_CreateArray();
+            for (int i = 0; i < resp->tool_calls_count; i++)
+            {
+                cJSON *tc = cJSON_CreateObject();
+                cJSON_AddStringToObject(tc, "name", resp->tool_calls[i].name ? resp->tool_calls[i].name : "");
+                cJSON_AddStringToObject(tc, "arguments", resp->tool_calls[i].arguments ? resp->tool_calls[i].arguments : "{}");
+                cJSON_AddItemToArray(tc_arr, tc);
+            }
+            cJSON_AddItemToObject(done, "tool_calls", tc_arr);
+        }
+    }
+    char *str = cJSON_PrintUnformatted(done);
+    if (str) ws_send_json(ws, str);
+    free(str);
+    cJSON_Delete(done);
+}
+
+static void ws_chat_flush_queue(WSChatCtx *c)
+{
+    if (!c || c->ready) return;
+    c->ready = 1;
+
+    QueuedMsg *q = c->msg_queue;
+    while (q)
+    {
+        cJSON *json = cJSON_Parse(q->data);
+        if (json)
+        {
+            cJSON *msg = cJSON_GetObjectItem(json, "content");
+            if (!msg || !msg->valuestring)
+                msg = cJSON_GetObjectItem(json, "message");
+            if (msg && msg->valuestring)
+            {
+                LLMResponse *resp = agent_run_streaming(c->agent, msg->valuestring,
+                                                        ws_chat_on_chunk, c);
+                if (resp)
+                {
+                    ws_send_done(c->ws, c->active_session_id, NULL, resp);
+                    llm_response_free(resp);
+                }
+                else
+                {
+                    cJSON *err = cJSON_CreateObject();
+                    cJSON_AddStringToObject(err, "type", "error");
+                    cJSON_AddStringToObject(err, "content", "no response");
+                    char *s = cJSON_PrintUnformatted(err);
+                    if (s) ws_send_json(c->ws, s);
+                    free(s);
+                    cJSON_Delete(err);
+                }
+            }
+            cJSON_Delete(json);
+        }
+        QueuedMsg *next = q->next;
+        free(q->data);
+        free(q);
+        q = next;
+    }
+    c->msg_queue = NULL;
+    c->msg_queue_tail = NULL;
+}
+
+static void ws_chat_enqueue(WSChatCtx *c, const char *data)
+{
+    QueuedMsg *q = calloc(1, sizeof(QueuedMsg));
+    if (!q) return;
+    q->data = str_dup(data);
+    if (!q->data) { free(q); return; }
+
+    if (c->msg_queue_tail)
+        c->msg_queue_tail->next = q;
+    else
+        c->msg_queue = q;
+    c->msg_queue_tail = q;
 }
 
 static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void *userdata)
@@ -722,10 +1177,41 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
         return;
     }
 
-    cJSON *type_item = cJSON_GetObjectItem(json, "type");
-    if (type_item && type_item->valuestring)
+    cJSON *session_id_item = cJSON_GetObjectItem(json, "session_id");
+    if (session_id_item && session_id_item->valuestring && c->active_session_id)
     {
-        if (strcmp(type_item->valuestring, "approval_response") == 0)
+        if (strcmp(session_id_item->valuestring, c->active_session_id) != 0)
+        {
+            ws_send_json(ws, "{\"type\":\"error\",\"message\":\"stale session_id\"}");
+            cJSON_Delete(json);
+            return;
+        }
+    }
+
+    cJSON *type_item = cJSON_GetObjectItem(json, "type");
+
+    if (!type_item)
+    {
+        cJSON *provider = cJSON_GetObjectItem(json, "provider");
+        if (provider)
+        {
+            cJSON_Delete(json);
+            cJSON *ready = cJSON_CreateObject();
+            cJSON_AddStringToObject(ready, "type", "ready");
+            if (c->active_session_id)
+                cJSON_AddStringToObject(ready, "session_id", c->active_session_id);
+            char *s = cJSON_PrintUnformatted(ready);
+            if (s) ws_send_json(ws, s);
+            free(s);
+            cJSON_Delete(ready);
+            return;
+        }
+        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"missing type\"}");
+        cJSON_Delete(json);
+        return;
+    }
+
+    if (strcmp(type_item->valuestring, "approval_response") == 0)
         {
             cJSON *rid = cJSON_GetObjectItem(json, "request_id");
             cJSON *ok = cJSON_GetObjectItem(json, "approved");
@@ -738,25 +1224,105 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
             cJSON_Delete(json);
             return;
         }
+        if (strcmp(type_item->valuestring, "ask_user_response") == 0)
+        {
+            cJSON *answer = cJSON_GetObjectItem(json, "answer");
+            if (answer && answer->valuestring)
+            {
+                free(c->ask_user_response);
+                c->ask_user_response = str_dup(answer->valuestring);
+                c->ask_user_done = 1;
+            }
+            else
+            {
+                c->ask_user_response = str_dup("");
+                c->ask_user_done = 1;
+            }
+            cJSON_Delete(json);
+            return;
+        }
+        if (strcmp(type_item->valuestring, "edit") == 0)
+        {
+            cJSON *idx_item = cJSON_GetObjectItem(json, "index");
+            cJSON *content_item = cJSON_GetObjectItem(json, "content");
+            if (idx_item && cJSON_IsNumber(idx_item) && content_item && content_item->valuestring
+                && c->sm && c->agent)
+            {
+                int idx = (int)idx_item->valuedouble;
+                int trunc_rc = session_manager_truncate_history(c->sm, c->agent->session_id, idx);
+                if (trunc_rc == 0 && c->agent->messages_count > 0)
+                {
+                    int keep = idx < c->agent->messages_count ? idx : c->agent->messages_count - 1;
+                    for (int i = keep; i < c->agent->messages_count; i++)
+                    {
+                        free(c->agent->messages[i].role);
+                        free(c->agent->messages[i].content);
+                        free(c->agent->messages[i].id);
+                        free(c->agent->messages[i].tool_call_id);
+                        free(c->agent->messages[i].tool_name);
+                        free(c->agent->messages[i].error_category);
+                        free(c->agent->messages[i].thinking);
+                        if (c->agent->messages[i].tool_calls)
+                        {
+                            for (int j = 0; j < c->agent->messages[i].tool_calls_count; j++)
+                                tool_call_free(&c->agent->messages[i].tool_calls[j]);
+                            free(c->agent->messages[i].tool_calls);
+                        }
+                    }
+                    c->agent->messages_count = keep;
+                }
+
+                LLMResponse *resp = agent_run_streaming(c->agent, content_item->valuestring,
+                                                        ws_chat_on_chunk, c);
+                if (resp)
+                {
+                    ws_send_done(c->ws, c->active_session_id, NULL, resp);
+                    llm_response_free(resp);
+                }
+                else
+                {
+                    cJSON *err = cJSON_CreateObject();
+                    cJSON_AddStringToObject(err, "type", "error");
+                    cJSON_AddStringToObject(err, "content", "no response");
+                    char *s = cJSON_PrintUnformatted(err);
+                    if (s) ws_send_json(c->ws, s);
+                    free(s);
+                    cJSON_Delete(err);
+                }
+            }
+            cJSON_Delete(json);
+            return;
+        }
+
         if (strcmp(type_item->valuestring, "stop") == 0)
         {
             agent_cancel(c->agent);
             c->approval_done = 1;
+            c->ask_user_done = 1;
             cJSON_Delete(json);
             return;
         }
+
         if (strcmp(type_item->valuestring, "message") != 0)
         {
             cJSON_Delete(json);
             return;
         }
-    }
 
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
+    cJSON *msg = cJSON_GetObjectItem(json, "content");
+    if (!msg || !msg->valuestring)
+        msg = cJSON_GetObjectItem(json, "message");
     if (!msg || !msg->valuestring)
     {
         cJSON_Delete(json);
-        ws_send_json(ws, "{\"type\":\"error\",\"message\":\"missing message field\"}");
+        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"missing message content\"}");
+        return;
+    }
+
+    if (!c->ready)
+    {
+        ws_chat_enqueue(c, data);
+        cJSON_Delete(json);
         return;
     }
 
@@ -766,28 +1332,56 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
 
     if (resp)
     {
-        cJSON *done = cJSON_CreateObject();
-        cJSON_AddStringToObject(done, "type", "done");
-        char *str = cJSON_PrintUnformatted(done);
-        if (str) ws_send_json(ws, str);
-        free(str);
-        cJSON_Delete(done);
+        ws_send_done(ws, c->active_session_id, NULL, resp);
         llm_response_free(resp);
     }
     else
     {
-        ws_send_json(ws, "{\"type\":\"error\",\"message\":\"agent returned no response\"}");
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "type", "error");
+        cJSON_AddStringToObject(err, "content", "agent returned no response");
+        char *s = cJSON_PrintUnformatted(err);
+        if (s) ws_send_json(ws, s);
+        free(s);
+        cJSON_Delete(err);
     }
+}
+
+static void ws_title_update_cb(const char *session_id, const char *title, void *userdata)
+{
+    WSChatCtx *c = (WSChatCtx *)userdata;
+    if (!c || !c->ws) return;
+
+    cJSON *ev = cJSON_CreateObject();
+    cJSON_AddStringToObject(ev, "type", "title_updated");
+    cJSON_AddStringToObject(ev, "session_id", session_id ? session_id : "");
+    cJSON_AddStringToObject(ev, "title", title ? title : "");
+    char *str = cJSON_PrintUnformatted(ev);
+    if (str) ws_send_json(c->ws, str);
+    free(str);
+    cJSON_Delete(ev);
 }
 
 static void ws_chat_on_close(WSClient *ws, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
-    (void)ws;
     if (c)
     {
+        ws->on_close = NULL;
+        ws->userdata = NULL;
         c->approval_done = 1;
+        c->approval_result = 0;
+        if (c->agent) agent_cancel(c->agent);
         free(c->pending_request_id);
+        free(c->active_session_id);
+        QueuedMsg *q = c->msg_queue;
+        while (q)
+        {
+            QueuedMsg *next = q->next;
+            free(q->data);
+            free(q);
+            q = next;
+        }
         free(c);
     }
 }
@@ -835,6 +1429,43 @@ static int ws_approval_cb(const char *tool_name, const char *arguments, void *us
     return approved;
 }
 
+static char *ws_ask_user_cb(const char *question, void *userdata)
+{
+    WSChatCtx *c = (WSChatCtx *)userdata;
+    if (!c || !c->ws) return NULL;
+
+    c->ask_user_done = 0;
+    free(c->ask_user_response);
+    c->ask_user_response = NULL;
+
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "type", "ask_user");
+    cJSON_AddStringToObject(req, "question", question ? question : "");
+    char *req_str = cJSON_PrintUnformatted(req);
+    if (req_str) ws_send_json(c->ws, req_str);
+    free(req_str);
+    cJSON_Delete(req);
+
+    while (!c->ask_user_done && c->ws && c->loop)
+        uv_run(c->loop, UV_RUN_NOWAIT);
+
+    char *answer = c->ask_user_response ? str_dup(c->ask_user_response) : NULL;
+    return answer;
+}
+
+static void ws_chat_emit_session_start(WSChatCtx *c)
+{
+    if (!c->agent || !c->agent->session_id) return;
+    cJSON *ev = cJSON_CreateObject();
+    cJSON_AddStringToObject(ev, "type", "session_start");
+    cJSON_AddStringToObject(ev, "session_id", c->agent->session_id);
+    char *str = cJSON_PrintUnformatted(ev);
+    if (str) ws_send_json(c->ws, str);
+    free(str);
+    cJSON_Delete(ev);
+    c->session_start_emitted = 1;
+}
+
 void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
 {
     WSChatCtx *c = calloc(1, sizeof(WSChatCtx));
@@ -850,7 +1481,11 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     ws->userdata = c;
 
     if (c->agent)
+    {
         agent_set_approval_callback(c->agent, ws_approval_cb, c);
+        agent_set_title_callback(c->agent, ws_title_update_cb, c);
+    }
+    registry_set_ask_user_callback(ws_ask_user_cb, c);
 
     if (query && query[0] && c->sm && c->agent)
     {
@@ -865,6 +1500,9 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
                 char session_id[256];
                 memcpy(session_id, sid_start, sid_len);
                 session_id[sid_len] = '\0';
+
+                free(c->active_session_id);
+                c->active_session_id = str_dup(session_id);
 
                 Session *s = session_manager_load_session(c->sm, session_id);
                 if (s)
@@ -899,6 +1537,11 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
         }
     }
 
+    if (!c->active_session_id && c->agent && c->agent->session_id)
+        c->active_session_id = str_dup(c->agent->session_id);
+
+    ws_chat_emit_session_start(c);
+
     cJSON *ready = cJSON_CreateObject();
     cJSON_AddStringToObject(ready, "type", "ready");
     if (c->agent && c->agent->session_id)
@@ -907,4 +1550,6 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     if (ready_str) ws_send_json(ws, ready_str);
     free(ready_str);
     cJSON_Delete(ready);
+
+    ws_chat_flush_queue(c);
 }

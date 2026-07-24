@@ -280,6 +280,48 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
     return sctx.resp;
 }
 
+static LLMResponse *ollama_extract_structured(LLMProvider *self, Message *messages, int count,
+                                               const char *model, double temperature, int timeout,
+                                               const char *json_schema)
+{
+    OllamaCtx *ctx = self->ctx;
+
+    char *msgs_json = llm_messages_format(messages, count, NULL, NULL);
+    if (!msgs_json) return NULL;
+
+    char *body = NULL;
+    if (json_schema && json_schema[0])
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
+                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"keep_alive\":%d,"
+                     "\"format\":%s}",
+                     model, msgs_json, temperature, ctx->num_ctx,
+                     ctx->keep_alive_secs, json_schema) < 0)
+        { free(msgs_json); return NULL; }
+    }
+    else
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
+                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"keep_alive\":%d,"
+                     "\"format\":\"json\"}",
+                     model, msgs_json, temperature, ctx->num_ctx,
+                     ctx->keep_alive_secs) < 0)
+        { free(msgs_json); return NULL; }
+    }
+    free(msgs_json);
+
+    char *raw = ollama_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL);
+    free(body);
+
+    if (!raw) return NULL;
+
+    LLMResponse *resp = ollama_parse_response(raw);
+    free(raw);
+    return resp;
+}
+
 static void ollama_destroy(LLMProvider *self)
 {
     if (!self) return;
@@ -303,6 +345,7 @@ LLMProvider *ollama_provider_create(const char *base_url, int num_ctx, int keep_
 
     p->chat = ollama_chat;
     p->chat_streaming = ollama_chat_streaming;
+    p->extract_structured = ollama_extract_structured;
     p->destroy = ollama_destroy;
     p->ctx = ctx;
     return p;

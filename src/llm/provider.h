@@ -12,6 +12,9 @@ struct LLMProvider {
                                    const char *model, double temperature, int timeout,
                                    void (*on_chunk)(const char *chunk, void *userdata),
                                    void *userdata);
+    LLMResponse *(*extract_structured)(LLMProvider *self, Message *messages, int count,
+                                        const char *model, double temperature, int timeout,
+                                        const char *json_schema);
     void (*destroy)(LLMProvider *self);
     void *ctx;
 };

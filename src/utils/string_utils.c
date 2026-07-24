@@ -102,3 +102,79 @@ void str_array_free(StrArray *arr)
     arr->items = NULL;
     arr->count = 0;
 }
+
+char *sanitize_json(const char *str)
+{
+    if (!str) return NULL;
+
+    const char *p = str;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+
+    if (strncmp(p, "```", 3) == 0)
+    {
+        p += 3;
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+
+    size_t len = strlen(p);
+    char *result = malloc(len + 1);
+    if (!result) return NULL;
+
+    size_t w = 0;
+    int in_string = 0;
+
+    for (size_t i = 0; i < len; i++)
+    {
+        char c = p[i];
+
+        if (c == '"' && (i == 0 || p[i - 1] != '\\')) in_string = !in_string;
+
+        if (!in_string)
+        {
+            if (c == '\n' || c == '\r' || c == '\t') continue;
+        }
+
+        if (!in_string && c == ',')
+        {
+            size_t j = i + 1;
+            while (j < len && (p[j] == ' ' || p[j] == '\t' || p[j] == '\n' || p[j] == '\r'))
+                j++;
+            if (j < len && (p[j] == ']' || p[j] == '}'))
+            {
+                result[w++] = c;
+                while (w > 0 && result[w - 1] == ',') w--;
+                memcpy(result + w, p + j, len - j);
+                result[w + (len - j)] = '\0';
+                if (w > 0 && w + (len - j) < len)
+                {
+                    size_t remaining = len - j;
+                    memcpy(result + w, p + j, remaining);
+                    w += remaining;
+                    result[w] = '\0';
+                }
+                break;
+            }
+        }
+
+        result[w++] = c;
+    }
+
+    result[w] = '\0';
+
+    size_t end = w;
+    while (end > 0 && (result[end - 1] == ' ' || result[end - 1] == '\t' ||
+           result[end - 1] == '\n' || result[end - 1] == '\r'))
+        end--;
+    result[end] = '\0';
+
+    char *trimmed = str_trim(result);
+    if (trimmed != result)
+    {
+        char *final = str_dup(trimmed);
+        free(result);
+        return final;
+    }
+
+    return result;
+}

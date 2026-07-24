@@ -21,6 +21,36 @@ static void ws_write_done(uv_write_t *req, int status)
     free(req);
 }
 
+static void ws_ping_write_done(uv_write_t *req, int status)
+{
+    (void)status;
+    free(req);
+}
+
+static void ws_ping_timer_cb(uv_timer_t *timer)
+{
+    WSClient *ws = (WSClient *)timer->data;
+    if (!ws || !ws->handle) return;
+
+    unsigned char ping[2] = {0x89, 0x00};
+    uv_buf_t ping_buf = {.base = (char *)ping, .len = 2};
+    uv_write_t *req = malloc(sizeof(uv_write_t));
+    if (req) uv_write(req, (uv_stream_t *)ws->handle, &ping_buf, 1, ws_ping_write_done);
+}
+
+void ws_start_ping_timer(WSClient *ws)
+{
+    ws->last_pong = time(NULL);
+    uv_timer_init(uv_handle_get_loop((uv_handle_t *)ws->handle), &ws->ping_timer);
+    ws->ping_timer.data = ws;
+    uv_timer_start(&ws->ping_timer, ws_ping_timer_cb, 15000, 15000);
+}
+
+void ws_stop_ping_timer(WSClient *ws)
+{
+    uv_timer_stop(&ws->ping_timer);
+}
+
 static void ws_alloc_cb(uv_handle_t *handle, size_t size, uv_buf_t *buf)
 {
     (void)handle;
@@ -35,7 +65,13 @@ static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 
     if (nread < 0)
     {
-        if (ws->on_close) ws->on_close(ws, ws->userdata);
+        ws_stop_ping_timer(ws);
+        if (ws->on_close)
+        {
+            void (*on_close)(WSClient *, void *) = ws->on_close;
+            ws->on_close = NULL;
+            on_close(ws, ws->userdata);
+        }
         free(buf->base);
         stream->data = ws->client;
         client_close(ws->client);
@@ -85,7 +121,13 @@ static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 
         if (opcode == 0x8)
         {
-            if (ws->on_close) ws->on_close(ws, ws->userdata);
+            ws_stop_ping_timer(ws);
+            if (ws->on_close)
+            {
+                void (*on_close)(WSClient *, void *) = ws->on_close;
+                ws->on_close = NULL;
+                on_close(ws, ws->userdata);
+            }
             free(buf->base);
             return;
         }
@@ -95,13 +137,14 @@ static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
             unsigned char pong[2] = {0x8A, 0x00};
             uv_buf_t pong_buf = {.base = (char *)pong, .len = 2};
             uv_write_t *req = malloc(sizeof(uv_write_t));
-            if (req) uv_write(req, stream, &pong_buf, 1, NULL);
+            if (req) uv_write(req, stream, &pong_buf, 1, ws_ping_write_done);
             free(buf->base);
             return;
         }
 
         if (opcode == 0xA)
         {
+            ws->last_pong = time(NULL);
             free(buf->base);
             return;
         }
@@ -195,6 +238,7 @@ int ws_do_handshake(HTTPRequest *req, Client *client, ServerContext *ctx)
     ((uv_stream_t *)req->client)->data = ws;
     routes_ws_chat_init(ws, ctx, req->query);
     ws_start_read(ws);
+    ws_start_ping_timer(ws);
 
     return 0;
 }

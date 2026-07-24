@@ -1,0 +1,150 @@
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <cjson/cJSON.h>
+
+#include "tool.h"
+#include "registry.h"
+#include "../session/memory.h"
+#include "../utils/string_utils.h"
+#include "../utils/logging.h"
+
+typedef struct {
+    SafetyConfig *safety;
+} MemoryToolCtx;
+
+static ToolResult *memory_execute(Tool *self, const char *args_json)
+{
+    (void)self;
+    cJSON *args = cJSON_Parse(args_json);
+    if (!args) return tool_result_error("invalid arguments JSON", "validation_error");
+
+    cJSON *action = cJSON_GetObjectItem(args, "action");
+    if (!action || !cJSON_IsString(action))
+    {
+        cJSON_Delete(args);
+        return tool_result_error("missing 'action' (get/set/delete/list)", "validation_error");
+    }
+
+    SessionManager *sm = registry_get_session_manager();
+    if (!sm)
+    {
+        cJSON_Delete(args);
+        return tool_result_error("session manager not available", "execution_error");
+    }
+
+    const char *act = cJSON_GetStringValue(action);
+
+    if (strcmp(act, "get") == 0)
+    {
+        cJSON *key = cJSON_GetObjectItem(args, "key");
+        if (!key || !cJSON_IsString(key))
+        {
+            cJSON_Delete(args);
+            return tool_result_error("missing 'key' for get", "validation_error");
+        }
+        char *val = memory_get(sm->db, cJSON_GetStringValue(key));
+        cJSON_Delete(args);
+        ToolResult *tr = tool_result_create(val ? val : "(not found)");
+        free(val);
+        return tr;
+    }
+
+    if (strcmp(act, "set") == 0)
+    {
+        cJSON *key = cJSON_GetObjectItem(args, "key");
+        cJSON *value = cJSON_GetObjectItem(args, "value");
+        if (!key || !cJSON_IsString(key) || !value || !cJSON_IsString(value))
+        {
+            cJSON_Delete(args);
+            return tool_result_error("missing 'key' or 'value' for set", "validation_error");
+        }
+        int rc = memory_set(sm->db, cJSON_GetStringValue(key), cJSON_GetStringValue(value));
+        cJSON_Delete(args);
+        if (rc != 0)
+            return tool_result_error("failed to set memory", "execution_error");
+        return tool_result_create("ok");
+    }
+
+    if (strcmp(act, "delete") == 0)
+    {
+        cJSON *key = cJSON_GetObjectItem(args, "key");
+        if (!key || !cJSON_IsString(key))
+        {
+            cJSON_Delete(args);
+            return tool_result_error("missing 'key' for delete", "validation_error");
+        }
+        int rc = memory_delete(sm->db, cJSON_GetStringValue(key));
+        cJSON_Delete(args);
+        if (rc != 0)
+            return tool_result_error("failed to delete memory", "execution_error");
+        return tool_result_create("deleted");
+    }
+
+    if (strcmp(act, "list") == 0)
+    {
+        cJSON_Delete(args);
+        int count = 0;
+        MemoryFact *facts = memory_list_all(sm->db, &count);
+        if (!facts) return tool_result_create("(no memory stored)");
+
+        char *result = NULL;
+        size_t len = 0;
+        for (int i = 0; i < count; i++)
+        {
+            char *line = NULL;
+            if (asprintf(&line, "%s: %s\n", facts[i].key, facts[i].value) < 0) continue;
+            size_t llen = strlen(line);
+            char *newr = realloc(result, len + llen + 1);
+            if (!newr) { free(line); continue; }
+            result = newr;
+            memcpy(result + len, line, llen + 1);
+            len += llen;
+            free(line);
+        }
+        memory_facts_free(facts, count);
+        if (!result) return tool_result_create("(no memory stored)");
+        ToolResult *tr = tool_result_create(result);
+        free(result);
+        return tr;
+    }
+
+    cJSON_Delete(args);
+    return tool_result_error("unknown action (use get/set/delete/list)", "validation_error");
+}
+
+static void memory_destroy(Tool *self)
+{
+    if (!self) return;
+    free(self->name);
+    free(self->description);
+    free(self->parameters_schema);
+    free(self->ctx);
+    free(self);
+}
+
+Tool *tool_memory_create(SafetyConfig *safety)
+{
+    Tool *t = calloc(1, sizeof(Tool));
+    if (!t) return NULL;
+
+    MemoryToolCtx *ctx = calloc(1, sizeof(MemoryToolCtx));
+    if (!ctx) { free(t); return NULL; }
+    ctx->safety = safety;
+
+    t->name = str_dup("memory");
+    t->description = str_dup("Store and retrieve user memory facts (get/set/delete/list)");
+    t->parameters_schema = str_dup(
+        "{\"type\":\"object\",\"properties\":{"
+        "\"action\":{\"type\":\"string\",\"enum\":[\"get\",\"set\",\"delete\",\"list\"],\"description\":\"Operation to perform\"},"
+        "\"key\":{\"type\":\"string\",\"description\":\"Memory key (required for get/set/delete)\"},"
+        "\"value\":{\"type\":\"string\",\"description\":\"Memory value (required for set)\"}"
+        "},\"required\":[\"action\"]}"
+    );
+    t->execute = memory_execute;
+    t->destroy = memory_destroy;
+    t->ctx = ctx;
+    return t;
+}

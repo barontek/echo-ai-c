@@ -1,0 +1,275 @@
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <cjson/cJSON.h>
+
+#include "tool.h"
+#include "registry.h"
+#include "../utils/string_utils.h"
+#include "../agent/message.h"
+#include "../llm/provider.h"
+#include "../utils/logging.h"
+
+typedef struct {
+    SafetyConfig *safety;
+} DelegateToolCtx;
+
+static int sub_tool_calls_remaining(ToolCall *calls, int count)
+{
+    for (int i = 0; i < count; i++)
+    {
+        if (calls[i].name && calls[i].name[0] != '\0')
+            return 1;
+    }
+    return 0;
+}
+
+static ToolResult *delegate_execute(Tool *self, const char *args_json)
+{
+    (void)self;
+
+    const char *provider_name = NULL;
+    const char *base_url = NULL;
+    const char *model = NULL;
+    int num_ctx = 4096;
+    int keep_alive_secs = 120;
+    double temperature = 0.7;
+    int timeout = 120;
+    int max_iterations = 10;
+
+    if (registry_get_delegate_config(&provider_name, &base_url, &model,
+                                      &num_ctx, &keep_alive_secs,
+                                      &temperature, &timeout, &max_iterations) != 0)
+    {
+        return tool_result_error("delegate not configured (set agent config first)", "execution_error");
+    }
+
+    cJSON *args = cJSON_Parse(args_json);
+    if (!args) return tool_result_error("invalid arguments JSON", "validation_error");
+
+    cJSON *task = cJSON_GetObjectItem(args, "task");
+    if (!task || !cJSON_IsString(task))
+    {
+        cJSON_Delete(args);
+        return tool_result_error("missing 'task' argument", "validation_error");
+    }
+
+    int iterations = max_iterations;
+    cJSON *iter = cJSON_GetObjectItem(args, "iterations");
+    if (iter && cJSON_IsNumber(iter))
+        iterations = iter->valuedouble;
+    if (iterations < 1) iterations = 1;
+    if (iterations > 50) iterations = 50;
+    const char *task_str = cJSON_GetStringValue(task);
+    cJSON_Delete(args);
+
+    LLMProvider *provider = get_provider(provider_name, model,
+                                          base_url, num_ctx, keep_alive_secs);
+    if (!provider)
+        return tool_result_error("failed to create sub-agent provider", "execution_error");
+
+    Message *msgs = NULL;
+    int msgs_count = 0;
+    int msgs_cap = 0;
+
+    Message sys_msg = {0};
+    sys_msg.role = str_dup("system");
+    sys_msg.content = str_dup("You are a helpful sub-agent. Complete the task given by the user. "
+                               "Use tools when needed. Keep responses concise.");
+
+    Message user_msg = {0};
+    user_msg.role = str_dup("user");
+    user_msg.content = str_dup(task_str);
+
+    msgs = malloc(sizeof(Message) * 4);
+    if (!msgs) { provider->destroy(provider); return tool_result_error("oom", "execution_error"); }
+    msgs[0] = sys_msg;
+    msgs[1] = user_msg;
+    msgs_count = 2;
+    msgs_cap = 4;
+
+    char *final_content = NULL;
+
+    for (int i = 0; i < iterations; i++)
+    {
+        LLMResponse *resp = provider->chat(provider, msgs, msgs_count,
+                                            model, temperature, timeout);
+        if (!resp)
+        {
+            log_error("delegate: sub-agent LLM returned no response", NULL);
+            break;
+        }
+
+        if (resp->content)
+        {
+            free(final_content);
+            final_content = str_dup(resp->content);
+
+            Message *assistant_msg = calloc(1, sizeof(Message));
+            if (assistant_msg)
+            {
+                assistant_msg->role = str_dup("assistant");
+                assistant_msg->content = str_dup(resp->content ? resp->content : "");
+                if (resp->tool_calls_count > 0)
+                {
+                    assistant_msg->tool_calls = malloc(sizeof(ToolCall) * resp->tool_calls_count);
+                    if (assistant_msg->tool_calls)
+                    {
+                        assistant_msg->tool_calls_count = resp->tool_calls_count;
+                        for (int j = 0; j < resp->tool_calls_count; j++)
+                        {
+                            assistant_msg->tool_calls[j] = resp->tool_calls[j];
+                            resp->tool_calls[j].name = NULL;
+                            resp->tool_calls[j].arguments = NULL;
+                            resp->tool_calls[j].id = NULL;
+                        }
+                    }
+                }
+
+                if (msgs_count >= msgs_cap)
+                {
+                    msgs_cap *= 2;
+                    Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
+                    if (!new_msgs) { free(assistant_msg->role); free(assistant_msg->content); free(assistant_msg->tool_calls); free(assistant_msg); break; }
+                    msgs = new_msgs;
+                }
+                msgs[msgs_count++] = *assistant_msg;
+                free(assistant_msg);
+            }
+        }
+
+        int has_tool_calls = sub_tool_calls_remaining(resp->tool_calls, resp->tool_calls_count);
+
+        if (!has_tool_calls)
+        {
+            llm_response_free(resp);
+            break;
+        }
+
+        for (int j = 0; j < resp->tool_calls_count; j++)
+        {
+            ToolCall *tc = &resp->tool_calls[j];
+            const char *tname = tc->name ? tc->name : "unknown";
+            const char *targs = tc->arguments ? tc->arguments : "{}";
+
+            Tool *tool = registry_get(tname);
+            if (!tool)
+            {
+                Message *tool_msg = calloc(1, sizeof(Message));
+                if (tool_msg)
+                {
+                    tool_msg->role = str_dup("tool");
+                    tool_msg->content = str_dup("tool not found");
+                    tool_msg->tool_call_id = str_dup(tc->id ? tc->id : "");
+                    tool_msg->tool_name = str_dup(tname);
+                    tool_msg->error_category = str_dup("tool_not_found");
+                    if (msgs_count >= msgs_cap)
+                    {
+                        msgs_cap *= 2;
+                        Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
+                        if (!new_msgs) { free(tool_msg->role); free(tool_msg->content); free(tool_msg->tool_call_id); free(tool_msg->tool_name); free(tool_msg->error_category); free(tool_msg); break; }
+                        msgs = new_msgs;
+                    }
+                    msgs[msgs_count++] = *tool_msg;
+                    free(tool_msg);
+                }
+                continue;
+            }
+
+            ToolResult *result = tool->execute(tool, targs);
+            if (!result)
+                result = tool_result_error("tool returned no result", "execution_error");
+
+            Message *tool_msg = calloc(1, sizeof(Message));
+            if (tool_msg)
+            {
+                tool_msg->role = str_dup("tool");
+                tool_msg->content = str_dup(result->content ? result->content : "");
+                tool_msg->tool_call_id = str_dup(tc->id ? tc->id : "");
+                tool_msg->tool_name = str_dup(tname);
+                if (result->error)
+                {
+                    tool_msg->error_category = str_dup(result->error_category ? result->error_category : "execution_error");
+                    char *err = NULL;
+                    if (asprintf(&err, "Error: %s", result->error) < 0)
+                        err = str_dup("Error");
+                    free(tool_msg->content);
+                    tool_msg->content = err;
+                }
+                if (msgs_count >= msgs_cap)
+                {
+                    msgs_cap *= 2;
+                    Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
+                    if (!new_msgs) { free(tool_msg->role); free(tool_msg->content); free(tool_msg->tool_call_id); free(tool_msg->tool_name); free(tool_msg->error_category); free(tool_msg); tool_result_free(result); break; }
+                    msgs = new_msgs;
+                }
+                msgs[msgs_count++] = *tool_msg;
+                free(tool_msg);
+            }
+            tool_result_free(result);
+        }
+
+        llm_response_free(resp);
+    }
+
+    for (int i = 0; i < msgs_count; i++)
+    {
+        free(msgs[i].role);
+        free(msgs[i].content);
+        free(msgs[i].id);
+        free(msgs[i].tool_call_id);
+        free(msgs[i].tool_name);
+        free(msgs[i].error_category);
+        free(msgs[i].thinking);
+        if (msgs[i].tool_calls)
+        {
+            for (int j = 0; j < msgs[i].tool_calls_count; j++)
+                tool_call_free(&msgs[i].tool_calls[j]);
+            free(msgs[i].tool_calls);
+        }
+    }
+    free(msgs);
+    provider->destroy(provider);
+
+    if (!final_content)
+        return tool_result_create("(sub-agent produced no output)");
+
+    ToolResult *tr = tool_result_create(final_content);
+    free(final_content);
+    return tr;
+}
+
+static void delegate_destroy(Tool *self)
+{
+    if (!self) return;
+    free(self->name);
+    free(self->description);
+    free(self->parameters_schema);
+    free(self->ctx);
+    free(self);
+}
+
+Tool *tool_delegate_create(SafetyConfig *safety)
+{
+    Tool *t = calloc(1, sizeof(Tool));
+    if (!t) return NULL;
+
+    DelegateToolCtx *ctx = calloc(1, sizeof(DelegateToolCtx));
+    if (!ctx) { free(t); return NULL; }
+    ctx->safety = safety;
+
+    t->name = str_dup("delegate");
+    t->description = str_dup("Delegate a task to a sub-agent that can use tools to complete it");
+    t->parameters_schema = str_dup(
+        "{\"type\":\"object\",\"properties\":{"
+        "\"task\":{\"type\":\"string\",\"description\":\"The task description for the sub-agent\"},"
+        "\"iterations\":{\"type\":\"integer\",\"description\":\"Max iterations for sub-agent (default 10)\"}"
+        "},\"required\":[\"task\"]}"
+    );
+    t->execute = delegate_execute;
+    t->destroy = delegate_destroy;
+    t->ctx = ctx;
+    return t;
+}

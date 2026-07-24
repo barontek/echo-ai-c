@@ -15,6 +15,24 @@ static Tool *tools[MAX_TOOLS];
 static int tool_count = 0;
 
 static SafetyConfig *safety_global = NULL;
+static SearchProvider *search_provider_global = NULL;
+static SessionManager *session_manager_global = NULL;
+
+typedef struct {
+    char *provider_name;
+    char *base_url;
+    char *model;
+    int num_ctx;
+    int keep_alive_secs;
+    double temperature;
+    int timeout;
+    int max_iterations;
+} DelegateConfig;
+
+static DelegateConfig delegate_config = {0};
+
+static char *(*ask_user_cb)(const char *, void *) = NULL;
+static void *ask_user_cb_data = NULL;
 
 Tool *tool_bash_create(SafetyConfig *safety);
 Tool *tool_read_file_create(SafetyConfig *safety);
@@ -24,6 +42,20 @@ Tool *tool_glob_create(SafetyConfig *safety);
 Tool *tool_grep_create(SafetyConfig *safety);
 Tool *tool_web_fetch_create(SafetyConfig *safety);
 Tool *tool_web_search_create(SafetyConfig *safety);
+Tool *tool_replace_in_file_create(SafetyConfig *safety);
+Tool *tool_python_execute_create(SafetyConfig *safety);
+Tool *tool_rest_api_create(SafetyConfig *safety);
+Tool *tool_notes_create(SafetyConfig *safety);
+Tool *tool_git_create(SafetyConfig *safety);
+Tool *tool_ingest_document_create(SafetyConfig *safety);
+Tool *tool_semantic_search_create(SafetyConfig *safety);
+Tool *tool_deep_search_create(SafetyConfig *safety);
+Tool *tool_memory_create(SafetyConfig *safety);
+Tool *tool_delegate_create(SafetyConfig *safety);
+Tool *tool_sqlite_query_create(SafetyConfig *safety);
+Tool *tool_sqlite_schema_create(SafetyConfig *safety);
+Tool *tool_ask_user_create(SafetyConfig *safety);
+Tool *tool_humanizer_create(SafetyConfig *safety);
 
 void registry_init(SafetyConfig *safety)
 {
@@ -38,6 +70,20 @@ void registry_init(SafetyConfig *safety)
     registry_register(tool_grep_create(safety));
     registry_register(tool_web_fetch_create(safety));
     registry_register(tool_web_search_create(safety));
+    registry_register(tool_replace_in_file_create(safety));
+    registry_register(tool_python_execute_create(safety));
+    registry_register(tool_rest_api_create(safety));
+    registry_register(tool_notes_create(safety));
+    registry_register(tool_git_create(safety));
+    registry_register(tool_ingest_document_create(safety));
+    registry_register(tool_semantic_search_create(safety));
+    registry_register(tool_deep_search_create(safety));
+    registry_register(tool_memory_create(safety));
+    registry_register(tool_delegate_create(safety));
+    registry_register(tool_sqlite_query_create(safety));
+    registry_register(tool_sqlite_schema_create(safety));
+    registry_register(tool_ask_user_create(safety));
+    registry_register(tool_humanizer_create(safety));
 }
 
 void registry_register(Tool *tool)
@@ -101,6 +147,71 @@ void registry_set_change_tracker(ChangeTracker *ct)
     }
 }
 
+void registry_set_search_provider(SearchProvider *sp)
+{
+    search_provider_global = sp;
+}
+
+SearchProvider *registry_get_search_provider(void)
+{
+    return search_provider_global;
+}
+
+void registry_set_session_manager(SessionManager *sm)
+{
+    session_manager_global = sm;
+}
+
+SessionManager *registry_get_session_manager(void)
+{
+    return session_manager_global;
+}
+
+void registry_set_delegate_config(const char *provider_name, const char *base_url,
+                                   const char *model, int num_ctx, int keep_alive_secs,
+                                   double temperature, int timeout, int max_iterations)
+{
+    free(delegate_config.provider_name);
+    free(delegate_config.base_url);
+    free(delegate_config.model);
+    delegate_config.provider_name = provider_name ? str_dup(provider_name) : NULL;
+    delegate_config.base_url = base_url ? str_dup(base_url) : NULL;
+    delegate_config.model = model ? str_dup(model) : NULL;
+    delegate_config.num_ctx = num_ctx;
+    delegate_config.keep_alive_secs = keep_alive_secs;
+    delegate_config.temperature = temperature;
+    delegate_config.timeout = timeout;
+    delegate_config.max_iterations = max_iterations;
+}
+
+int registry_get_delegate_config(const char **provider_name, const char **base_url,
+                                  const char **model, int *num_ctx, int *keep_alive_secs,
+                                  double *temperature, int *timeout, int *max_iterations)
+{
+    if (!delegate_config.provider_name) return -1;
+    if (provider_name) *provider_name = delegate_config.provider_name;
+    if (base_url) *base_url = delegate_config.base_url;
+    if (model) *model = delegate_config.model;
+    if (num_ctx) *num_ctx = delegate_config.num_ctx;
+    if (keep_alive_secs) *keep_alive_secs = delegate_config.keep_alive_secs;
+    if (temperature) *temperature = delegate_config.temperature;
+    if (timeout) *timeout = delegate_config.timeout;
+    if (max_iterations) *max_iterations = delegate_config.max_iterations;
+    return 0;
+}
+
+void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *userdata)
+{
+    ask_user_cb = cb;
+    ask_user_cb_data = userdata;
+}
+
+char *registry_invoke_ask_user(const char *question)
+{
+    if (ask_user_cb) return ask_user_cb(question, ask_user_cb_data);
+    return NULL;
+}
+
 void registry_destroy(void)
 {
     for (int i = 0; i < tool_count; i++)
@@ -108,4 +219,9 @@ void registry_destroy(void)
         if (tools[i]->destroy) tools[i]->destroy(tools[i]);
     }
     tool_count = 0;
+    if (search_provider_global)
+    {
+        search_provider_global->destroy(search_provider_global);
+        search_provider_global = NULL;
+    }
 }

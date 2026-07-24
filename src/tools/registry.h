@@ -2,8 +2,10 @@
 #define ECHO_REGISTRY_H
 
 #include "tool.h"
+#include "search_provider.h"
 #include "../safety/safety.h"
 #include "../change_tracker/change_tracker.h"
+#include "../session/session_manager.h"
 
 void registry_init(SafetyConfig *safety);
 void registry_register(Tool *tool);
@@ -11,6 +13,18 @@ Tool *registry_get(const char *name);
 char *registry_schemas_json(void);
 int registry_count(void);
 void registry_set_change_tracker(ChangeTracker *ct);
+void registry_set_search_provider(SearchProvider *sp);
+SearchProvider *registry_get_search_provider(void);
+void registry_set_session_manager(SessionManager *sm);
+SessionManager *registry_get_session_manager(void);
+void registry_set_delegate_config(const char *provider_name, const char *base_url,
+                                   const char *model, int num_ctx, int keep_alive_secs,
+                                   double temperature, int timeout, int max_iterations);
+int registry_get_delegate_config(const char **provider_name, const char **base_url,
+                                  const char **model, int *num_ctx, int *keep_alive_secs,
+                                  double *temperature, int *timeout, int *max_iterations);
+void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *userdata);
+char *registry_invoke_ask_user(const char *question);
 void registry_destroy(void);
 
 #endif

@@ -14,4 +14,6 @@ typedef struct {
 StrArray str_split(const char *str, char delimiter);
 void str_array_free(StrArray *arr);
 
+char *sanitize_json(const char *str);
+
 #endif
