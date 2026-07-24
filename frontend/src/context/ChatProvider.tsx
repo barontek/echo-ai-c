@@ -167,7 +167,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 const last = prev[prev.length - 1];
                 // If last message is from assistant (created by 'thinking'), update it
                 if (last?.role === 'assistant') {
-                  return [...prev.slice(0, -1), { ...last, content: data.content || '' }];
+                  return [...prev.slice(0, -1), { ...last, content: last.content + (data.content || '') }];
                 }
                 return [
                   ...prev,

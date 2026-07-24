@@ -651,6 +651,8 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
             return NULL;
         }
 
+        inject_system_with_summary(agent);
+
         LLMResponse *resp = agent->provider->chat_streaming(
             agent->provider, agent->messages, agent->messages_count,
             agent->model, agent->temperature, agent->timeout,

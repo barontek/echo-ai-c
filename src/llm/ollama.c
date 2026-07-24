@@ -19,6 +19,8 @@ typedef struct {
     char *data;
     size_t len;
     size_t cap;
+    void (*on_chunk)(const char *, void *);
+    void *userdata;
 } WriteBuf;
 
 static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
@@ -36,6 +38,42 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
     memcpy(buf->data + buf->len, ptr, total);
     buf->len += total;
     buf->data[buf->len] = '\0';
+
+    if (buf->on_chunk)
+    {
+        char *line_start = buf->data;
+        char *p = buf->data;
+        while (p < buf->data + buf->len)
+        {
+            if (*p == '\n')
+            {
+                *p = '\0';
+                if (line_start[0] != '\0')
+                {
+                    cJSON *json = cJSON_Parse(line_start);
+                    if (json)
+                    {
+                        cJSON *msg = cJSON_GetObjectItem(json, "message");
+                        cJSON *content = msg ? cJSON_GetObjectItem(msg, "content") : NULL;
+                        if (content && cJSON_IsString(content))
+                            buf->on_chunk(cJSON_GetStringValue(content), buf->userdata);
+                        cJSON_Delete(json);
+                    }
+                }
+                line_start = p + 1;
+            }
+            p++;
+        }
+        if (line_start > buf->data)
+        {
+            size_t remaining = buf->len - (size_t)(line_start - buf->data);
+            if (remaining > 0)
+                memmove(buf->data, line_start, remaining);
+            buf->len = remaining;
+            buf->data[buf->len] = '\0';
+        }
+    }
+
     return total;
 }
 
@@ -67,6 +105,11 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)timeout);
 
     WriteBuf buf = {0};
+    if (stream && on_chunk)
+    {
+        buf.on_chunk = on_chunk;
+        buf.userdata = userdata;
+    }
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
@@ -85,28 +128,17 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
 
     if (stream && on_chunk)
     {
-        char *line_start = buf.data;
-        char *p = buf.data;
-        while (*p)
+        if (buf.len > 0 && buf.data[0] != '\0')
         {
-            if (*p == '\n')
+            cJSON *json = cJSON_Parse(buf.data);
+            if (json)
             {
-                *p = '\0';
-                if (line_start[0] != '\0')
-                {
-                    cJSON *json = cJSON_Parse(line_start);
-                    if (json)
-                    {
-                        cJSON *msg = cJSON_GetObjectItem(json, "message");
-                        cJSON *content = msg ? cJSON_GetObjectItem(msg, "content") : NULL;
-                        if (content && cJSON_IsString(content))
-                            on_chunk(cJSON_GetStringValue(content), userdata);
-                        cJSON_Delete(json);
-                    }
-                }
-                line_start = p + 1;
+                cJSON *msg = cJSON_GetObjectItem(json, "message");
+                cJSON *content = msg ? cJSON_GetObjectItem(msg, "content") : NULL;
+                if (content && cJSON_IsString(content))
+                    on_chunk(cJSON_GetStringValue(content), userdata);
+                cJSON_Delete(json);
             }
-            p++;
         }
         free(buf.data);
         return str_dup("");
@@ -215,6 +247,8 @@ static LLMResponse *ollama_chat(LLMProvider *self, Message *messages, int count,
 
 typedef struct {
     LLMResponse *resp;
+    void (*on_chunk)(const char *, void *);
+    void *userdata;
 } StreamCtx;
 
 static void on_ollama_chunk(const char *chunk, void *userdata)
@@ -235,6 +269,8 @@ static void on_ollama_chunk(const char *chunk, void *userdata)
             memcpy(new + old, chunk, clen + 1);
         }
     }
+    if (sctx->on_chunk)
+        sctx->on_chunk(chunk, sctx->userdata);
 }
 
 static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, int count,
@@ -242,9 +278,6 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
                                           void (*on_chunk)(const char *, void *),
                                           void *userdata)
 {
-    (void)on_chunk;
-    (void)userdata;
-
     OllamaCtx *ctx = self->ctx;
 
     char *msgs_json = llm_messages_format(messages, count, NULL, NULL);
@@ -263,6 +296,8 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
     free(msgs_json);
 
     StreamCtx sctx = {0};
+    sctx.on_chunk = on_chunk;
+    sctx.userdata = userdata;
     sctx.resp = llm_response_create();
     if (!sctx.resp) { free(body); return NULL; }
 
