@@ -326,6 +326,36 @@ static int tool_calls_remaining(ToolCall *calls, int count)
     return 0;
 }
 
+/* strip <think>...</think> blocks (the non-overlapping first match only), then
+ * return a fresh malloc'd copy.  Returns the original unchanged if no tag found. */
+static char *strip_think_tags(const char *str)
+{
+    if (!str) return NULL;
+
+    const char *open_tag  = "<think>";
+    const char *close_tag = "</think>";
+    size_t open_len  = strlen(open_tag);
+    size_t close_len = strlen(close_tag);
+
+    const char *open = strstr(str, open_tag);
+    if (!open) return str_dup(str);
+
+    const char *close = strstr(open + open_len, close_tag);
+    if (!close) return str_dup(str);
+
+    size_t before     = (size_t)(open - str);
+    size_t suffix_off = (size_t)(close + close_len - str);
+    size_t after      = strlen(str) - suffix_off;
+    size_t result_len = before + after;
+
+    char *result = malloc(result_len + 1);
+    if (!result) return NULL;
+    if (before > 0) memcpy(result, str, before);
+    if (after  > 0) memcpy(result + before, str + suffix_off, after);
+    result[result_len] = '\0';
+    return result;
+}
+
 static void agent_generate_title(Agent *agent)
 {
     if (!agent || !agent->provider) return;
@@ -342,94 +372,125 @@ static void agent_generate_title(Agent *agent)
     session_manager_save_session(agent->sm, s);
     session_free(s);
 
-    Message title_msgs[2];
-    memset(title_msgs, 0, sizeof(title_msgs));
-    title_msgs[0].role = str_dup("system");
-    title_msgs[0].content = str_dup("You generate very short titles for conversations.");
-
-    /* build a "role: content\n..." excerpt, capped so long conversations
-     * don't blow up the prompt for a 5-word title */
-    const size_t cap = 4000;
-    char *text = malloc(cap + 1);
-    if (!text)
+    /* find first user message — matching Python version's approach:
+     * only the first user request, not the full conversation.
+     * full-conversation excerpts confuse small models into producing
+     * hallucinated placeholder titles like "(Waiting for ...)" */
+    const char *first_user_msg = NULL;
+    for (int i = 0; i < agent->messages_count; i++)
     {
-        free(title_msgs[0].role);
-        free(title_msgs[0].content);
-        return;
+        if (agent->messages[i].role && strcmp(agent->messages[i].role, "user") == 0
+            && agent->messages[i].content && agent->messages[i].content[0])
+        {
+            first_user_msg = agent->messages[i].content;
+            break;
+        }
     }
-    size_t used = 0;
-    text[0] = '\0';
-    for (int i = 0; i < agent->messages_count && used < cap; i++)
-    {
-        const char *role = agent->messages[i].role ? agent->messages[i].role : "unknown";
-        const char *content = agent->messages[i].content ? agent->messages[i].content : "";
-        int n = snprintf(text + used, cap + 1 - used, "%s: %s\n", role, content);
-        if (n < 0) break;
-        if ((size_t)n >= cap + 1 - used) { used = cap; break; }
-        used += (size_t)n;
+    if (!first_user_msg) return;
+
+    /* fallback: first 30 chars of user message, with "..." if truncated */
+    char *fallback = NULL;
+    size_t fblen = strlen(first_user_msg);
+    if (fblen <= 30) {
+        fallback = str_dup(first_user_msg);
+    } else {
+        if (asprintf(&fallback, "%.30s...", first_user_msg) < 0)
+            fallback = NULL;
     }
+    if (!fallback) return;
 
-    /* refuse to generate a title from an empty excerpt — produces
-     * placeholder garbage like "Conversation Title Request" */
-    if (used == 0)
+    /* prompt matching Python version — single user message, no system prompt */
+    char *prompt = NULL;
+    if (asprintf(&prompt,
+                 "Summarize the following user request into a very short, "
+                 "descriptive title (max 5 words). "
+                 "Do not use quotes or a period.\n\n"
+                 "User request: %s",
+                 first_user_msg) < 0)
     {
-        free(text);
-        free(title_msgs[0].role);
-        free(title_msgs[0].content);
-        return;
-    }
-
-    log_info("title excerpt", "text", text, NULL);
-
-    /* instruction lives in the user message with the conversation clearly
-     * delimited; small models paraphrase a bare system instruction instead
-     * of following it (produced titles like "Conversation Title Request") */
-    title_msgs[1].role = str_dup("user");
-    if (asprintf(&title_msgs[1].content,
-                 "Generate a very short title (5 words or fewer) for the conversation below. "
-                 "Return ONLY the title, no quotes or punctuation.\n\nConversation:\n%s",
-                 text) < 0)
-        title_msgs[1].content = NULL;
-    free(text);
-    if (!title_msgs[1].role || !title_msgs[1].content)
-    {
-        free(title_msgs[0].role);
-        free(title_msgs[0].content);
-        free(title_msgs[1].role);
-        free(title_msgs[1].content);
+        free(fallback);
         return;
     }
 
-    /* near-zero temperature: titling must be deterministic, not creative */
+    log_info("title prompt", "text", prompt, NULL);
+
+    Message title_msg;
+    memset(&title_msg, 0, sizeof(title_msg));
+    title_msg.role    = str_dup("user");
+    title_msg.content = prompt;
+    if (!title_msg.role)
+    {
+        free(prompt);
+        free(fallback);
+        return;
+    }
+
     LLMResponse *resp = agent->provider->chat(
-        agent->provider, title_msgs, 2,
-        agent->model, 0.1, 15);
+        agent->provider, &title_msg, 1,
+        agent->model, 0.3, 30);
 
-    free(title_msgs[0].role);
-    free(title_msgs[0].content);
-    free(title_msgs[1].role);
-    free(title_msgs[1].content);
+    free(title_msg.role);
+    free(title_msg.content);
+
+    char *final_title = NULL;
 
     if (resp && resp->content)
     {
         log_info("title from model", "title", resp->content, NULL);
-        char *title_str = str_trim(resp->content);
-        if (title_str && title_str[0])
-        {
-            Session *s2 = session_manager_load_session(agent->sm, agent->session_id);
-            if (s2)
-            {
-                free(s2->title);
-                s2->title = str_dup(title_str);
-                session_manager_save_session(agent->sm, s2);
-                session_free(s2);
 
-                if (agent->on_title_update)
-                    agent->on_title_update(agent->session_id, title_str, agent->title_userdata);
+        char *raw = str_dup(resp->content);
+        llm_response_free(resp);
+
+        if (raw)
+        {
+            char *t = str_trim(raw);
+            if (t && t[0])
+            {
+                char *no_think = strip_think_tags(t);
+                if (no_think)
+                {
+                    char *c = str_trim(no_think);
+                    if (c && c[0])
+                    {
+                        /* strip leading / trailing double-quotes */
+                        size_t clen = strlen(c);
+                        if ((c[0] == '"' && c[clen - 1] == '"')
+                            || (c[0] == '\'' && c[clen - 1] == '\''))
+                        {
+                            c[clen - 1] = '\0';
+                            memmove(c, c + 1, clen);
+                        }
+                        if (c[0]) final_title = str_dup(c);
+                    }
+                    free(no_think);
+                }
             }
+            free(raw);
         }
+    }
+    else if (resp)
+    {
         llm_response_free(resp);
     }
+
+    /* fall back to truncated first user message if LLM produced nothing */
+    if (!final_title)
+        final_title = str_dup(fallback);
+
+    Session *s2 = session_manager_load_session(agent->sm, agent->session_id);
+    if (s2)
+    {
+        free(s2->title);
+        s2->title = str_dup(final_title);
+        session_manager_save_session(agent->sm, s2);
+        session_free(s2);
+
+        if (agent->on_title_update)
+            agent->on_title_update(agent->session_id, final_title, agent->title_userdata);
+    }
+
+    free(final_title);
+    free(fallback);
 }
 
 static void agent_perform_summarization(Agent *agent, int original_count)
