@@ -6,7 +6,7 @@
 
 #include "logging.h"
 
-static LogLevel current_level = LOG_INFO;
+static LogLevel current_level = LOG_WARN;
 
 static const char *level_str(LogLevel level)
 {
