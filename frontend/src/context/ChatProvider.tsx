@@ -52,6 +52,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const connectRef = useRef<() => void>(() => {});
   const reconnectDelayRef = useRef(500);
   const activeSessionIdRef = useRef(activeSessionId);
+  const staleSessionIdRef = useRef<string | null>(null);
   const MAX_RECONNECT_DELAY = 30_000;
 
   const connect = useCallback(() => {
@@ -148,7 +149,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               break;
 
             case 'content':
-              if (data.session_id && data.session_id !== activeSessionIdRef.current) break;
+              if (data.session_id) {
+                if (activeSessionIdRef.current === null) {
+                  // New Chat is active — reject in-flight events from the
+                  // session we just left, accept anything else (the new session).
+                  if (data.session_id === staleSessionIdRef.current) break;
+                } else if (data.session_id !== activeSessionIdRef.current) {
+                  break;
+                }
+              }
               debugLog('message:content', {
                 content: data.content?.substring(0, 50),
                 len: data.content?.length,
@@ -178,17 +187,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Ignore done events for sessions that are no longer active.
               // This prevents stale responses from a previous chat overwriting
               // the cleared state after the user clicked New Chat.
-              if (
-                data.session_id &&
-                activeSessionIdRef.current != null &&
-                data.session_id !== activeSessionIdRef.current
-              ) {
-                debugLog('done:ignored', {
-                  event: data.session_id,
-                  current: activeSessionIdRef.current,
-                });
-                setIsStreaming(false);
-                break;
+              if (data.session_id) {
+                if (activeSessionIdRef.current === null) {
+                  if (data.session_id === staleSessionIdRef.current) {
+                    debugLog('done:ignored:stale', {
+                      event: data.session_id,
+                      stale: staleSessionIdRef.current,
+                    });
+                    setIsStreaming(false);
+                    break;
+                  }
+                } else if (data.session_id !== activeSessionIdRef.current) {
+                  debugLog('done:ignored', {
+                    event: data.session_id,
+                    current: activeSessionIdRef.current,
+                  });
+                  setIsStreaming(false);
+                  break;
+                }
               }
               setIsStreaming(false);
               isReadyRef.current = true;
@@ -464,24 +480,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     };
   }, [connect, reconnect]);
 
-  const createSession = useCallback(async () => {
+  const createSession = useCallback(() => {
     debugLog('createSession:start');
     // Stop any active generation first — stale streaming events from the old
     // session would otherwise overwrite the cleared state and switch the active
     // session_id back to the old conversation after New Chat is clicked.
     stopGeneration();
-    try {
-      const { session_id } = await api.createSession();
-      debugLog('createSession:done', session_id);
-      activeSessionIdRef.current = session_id;
-      setActiveSessionId(session_id);
-      setMessages([]);
-      messageQueueRef.current = [];
-      const sessionsData = await api.getSessions();
-      setSessions(sessionsData);
-    } catch (err) {
-      console.error('[Chat] Failed to create session:', err);
-    }
+    // Remember the session we're leaving so in-flight stale events from it
+    // are rejected by the content / done handlers even while active is null.
+    staleSessionIdRef.current = activeSessionIdRef.current;
+    activeSessionIdRef.current = null;
+    setActiveSessionId(null);
+    setMessages([]);
+    messageQueueRef.current = [];
+    // Session is created lazily on the backend when the first message is sent.
   }, [stopGeneration]);
 
   const selectSession = useCallback(async (sessionId: string) => {
