@@ -751,21 +751,29 @@ static void agent_save_session(Agent *agent)
 
     if (agent->messages_count > 0)
     {
-        s->messages = calloc((size_t)agent->messages_count, sizeof(Message));
+        /* count non-system messages */
+        int save_count = 0;
+        for (int i = 0; i < agent->messages_count; i++)
+            if (strcmp(agent->messages[i].role, "system") != 0)
+                save_count++;
+
+        s->messages = calloc((size_t)save_count, sizeof(Message));
         if (s->messages)
         {
-            /* deep-copy: the agent keeps its messages for the live
-             * conversation; the session owns the copies it serializes */
-            for (int i = 0; i < agent->messages_count; i++)
+            int si = 0;
+            for (int i = 0; i < agent->messages_count && si < save_count; i++)
             {
-                if (message_copy(&s->messages[i], &agent->messages[i]) != 0)
+                if (strcmp(agent->messages[i].role, "system") == 0)
+                    continue;
+                if (message_copy(&s->messages[si], &agent->messages[i]) != 0)
                     break;
-                s->messages_count = i + 1;
+                si++;
             }
+            s->messages_count = si;
         }
     }
 
-    if (agent->messages_count > 0)
+    if (s->messages_count > 0)
         session_manager_save_session(agent->sm, s);
 
     session_free(s);
