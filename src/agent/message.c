@@ -251,8 +251,8 @@ char *llm_messages_format(Message *msgs, int count,
         int len = cJSON_GetArraySize(msgs_json);
         for (int i = 0; i < len; i++)
         {
-            cJSON *item = cJSON_DetachItemFromArray(msgs_json, i);
-            cJSON_AddItemToArray(arr, item);
+            cJSON *item = cJSON_DetachItemFromArray(msgs_json, 0);
+            if (item) cJSON_AddItemToArray(arr, item);
         }
         cJSON_Delete(msgs_json);
     }
