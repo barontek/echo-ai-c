@@ -121,6 +121,11 @@ static void run_chat(Conf *conf)
 
     registry_init(safety);
 
+    {
+        const char *enabled = conf_get(conf, "tools.enabled");
+        if (enabled) registry_set_enabled(enabled);
+    }
+
     const char *sp_name = conf_get(conf, "search.provider");
     if (sp_name)
     {
@@ -200,6 +205,11 @@ static void run_cli(Conf *conf)
     if (!safety) { log_error("failed to load safety config", NULL); return; }
 
     registry_init(safety);
+
+    {
+        const char *enabled = conf_get(conf, "tools.enabled");
+        if (enabled) registry_set_enabled(enabled);
+    }
 
     {
         const char *sp_name = conf_get(conf, "search.provider");
@@ -436,6 +446,11 @@ static void run_web(Conf *conf, const char *config_path)
     if (!safety) { log_error("failed to load safety config", NULL); return; }
 
     registry_init(safety);
+
+    {
+        const char *enabled = conf_get(conf, "tools.enabled");
+        if (enabled) registry_set_enabled(enabled);
+    }
 
     {
         const char *sp_name = conf_get(conf, "search.provider");

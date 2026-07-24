@@ -112,8 +112,32 @@ void registry_register(Tool *tool)
 {
     if (tool_count >= MAX_TOOLS || !tool) return;
 
+    tool->enabled = 0; /* disabled by default, enabled via config */
     tools[tool_count++] = tool;
     log_info("registered tool", "name", tool->name, NULL);
+}
+
+void registry_set_enabled(const char *names)
+{
+    if (!names || !names[0]) return;
+
+    char *buf = str_dup(names);
+    if (!buf) return;
+
+    char *save = NULL;
+    char *tok = strtok_r(buf, ", ", &save);
+    while (tok)
+    {
+        while (*tok == ' ') tok++;
+        Tool *t = registry_get(tok);
+        if (t)
+        {
+            t->enabled = 1;
+            log_info("tool enabled", "name", tok, NULL);
+        }
+        tok = strtok_r(NULL, ", ", &save);
+    }
+    free(buf);
 }
 
 Tool *registry_get(const char *name)
@@ -133,6 +157,7 @@ char *registry_schemas_json(void)
 
     for (int i = 0; i < tool_count; i++)
     {
+        if (!tools[i]->enabled) continue;
         cJSON *t = cJSON_CreateObject();
         cJSON_AddStringToObject(t, "type", "function");
         cJSON *fn = cJSON_CreateObject();

@@ -15,6 +15,7 @@ struct Tool {
     char *name;
     char *description;
     char *parameters_schema;
+    int enabled;
     ToolResult *(*execute)(Tool *self, const char *args_json);
     void (*destroy)(Tool *self);
     void *ctx;

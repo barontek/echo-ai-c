@@ -9,6 +9,7 @@
 
 void registry_init(SafetyConfig *safety);
 void registry_register(Tool *tool);
+void registry_set_enabled(const char *names);
 Tool *registry_get(const char *name);
 char *registry_schemas_json(void);
 int registry_count(void);
