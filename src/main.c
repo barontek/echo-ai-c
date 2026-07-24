@@ -227,14 +227,7 @@ static void run_cli(Conf *conf)
         registry_set_session_manager(g_session_manager);
         memory_table_init(g_session_manager->db);
         agent_set_session_manager(agent, g_session_manager);
-        Session *s = session_manager_create_session(g_session_manager, "CLI Session");
-        if (s)
-        {
-            free(agent->session_id);
-            agent->session_id = str_dup(s->id);
-            log_info("session created", "id", agent->session_id, NULL);
-            session_free(s);
-        }
+        log_info("session manager ready", NULL);
     }
 
     ChangeTracker *ct = ct_create();
@@ -274,13 +267,6 @@ static void run_cli(Conf *conf)
                 if (agent && g_session_manager)
                 {
                     agent_set_session_manager(agent, g_session_manager);
-                    Session *s = session_manager_create_session(g_session_manager, "CLI Session");
-                    if (s)
-                    {
-                        free(agent->session_id);
-                        agent->session_id = str_dup(s->id);
-                        session_free(s);
-                    }
                 }
                 free(new_cfg);
             }

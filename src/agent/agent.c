@@ -607,13 +607,16 @@ void agent_set_session_manager(Agent *agent, SessionManager *sm)
 static void agent_save_session(Agent *agent)
 {
     if (!agent->sm) return;
-    if (!agent->session_id) return;
-    Session *s = session_manager_load_session(agent->sm, agent->session_id);
+    Session *s = NULL;
+
+    if (agent->session_id)
+        s = session_manager_load_session(agent->sm, agent->session_id);
+
     if (!s)
     {
-        s = session_manager_create_session(agent->sm, "Echo AI Session");
+        s = session_create("Echo AI Session");
         if (!s) return;
-        free(agent->session_id);
+        if (agent->session_id) free(agent->session_id);
         agent->session_id = str_dup(s->id);
     }
 
@@ -643,7 +646,9 @@ static void agent_save_session(Agent *agent)
         }
     }
 
-    session_manager_save_session(agent->sm, s);
+    if (agent->messages_count > 0)
+        session_manager_save_session(agent->sm, s);
+
     session_free(s);
 }
 
