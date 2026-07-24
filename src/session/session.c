@@ -120,7 +120,8 @@ int session_deserialize_messages(Session *session, const char *json_str)
         {
             int tc_count = cJSON_GetArraySize(tool_calls_arr);
             session->messages[i].tool_calls = calloc(tc_count, sizeof(ToolCall));
-            session->messages[i].tool_calls_count = tc_count;
+            if (session->messages[i].tool_calls)
+                session->messages[i].tool_calls_count = tc_count;
             for (int j = 0; j < tc_count; j++)
             {
                 cJSON *tc = cJSON_GetArrayItem(tool_calls_arr, j);

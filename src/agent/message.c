@@ -187,7 +187,7 @@ cJSON *messages_to_json_array(Message *msgs, int count)
         cJSON_AddStringToObject(item, "role", msgs[i].role ? msgs[i].role : "");
         cJSON_AddStringToObject(item, "content", msgs[i].content ? msgs[i].content : "");
 
-        if (msgs[i].tool_calls_count > 0)
+        if (msgs[i].tool_calls && msgs[i].tool_calls_count > 0)
         {
             cJSON *tc_arr = cJSON_CreateArray();
             for (int j = 0; j < msgs[i].tool_calls_count; j++)
