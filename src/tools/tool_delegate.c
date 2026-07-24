@@ -133,7 +133,8 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
     for (int i = 0; i < iterations; i++)
     {
         LLMResponse *resp = provider->chat(provider, msgs, msgs_count,
-                                            model, temperature, timeout);
+                                            model, temperature, timeout,
+                                            NULL);
         if (!resp)
         {
             log_error("delegate: sub-agent LLM returned no response", NULL);

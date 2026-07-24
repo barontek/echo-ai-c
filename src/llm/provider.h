@@ -7,11 +7,13 @@ typedef struct LLMProvider LLMProvider;
 
 struct LLMProvider {
     LLMResponse *(*chat)(LLMProvider *self, Message *messages, int count,
-                         const char *model, double temperature, int timeout);
+                         const char *model, double temperature, int timeout,
+                         const char *tools_json);
     LLMResponse *(*chat_streaming)(LLMProvider *self, Message *messages, int count,
                                    const char *model, double temperature, int timeout,
                                    void (*on_chunk)(const char *chunk, void *userdata),
-                                   void *userdata);
+                                   void *userdata,
+                                   const char *tools_json);
     LLMResponse *(*extract_structured)(LLMProvider *self, Message *messages, int count,
                                         const char *model, double temperature, int timeout,
                                         const char *json_schema);

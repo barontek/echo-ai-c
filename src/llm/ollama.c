@@ -214,7 +214,8 @@ static LLMResponse *ollama_parse_response(const char *raw)
 }
 
 static LLMResponse *ollama_chat(LLMProvider *self, Message *messages, int count,
-                                const char *model, double temperature, int timeout)
+                                const char *model, double temperature, int timeout,
+                                const char *tools_json)
 {
     OllamaCtx *ctx = self->ctx;
 
@@ -222,14 +223,29 @@ static LLMResponse *ollama_chat(LLMProvider *self, Message *messages, int count,
     if (!msgs_json) return NULL;
 
     char *body = NULL;
-    if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                 "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
-                 "\"keep_alive\":%d}",
-                 model, msgs_json, temperature, ctx->num_ctx,
-                 ctx->keep_alive_secs) < 0)
+    if (tools_json && tools_json[0])
     {
-        free(msgs_json);
-        return NULL;
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
+                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"keep_alive\":%d,\"tools\":%s}",
+                     model, msgs_json, temperature, ctx->num_ctx,
+                     ctx->keep_alive_secs, tools_json) < 0)
+        {
+            free(msgs_json);
+            return NULL;
+        }
+    }
+    else
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
+                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"keep_alive\":%d}",
+                     model, msgs_json, temperature, ctx->num_ctx,
+                     ctx->keep_alive_secs) < 0)
+        {
+            free(msgs_json);
+            return NULL;
+        }
     }
     free(msgs_json);
 
@@ -276,7 +292,8 @@ static void on_ollama_chunk(const char *chunk, void *userdata)
 static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, int count,
                                           const char *model, double temperature, int timeout,
                                           void (*on_chunk)(const char *, void *),
-                                          void *userdata)
+                                          void *userdata,
+                                          const char *tools_json)
 {
     OllamaCtx *ctx = self->ctx;
 
@@ -284,14 +301,29 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
     if (!msgs_json) return NULL;
 
     char *body = NULL;
-    if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
-                 "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
-                 "\"keep_alive\":%d}",
-                 model, msgs_json, temperature, ctx->num_ctx,
-                 ctx->keep_alive_secs) < 0)
+    if (tools_json && tools_json[0])
     {
-        free(msgs_json);
-        return NULL;
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
+                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"keep_alive\":%d,\"tools\":%s}",
+                     model, msgs_json, temperature, ctx->num_ctx,
+                     ctx->keep_alive_secs, tools_json) < 0)
+        {
+            free(msgs_json);
+            return NULL;
+        }
+    }
+    else
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
+                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"keep_alive\":%d}",
+                     model, msgs_json, temperature, ctx->num_ctx,
+                     ctx->keep_alive_secs) < 0)
+        {
+            free(msgs_json);
+            return NULL;
+        }
     }
     free(msgs_json);
 

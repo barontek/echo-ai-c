@@ -29,9 +29,11 @@ int registry_get_delegate_config(const char **provider_name, const char **base_u
 Tool *registry_get(const char *name) { (void)name; return NULL; }
 
 static LLMResponse *mock_chat(LLMProvider *self, Message *messages, int count,
-                               const char *model, double temperature, int timeout)
+                               const char *model, double temperature, int timeout,
+                               const char *tools_json)
 {
     (void)self; (void)messages; (void)count; (void)model; (void)temperature; (void)timeout;
+    (void)tools_json;
     LLMResponse *resp = calloc(1, sizeof(LLMResponse));
     if (resp)
     {

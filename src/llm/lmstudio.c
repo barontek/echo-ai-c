@@ -259,7 +259,8 @@ static char *lmstudio_chat_request(const char *base_url, const char *json_body,
 }
 
 static LLMResponse *lmstudio_chat(LLMProvider *self, Message *messages, int count,
-                                   const char *model, double temperature, int timeout)
+                                   const char *model, double temperature, int timeout,
+                                   const char *tools_json)
 {
     LMStudioCtx *ctx = self->ctx;
 
@@ -267,12 +268,25 @@ static LLMResponse *lmstudio_chat(LLMProvider *self, Message *messages, int coun
     if (!msgs_json) return NULL;
 
     char *body = NULL;
-    if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                 "\"temperature\":%.2f}",
-                 model, msgs_json, temperature) < 0)
+    if (tools_json && tools_json[0])
     {
-        free(msgs_json);
-        return NULL;
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
+                     "\"temperature\":%.2f,\"tools\":%s}",
+                     model, msgs_json, temperature, tools_json) < 0)
+        {
+            free(msgs_json);
+            return NULL;
+        }
+    }
+    else
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
+                     "\"temperature\":%.2f}",
+                     model, msgs_json, temperature) < 0)
+        {
+            free(msgs_json);
+            return NULL;
+        }
     }
     free(msgs_json);
 
@@ -291,7 +305,8 @@ static LLMResponse *lmstudio_chat(LLMProvider *self, Message *messages, int coun
 static LLMResponse *lmstudio_chat_streaming(LLMProvider *self, Message *messages, int count,
                                              const char *model, double temperature, int timeout,
                                              void (*on_chunk)(const char *, void *),
-                                             void *userdata)
+                                             void *userdata,
+                                             const char *tools_json)
 {
     (void)on_chunk;
     (void)userdata;
@@ -302,12 +317,25 @@ static LLMResponse *lmstudio_chat_streaming(LLMProvider *self, Message *messages
     if (!msgs_json) return NULL;
 
     char *body = NULL;
-    if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
-                 "\"temperature\":%.2f}",
-                 model, msgs_json, temperature) < 0)
+    if (tools_json && tools_json[0])
     {
-        free(msgs_json);
-        return NULL;
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
+                     "\"temperature\":%.2f,\"tools\":%s}",
+                     model, msgs_json, temperature, tools_json) < 0)
+        {
+            free(msgs_json);
+            return NULL;
+        }
+    }
+    else
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
+                     "\"temperature\":%.2f}",
+                     model, msgs_json, temperature) < 0)
+        {
+            free(msgs_json);
+            return NULL;
+        }
     }
     free(msgs_json);
 

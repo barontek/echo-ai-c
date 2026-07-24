@@ -3,6 +3,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+
+#if defined(__linux__)
+#define SYSTEM_OS "Linux"
+#elif defined(__APPLE__)
+#define SYSTEM_OS "macOS"
+#elif defined(_WIN32)
+#define SYSTEM_OS "Windows"
+#else
+#define SYSTEM_OS "Unknown"
+#endif
 
 #include "agent.h"
 #include "context.h"
@@ -188,16 +199,32 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
 
 static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
 {
+    char cwd_buf[4096];
+    const char *cwd = getcwd(cwd_buf, sizeof(cwd_buf));
+    if (!cwd) cwd = ".";
+
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    char time_buf[64];
+    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    char context_buf[512];
+    snprintf(context_buf, sizeof(context_buf),
+             "\n\n[System Context]\nOS: " SYSTEM_OS "\n"
+             "Current Working Directory: %s\nCurrent Time: %s\n",
+             cwd, time_buf);
+
     const char *base = agent->system_prompt ? agent->system_prompt : "";
     if (agent->context_summary)
     {
-        if (asprintf(out, "%s\n\nPrevious conversation summary: %s",
-                     base, agent->context_summary) < 0)
+        if (asprintf(out, "%s%s\n\nPrevious conversation summary: %s",
+                     base, context_buf, agent->context_summary) < 0)
             return -1;
     }
     else
     {
-        *out = str_dup(base);
+        if (asprintf(out, "%s%s", base, context_buf) < 0)
+            return -1;
     }
     if (out_len && *out) *out_len = strlen(*out);
     return 0;
@@ -289,9 +316,12 @@ static LLMResponse *agent_llm_call(Agent *agent)
     double start = time_sec();
     double llm_buckets[] = {0.5, 1, 2, 5, 10, 30, 60, 120};
 
+    char *tools_json = registry_schemas_json();
     LLMResponse *resp = agent->provider->chat(
         agent->provider, agent->messages, agent->messages_count,
-        agent->model, agent->temperature, agent->timeout);
+        agent->model, agent->temperature, agent->timeout,
+        tools_json);
+    free(tools_json);
 
     double elapsed = time_sec() - start;
 
@@ -427,7 +457,7 @@ static void agent_generate_title(Agent *agent)
 
     LLMResponse *resp = agent->provider->chat(
         agent->provider, &title_msg, 1,
-        agent->model, 0.3, 30);
+        agent->model, 0.3, 30, NULL);
 
     free(title_msg.role);
     free(title_msg.content);
@@ -528,7 +558,7 @@ static void agent_perform_summarization(Agent *agent, int original_count)
 
     LLMResponse *resp = agent->provider->chat(
         agent->provider, sum_msgs, 2,
-        agent->model, 0.3, 30);
+        agent->model, 0.3, 30, NULL);
 
     free(sum_msgs[0].role);
     free(sum_msgs[0].content);
@@ -653,10 +683,13 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
 
         inject_system_with_summary(agent);
 
+        char *tools_json = registry_schemas_json();
         LLMResponse *resp = agent->provider->chat_streaming(
             agent->provider, agent->messages, agent->messages_count,
             agent->model, agent->temperature, agent->timeout,
-            on_chunk, userdata);
+            on_chunk, userdata,
+            tools_json);
+        free(tools_json);
 
         if (resp && agent->cb) cb_record_success(agent->cb);
         else if (!resp && agent->cb) cb_record_failure(agent->cb);
