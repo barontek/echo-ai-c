@@ -344,34 +344,48 @@ static void agent_generate_title(Agent *agent)
     Message title_msgs[2];
     memset(title_msgs, 0, sizeof(title_msgs));
     title_msgs[0].role = str_dup("system");
-    title_msgs[0].content = str_dup("Generate a very short title (5 words or fewer) for this conversation. Return ONLY the title, no quotes or punctuation.");
+    title_msgs[0].content = str_dup("You generate very short titles for conversations.");
 
-    int text_len = 0;
-    for (int i = 0; i < agent->messages_count; i++)
-    {
-        if (agent->messages[i].content)
-            text_len += strlen(agent->messages[i].content);
-    }
-
-    char *text = malloc(text_len + 1);
-    if (text)
-    {
-        text[0] = '\0';
-        for (int i = 0; i < agent->messages_count; i++)
-        {
-            if (agent->messages[i].content)
-                strcat(text, agent->messages[i].content);
-        }
-    }
-    else
+    /* build a "role: content\n..." excerpt, capped so long conversations
+     * don't blow up the prompt for a 5-word title */
+    const size_t cap = 4000;
+    char *text = malloc(cap + 1);
+    if (!text)
     {
         free(title_msgs[0].role);
         free(title_msgs[0].content);
         return;
     }
+    size_t used = 0;
+    text[0] = '\0';
+    for (int i = 0; i < agent->messages_count && used < cap; i++)
+    {
+        const char *role = agent->messages[i].role ? agent->messages[i].role : "unknown";
+        const char *content = agent->messages[i].content ? agent->messages[i].content : "";
+        int n = snprintf(text + used, cap + 1 - used, "%s: %s\n", role, content);
+        if (n < 0) break;
+        if ((size_t)n >= cap + 1 - used) { used = cap; break; }
+        used += (size_t)n;
+    }
 
+    /* instruction lives in the user message with the conversation clearly
+     * delimited; small models paraphrase a bare system instruction instead
+     * of following it (produced titles like "Conversation Title Request") */
     title_msgs[1].role = str_dup("user");
-    title_msgs[1].content = text;
+    if (asprintf(&title_msgs[1].content,
+                 "Generate a very short title (5 words or fewer) for the conversation below. "
+                 "Return ONLY the title, no quotes or punctuation.\n\nConversation:\n%s",
+                 text) < 0)
+        title_msgs[1].content = NULL;
+    free(text);
+    if (!title_msgs[1].role || !title_msgs[1].content)
+    {
+        free(title_msgs[0].role);
+        free(title_msgs[0].content);
+        free(title_msgs[1].role);
+        free(title_msgs[1].content);
+        return;
+    }
 
     LLMResponse *resp = agent->provider->chat(
         agent->provider, title_msgs, 2,
