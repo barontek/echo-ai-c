@@ -187,6 +187,15 @@ cJSON *messages_to_json_array(Message *msgs, int count)
         cJSON_AddStringToObject(item, "role", msgs[i].role ? msgs[i].role : "");
         cJSON_AddStringToObject(item, "content", msgs[i].content ? msgs[i].content : "");
 
+        if (msgs[i].thinking)
+            cJSON_AddStringToObject(item, "thinking", msgs[i].thinking);
+
+        if (msgs[i].tool_name)
+            cJSON_AddStringToObject(item, "tool_name", msgs[i].tool_name);
+
+        if (msgs[i].error_category)
+            cJSON_AddStringToObject(item, "error_category", msgs[i].error_category);
+
         if (msgs[i].tool_calls && msgs[i].tool_calls_count > 0)
         {
             cJSON *tc_arr = cJSON_CreateArray();

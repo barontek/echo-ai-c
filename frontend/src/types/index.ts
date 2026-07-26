@@ -7,17 +7,19 @@ export interface Session {
 }
 
 export interface Message {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   timestamp?: string;
   thinking?: string;
   has_tools?: boolean;
   tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  tool_name?: string;
 }
 
 export interface ToolCall {
   name: string;
-  arguments: Record<string, unknown>;
+  arguments: string | Record<string, unknown>;
   result?: {
     content: string;
     error: string | null;
@@ -49,10 +51,12 @@ export interface StreamEvent {
     | 'pong'
     | 'session_start'
     | 'approval_request'
-    | 'title_updated';
+    | 'title_updated'
+    | 'history';
   content?: string;
   has_tools?: boolean;
   tool_calls?: ToolCall[];
+  messages?: Message[];
   session_id?: string;
   title?: string;
   timestamp?: string;

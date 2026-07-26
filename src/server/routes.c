@@ -407,6 +407,38 @@ static int is_export_path(const char *sid)
     return slen > 7 && strcmp(sid + slen - 7, "/export") == 0;
 }
 
+static void ws_add_message_to_json(cJSON *m, const Message *msg)
+{
+    cJSON_AddStringToObject(m, "role", msg->role ? msg->role : "unknown");
+    cJSON_AddStringToObject(m, "content", msg->content ? msg->content : "");
+
+    if (msg->thinking)
+        cJSON_AddStringToObject(m, "thinking", msg->thinking);
+
+    if (msg->tool_name)
+        cJSON_AddStringToObject(m, "tool_name", msg->tool_name);
+
+    if (msg->tool_call_id)
+        cJSON_AddStringToObject(m, "tool_call_id", msg->tool_call_id);
+
+    if (msg->error_category)
+        cJSON_AddStringToObject(m, "error_category", msg->error_category);
+
+    if (msg->tool_calls && msg->tool_calls_count > 0)
+    {
+        cJSON *tc_arr = cJSON_CreateArray();
+        for (int j = 0; j < msg->tool_calls_count; j++)
+        {
+            cJSON *tc = cJSON_CreateObject();
+            cJSON_AddStringToObject(tc, "name", msg->tool_calls[j].name ? msg->tool_calls[j].name : "");
+            cJSON_AddStringToObject(tc, "arguments",
+                msg->tool_calls[j].arguments ? msg->tool_calls[j].arguments : "{}");
+            cJSON_AddItemToArray(tc_arr, tc);
+        }
+        cJSON_AddItemToObject(m, "tool_calls", tc_arr);
+    }
+}
+
 static void handle_session_get(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
     if (!ctx->sm)
@@ -455,8 +487,7 @@ static void handle_session_get(HTTPRequest *req, Client *client, ServerContext *
     for (int i = 0; i < s->messages_count; i++)
     {
         cJSON *m = cJSON_CreateObject();
-        cJSON_AddStringToObject(m, "role", s->messages[i].role ? s->messages[i].role : "unknown");
-        cJSON_AddStringToObject(m, "content", s->messages[i].content ? s->messages[i].content : "");
+        ws_add_message_to_json(m, &s->messages[i]);
         cJSON_AddItemToArray(arr, m);
     }
     cJSON_AddItemToObject(resp, "messages", arr);
@@ -1235,10 +1266,7 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
                     for (int i = 0; i < s->messages_count; i++)
                     {
                         cJSON *m = cJSON_CreateObject();
-                        cJSON_AddStringToObject(m, "role",
-                            s->messages[i].role ? s->messages[i].role : "unknown");
-                        cJSON_AddStringToObject(m, "content",
-                            s->messages[i].content ? s->messages[i].content : "");
+                        ws_add_message_to_json(m, &s->messages[i]);
                         cJSON_AddItemToArray(arr, m);
                     }
                     cJSON_AddItemToObject(hist, "messages", arr);
@@ -1246,9 +1274,7 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
                     if (hist_str) ws_send_json(ws, hist_str);
                     free(hist_str);
                     cJSON_Delete(hist);
-                }
-
-                session_free(s);
+                }                session_free(s);
             }
         }
     }
@@ -1595,10 +1621,7 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
                         for (int i = 0; i < s->messages_count; i++)
                         {
                             cJSON *m = cJSON_CreateObject();
-                            cJSON_AddStringToObject(m, "role",
-                                s->messages[i].role ? s->messages[i].role : "unknown");
-                            cJSON_AddStringToObject(m, "content",
-                                s->messages[i].content ? s->messages[i].content : "");
+                            ws_add_message_to_json(m, &s->messages[i]);
                             cJSON_AddItemToArray(arr, m);
                         }
                         cJSON_AddItemToObject(hist, "messages", arr);

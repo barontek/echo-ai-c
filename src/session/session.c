@@ -127,8 +127,9 @@ int session_deserialize_messages(Session *session, const char *json_str)
                 cJSON *tc = cJSON_GetArrayItem(tool_calls_arr, j);
                 if (!tc) continue;
                 cJSON *tc_id = cJSON_GetObjectItem(tc, "id");
-                cJSON *tc_name = cJSON_GetObjectItem(tc, "name");
-                cJSON *tc_args = cJSON_GetObjectItem(tc, "arguments");
+                cJSON *tc_fn = cJSON_GetObjectItem(tc, "function");
+                cJSON *tc_name = tc_fn ? cJSON_GetObjectItem(tc_fn, "name") : NULL;
+                cJSON *tc_args = tc_fn ? cJSON_GetObjectItem(tc_fn, "arguments") : NULL;
                 session->messages[i].tool_calls[j].id = str_dup(tc_id && tc_id->valuestring ? tc_id->valuestring : NULL);
                 session->messages[i].tool_calls[j].name = str_dup(tc_name && tc_name->valuestring ? tc_name->valuestring : NULL);
                 if (tc_args)

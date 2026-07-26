@@ -20,9 +20,10 @@ function combineAssistantMessages(
     if (msg.role === 'system') continue;
     const last = combined[combined.length - 1];
     if (last && last.role === 'assistant' && msg.role === 'assistant') {
-      last.content += '\n' + msg.content;
+      last.content += (last.content && msg.content) ? '\n' + msg.content : (msg.content || '');
       if (msg.has_tools) last.has_tools = msg.has_tools;
       if (msg.tool_calls && msg.tool_calls.length > 0) last.tool_calls = msg.tool_calls;
+      if (msg.thinking) last.thinking = msg.thinking;
     } else {
       combined.push(msg);
     }
@@ -245,6 +246,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               api.getSessions().then(setSessions).catch(console.error);
               if (data.title) {
                 debugLog('title:generated', data.title);
+              }
+              break;
+
+            case 'history':
+              debugLog('history', { messages: data.messages?.length });
+              if (data.messages && data.messages.length > 0) {
+                const combined = combineAssistantMessages(data.messages);
+                setMessages(combined);
               }
               break;
 

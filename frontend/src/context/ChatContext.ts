@@ -11,13 +11,15 @@ export interface ChatContextValue {
   models: string[];
   providers: string[];
   messages: Array<{
-    role: 'user' | 'assistant' | 'system';
+    role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
     id?: string;
     timestamp?: string;
     thinking?: string;
     has_tools?: boolean;
     tool_calls?: ToolCall[];
+    tool_call_id?: string;
+    tool_name?: string;
     error?: string;
   }>;
   connectionStatus: ConnectionStatus;
