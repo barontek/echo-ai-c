@@ -54,6 +54,11 @@ model = gemma2:2b
 # Maximum execution time for bash commands in seconds (default: 300)
 # max_execution_time = 300
 
+# Tools that require user approval before executing (comma-separated)
+# Default: bash, write_file, replace_in_file, git, python_execute, delegate
+# Empty string to disable all approvals: require_approval_for =
+# require_approval_for = bash, write_file, git, python_execute
+
 [session]
 # Enable encrypted session persistence via SQLite (default: false)
 # Requires ECHO_PASSWORD env var or ~/.config/echo-ai/password file

@@ -141,7 +141,8 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
             continue;
         }
 
-        if (agent->on_approval)
+        if (agent->on_approval && agent->safety
+            && safety_needs_approval(agent->safety, calls[i].name))
         {
             int ok = agent->on_approval(calls[i].name, args_str, agent->approval_userdata);
             if (!ok)
@@ -863,6 +864,11 @@ void agent_set_tool_end_callback(Agent *agent, tool_end_callback cb, void *userd
 {
     agent->on_tool_end = cb;
     agent->tool_end_userdata = userdata;
+}
+
+void agent_set_safety(Agent *agent, SafetyConfig *safety)
+{
+    agent->safety = safety;
 }
 
 void agent_set_callback_manager(Agent *agent, CallbackManager *mgr)

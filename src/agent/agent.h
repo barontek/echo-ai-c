@@ -4,6 +4,7 @@
 #include "message.h"
 #include "../llm/provider.h"
 #include "../session/session_manager.h"
+#include "../safety/safety.h"
 #include "../utils/circuit_breaker.h"
 #include "../utils/callbacks.h"
 #include "../utils/metrics.h"
@@ -56,6 +57,7 @@ typedef struct {
     void *tool_start_userdata;
     tool_end_callback on_tool_end;
     void *tool_end_userdata;
+    SafetyConfig *safety;
 } Agent;
 
 Agent *agent_create(const AgentConfig *cfg);
@@ -73,6 +75,7 @@ void agent_set_metrics(Agent *agent, Metrics *metrics);
 void agent_set_title_callback(Agent *agent, title_callback cb, void *userdata);
 void agent_set_tool_start_callback(Agent *agent, tool_start_callback cb, void *userdata);
 void agent_set_tool_end_callback(Agent *agent, tool_end_callback cb, void *userdata);
+void agent_set_safety(Agent *agent, SafetyConfig *safety);
 void agent_set_callback_manager(Agent *agent, CallbackManager *mgr);
 
 #endif

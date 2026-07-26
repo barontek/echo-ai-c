@@ -72,7 +72,26 @@ void safety_load_from_conf(SafetyConfig *cfg, const Conf *conf)
     if (v) { free(cfg->allowed_domains); cfg->allowed_domains = parse_csv(v, &cfg->allowed_domains_count); }
 
     v = conf_get(conf, "safety.require_approval_for");
-    if (v) { free(cfg->require_approval_for); cfg->require_approval_for = parse_csv(v, &cfg->require_approval_count); }
+    if (v) {
+        free(cfg->require_approval_for);
+        cfg->require_approval_for = parse_csv(v, &cfg->require_approval_count);
+    }
+    /* Sensible defaults: tools that modify files or execute code */
+    if (cfg->require_approval_count == 0)
+    {
+        const char *defaults[] = {
+            "bash", "write_file", "replace_in_file", "git",
+            "python_execute", "delegate",
+        };
+        int ndef = sizeof(defaults) / sizeof(defaults[0]);
+        cfg->require_approval_for = calloc(ndef, sizeof(char *));
+        if (cfg->require_approval_for)
+        {
+            for (int i = 0; i < ndef; i++)
+                cfg->require_approval_for[i] = str_dup(defaults[i]);
+            cfg->require_approval_count = ndef;
+        }
+    }
 
     v = conf_get(conf, "safety.audit_log_path");
     if (v) { free(cfg->audit_log_path); cfg->audit_log_path = str_dup(v); }

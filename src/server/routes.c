@@ -1632,6 +1632,7 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
         agent_set_title_callback(c->agent, ws_title_update_cb, c);
         agent_set_tool_start_callback(c->agent, ws_tool_start_cb, c);
         agent_set_tool_end_callback(c->agent, ws_tool_end_cb, c);
+        agent_set_safety(c->agent, c->safety);
     }
     registry_set_ask_user_callback(ws_ask_user_cb, c);
 
