@@ -291,7 +291,7 @@ export const MessageList = memo(function MessageList() {
                         </>
                       );
                     })()}
-                    {msg.has_tools && msg.tool_calls && msg.tool_calls.length > 0 && (
+                    {msg.tool_calls && msg.tool_calls.length > 0 && (
                       <div className="tool-calls-section">
                         <div className="tool-calls-label">
                           Using tool{msg.tool_calls.length > 1 ? 's' : ''}

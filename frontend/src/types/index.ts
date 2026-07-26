@@ -52,7 +52,8 @@ export interface StreamEvent {
     | 'session_start'
     | 'approval_request'
     | 'title_updated'
-    | 'history';
+    | 'history'
+    | 'tool_start';
   content?: string;
   has_tools?: boolean;
   tool_calls?: ToolCall[];

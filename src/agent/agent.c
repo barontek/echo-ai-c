@@ -156,6 +156,9 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
             }
         }
 
+        if (agent->on_tool_start)
+            agent->on_tool_start(tname, args_str, agent->tool_start_userdata);
+
         ToolResult *result = tool->execute(tool, args_str);
         if (!result)
             result = tool_result_error("tool returned no result", "execution_error");
@@ -836,6 +839,12 @@ void agent_set_title_callback(Agent *agent, title_callback cb, void *userdata)
 {
     agent->on_title_update = cb;
     agent->title_userdata = userdata;
+}
+
+void agent_set_tool_start_callback(Agent *agent, tool_start_callback cb, void *userdata)
+{
+    agent->on_tool_start = cb;
+    agent->tool_start_userdata = userdata;
 }
 
 void agent_set_callback_manager(Agent *agent, CallbackManager *mgr)

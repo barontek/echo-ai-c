@@ -163,6 +163,38 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               }
               break;
 
+            case 'tool_start':
+              debugLog('tool_start', { name: data.tool_name });
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                const newTc = {
+                  name: data.tool_name || 'unknown',
+                  arguments: data.arguments || '{}',
+                };
+                if (last?.role === 'assistant') {
+                  return [
+                    ...prev.slice(0, -1),
+                    {
+                      ...last,
+                      has_tools: true,
+                      tool_calls: last.tool_calls
+                        ? [...last.tool_calls, newTc]
+                        : [newTc],
+                    },
+                  ];
+                }
+                return [
+                  ...prev,
+                  {
+                    role: 'assistant' as const,
+                    content: '',
+                    has_tools: true,
+                    tool_calls: [newTc],
+                  },
+                ];
+              });
+              break;
+
             case 'content':
               if (data.session_id) {
                 if (activeSessionIdRef.current === null) {

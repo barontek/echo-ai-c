@@ -436,6 +436,7 @@ static void ws_add_message_to_json(cJSON *m, const Message *msg)
             cJSON_AddItemToArray(tc_arr, tc);
         }
         cJSON_AddItemToObject(m, "tool_calls", tc_arr);
+        cJSON_AddBoolToObject(m, "has_tools", 1);
     }
 }
 
@@ -1465,6 +1466,21 @@ static void ws_title_update_cb(const char *session_id, const char *title, void *
     cJSON_Delete(ev);
 }
 
+static void ws_tool_start_cb(const char *tool_name, const char *arguments, void *userdata)
+{
+    WSChatCtx *c = (WSChatCtx *)userdata;
+    if (!c || !c->ws) return;
+
+    cJSON *ev = cJSON_CreateObject();
+    cJSON_AddStringToObject(ev, "type", "tool_start");
+    cJSON_AddStringToObject(ev, "tool_name", tool_name ? tool_name : "");
+    cJSON_AddStringToObject(ev, "arguments", arguments ? arguments : "{}");
+    char *str = cJSON_PrintUnformatted(ev);
+    if (str) ws_send_json(c->ws, str);
+    free(str);
+    cJSON_Delete(ev);
+}
+
 static void ws_chat_on_close(WSClient *ws, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
@@ -1587,6 +1603,7 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     {
         agent_set_approval_callback(c->agent, ws_approval_cb, c);
         agent_set_title_callback(c->agent, ws_title_update_cb, c);
+        agent_set_tool_start_callback(c->agent, ws_tool_start_cb, c);
     }
     registry_set_ask_user_callback(ws_ask_user_cb, c);
 
