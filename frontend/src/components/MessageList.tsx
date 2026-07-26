@@ -200,9 +200,13 @@ function CodeBlock({ code }: { code: string }) {
 function ToolCallEntry({ tc }: { tc: ToolCall }) {
   const searchResults = parseSearchResults(tc.result?.content || '');
   const hasSearchResults = searchResults.length > 0;
-  const hasResult = tc.result && (tc.result.content || tc.result.error);
+  const resultContent = tc.result?.content ? tc.result.content.trim() : '';
+  const isAck = resultContent === 'ok' || resultContent === 'OK';
+  const hasResultContent = resultContent && !isAck;
   const hasError = tc.result?.error != null;
-  const inProgress = !hasResult;
+  const hasResult = hasResultContent || hasError;
+  const done = hasResult || isAck;
+  const inProgress = !done;
 
   let argsObj: Record<string, unknown> = {};
   if (typeof tc.arguments === 'string') {
@@ -266,8 +270,8 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
             {hasError && (
               <div className="tool-call-error">{tc.result!.error}</div>
             )}
-            {tc.result!.content && (
-              <ResultContent content={tc.result!.content} />
+            {hasResultContent && (
+              <ResultContent content={resultContent} />
             )}
           </div>
         )}
@@ -276,8 +280,8 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
             {hasError && (
               <div className="tool-call-error">{tc.result!.error}</div>
             )}
-            {tc.result!.content && (
-              <ResultContent content={tc.result!.content} />
+            {hasResultContent && (
+              <ResultContent content={resultContent} />
             )}
           </div>
         )}
