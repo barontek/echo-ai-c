@@ -9,7 +9,6 @@ import type { ToolCall } from '../types';
 interface SearchResult {
   title: string;
   url: string;
-  snippet: string;
 }
 
 function parseSearchResults(content: string): SearchResult[] {
@@ -19,7 +18,6 @@ function parseSearchResults(content: string): SearchResult[] {
       return parsed.map((r) => ({
         title: r.title || '',
         url: r.url || '',
-        snippet: r.snippet || '',
       }));
     }
   } catch {}
@@ -102,35 +100,66 @@ function ToolIcon({ name }: { name: string }) {
   }
 }
 
+function ResultContent({ content }: { content: string }) {
+  const MAX_LINES = 20;
+  const [showAll, setShowAll] = useState(false);
+  const lines = content.split('\n');
+  const truncated = lines.length > MAX_LINES && !showAll;
+  const displayContent = truncated ? lines.slice(0, MAX_LINES).join('\n') : content;
+
+  return (
+    <>
+      <pre className="tool-call-result-text">{displayContent}</pre>
+      {truncated && (
+        <button className="tool-call-show-more" onClick={() => setShowAll(true)}>
+          Show more ({lines.length - MAX_LINES} lines hidden)
+        </button>
+      )}
+    </>
+  );
+}
+
 function ToolCallEntry({ tc }: { tc: ToolCall }) {
   const searchResults = parseSearchResults(tc.result?.content || '');
   const hasSearchResults = searchResults.length > 0;
   const hasResult = tc.result && (tc.result.content || tc.result.error);
+  const hasError = tc.result?.error != null;
   const inProgress = !hasResult;
 
-  let argsStr = '';
+  let argsObj: Record<string, unknown> = {};
   if (typeof tc.arguments === 'string') {
     try {
-      const parsed = JSON.parse(tc.arguments);
-      argsStr = JSON.stringify(parsed, null, 2);
+      argsObj = JSON.parse(tc.arguments);
     } catch {
-      argsStr = tc.arguments;
+      // not JSON, leave empty
     }
   } else {
-    argsStr = JSON.stringify(tc.arguments, null, 2);
+    argsObj = tc.arguments as Record<string, unknown>;
   }
+
+  const argsStr = Object.keys(argsObj).length > 0 ? JSON.stringify(argsObj, null, 2) : '';
+  const query = typeof argsObj.query === 'string' ? argsObj.query : null;
+  const isWebSearch = tc.name === 'web_search';
 
   const label = tc.name.replace(/_/g, ' ');
 
+  let statusClass = 'tool-call-status tool-call-status--running';
+  if (hasError) statusClass = 'tool-call-status tool-call-status--error';
+  else if (!inProgress) statusClass = 'tool-call-status tool-call-status--success';
+
   return (
-    <details className="tool-call-card" open={inProgress}>
+    <details className="tool-call-card">
       <summary className="tool-call-summary">
         <ToolIcon name={tc.name} />
-        <span className="tool-call-label">{label}</span>
-        {inProgress && <span className="tool-call-spinner" />}
+        <span className="tool-call-label">
+          {isWebSearch && query ? `Web Search: ${query}` : label}
+        </span>
+        <span className={statusClass}>
+          {inProgress && <span className="tool-call-spinner" />}
+        </span>
       </summary>
       <div className="tool-call-body">
-        {argsStr && (
+        {!isWebSearch && argsStr && (
           <pre className="tool-call-args">{argsStr}</pre>
         )}
         {hasSearchResults && (
@@ -148,20 +177,17 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
               >
                 <span className="search-result-title">{r.title}</span>
                 <span className="search-result-url">{r.url}</span>
-                {r.snippet && (
-                  <span className="search-result-snippet">{r.snippet}</span>
-                )}
               </a>
             ))}
           </div>
         )}
         {hasResult && !hasSearchResults && (
           <div className="tool-call-result">
-            {tc.result!.error && (
+            {hasError && (
               <div className="tool-call-error">{tc.result!.error}</div>
             )}
             {tc.result!.content && (
-              <pre className="tool-call-result-text">{tc.result!.content}</pre>
+              <ResultContent content={tc.result!.content} />
             )}
           </div>
         )}
@@ -281,16 +307,13 @@ export const MessageList = memo(function MessageList() {
                               </div>
                             </details>
                           )}
-                          {msg.tool_calls && msg.tool_calls.length > 0 && (
-                            <div className="tool-calls-section">
-                              <div className="tool-calls-label">
-                                Using tool{msg.tool_calls.length > 1 ? 's' : ''}
-                              </div>
-                              {msg.tool_calls.map((tc, i) => (
-                                <ToolCallEntry key={i} tc={tc} />
-                              ))}
-                            </div>
-                          )}
+                  {msg.tool_calls && msg.tool_calls.length > 0 && (
+                    <div className="tool-calls-section">
+                      {msg.tool_calls.map((tc, i) => (
+                        <ToolCallEntry key={i} tc={tc} />
+                      ))}
+                    </div>
+                  )}
                           {contentText && (
                             <div className="markdown-content">
                               <ReactMarkdown remarkPlugins={[remarkGfm]}>
