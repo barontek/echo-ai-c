@@ -17,7 +17,21 @@ function combineAssistantMessages(
   const combined: ChatContextValue['messages'] = [];
 
   for (const msg of messages) {
-    if (msg.role === 'system' || msg.role === 'tool') continue;
+    if (msg.role === 'system') continue;
+
+    if (msg.role === 'tool') {
+      const last = combined[combined.length - 1];
+      if (last && last.role === 'assistant' && last.tool_calls && last.tool_calls.length > 0) {
+        for (const tc of last.tool_calls) {
+          if (!tc.result) {
+            tc.result = { content: msg.content || '', error: null };
+            break;
+          }
+        }
+      }
+      continue;
+    }
+
     const last = combined[combined.length - 1];
     if (last && last.role === 'assistant' && msg.role === 'assistant') {
       last.content += (last.content && msg.content) ? '\n' + msg.content : (msg.content || '');

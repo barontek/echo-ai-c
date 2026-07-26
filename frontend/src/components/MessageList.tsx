@@ -4,6 +4,171 @@ import remarkGfm from 'remark-gfm';
 import { Pencil, Copy, Check } from 'lucide-react';
 import { useChat } from '../context';
 import { parseThinkBlocks } from '../utils/thinkBlockParser';
+import type { ToolCall } from '../types';
+
+interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+function parseSearchResults(content: string): SearchResult[] {
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      return parsed.map((r) => ({
+        title: r.title || '',
+        url: r.url || '',
+        snippet: r.snippet || '',
+      }));
+    }
+  } catch {}
+  return [];
+}
+
+function ToolIcon({ name }: { name: string }) {
+  const cls = 'tool-icon-svg';
+  switch (name) {
+    case 'web_search':
+    case 'deep_search':
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="11" cy="11" r="8" />
+          <path d="M21 21l-4.35-4.35" />
+        </svg>
+      );
+    case 'web_fetch':
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+          <polyline points="7,10 12,15 17,10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+      );
+    case 'bash':
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <polyline points="4,17 10,11 4,5" />
+          <line x1="12" y1="19" x2="20" y2="19" />
+        </svg>
+      );
+    case 'read_file':
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+          <polyline points="14,2 14,8 20,8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+        </svg>
+      );
+    case 'write_file':
+    case 'replace_in_file':
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+        </svg>
+      );
+    case 'python_execute':
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <polyline points="16,18 22,12 16,6" />
+          <polyline points="8,6 2,12 8,18" />
+        </svg>
+      );
+    case 'git':
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="18" r="3" />
+          <circle cx="6" cy="6" r="3" />
+          <circle cx="18" cy="6" r="3" />
+          <path d="M18 9v1a2 2 0 01-2 2H8a2 2 0 01-2-2V9" />
+          <path d="M12 15v-3" />
+        </svg>
+      );
+    case 'list_dir':
+    case 'glob':
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+        </svg>
+      );
+    default:
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
+        </svg>
+      );
+  }
+}
+
+function ToolCallEntry({ tc }: { tc: ToolCall }) {
+  const searchResults = parseSearchResults(tc.result?.content || '');
+  const hasSearchResults = searchResults.length > 0;
+  const hasResult = tc.result && (tc.result.content || tc.result.error);
+  const inProgress = !hasResult;
+
+  let argsStr = '';
+  if (typeof tc.arguments === 'string') {
+    try {
+      const parsed = JSON.parse(tc.arguments);
+      argsStr = JSON.stringify(parsed, null, 2);
+    } catch {
+      argsStr = tc.arguments;
+    }
+  } else {
+    argsStr = JSON.stringify(tc.arguments, null, 2);
+  }
+
+  const label = tc.name.replace(/_/g, ' ');
+
+  return (
+    <details className="tool-call-card" open={inProgress}>
+      <summary className="tool-call-summary">
+        <ToolIcon name={tc.name} />
+        <span className="tool-call-label">{label}</span>
+        {inProgress && <span className="tool-call-spinner" />}
+      </summary>
+      <div className="tool-call-body">
+        {argsStr && (
+          <pre className="tool-call-args">{argsStr}</pre>
+        )}
+        {hasSearchResults && (
+          <div className="search-results">
+            <div className="search-results-header">
+              <span className="search-results-count">{searchResults.length} results</span>
+            </div>
+            {searchResults.map((r, i) => (
+              <a
+                key={i}
+                className="search-result-item"
+                href={r.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <span className="search-result-title">{r.title}</span>
+                <span className="search-result-url">{r.url}</span>
+                {r.snippet && (
+                  <span className="search-result-snippet">{r.snippet}</span>
+                )}
+              </a>
+            ))}
+          </div>
+        )}
+        {hasResult && !hasSearchResults && (
+          <div className="tool-call-result">
+            {tc.result!.error && (
+              <div className="tool-call-error">{tc.result!.error}</div>
+            )}
+            {tc.result!.content && (
+              <pre className="tool-call-result-text">{tc.result!.content}</pre>
+            )}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
 
 export const MessageList = memo(function MessageList() {
   const { messages, isStreaming, editMessage } = useChat();
@@ -127,29 +292,13 @@ export const MessageList = memo(function MessageList() {
                       );
                     })()}
                     {msg.has_tools && msg.tool_calls && msg.tool_calls.length > 0 && (
-                      <div className="tool-calls">
-                        {msg.tool_calls.map((tc, i) => {
-                          const entries = Object.entries(tc.arguments);
-                          const argsDisplay = entries
-                            .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
-                            .join('\n');
-                          return (
-                            <details key={i} className="tool-call">
-                              <summary className="tool-name">{tc.name}</summary>
-                              <pre className="tool-args">{argsDisplay}</pre>
-                              {tc.result && (
-                                <div className="tool-result">
-                                  <div className="tool-result-label">Result:</div>
-                                  <pre className="tool-result-content">
-                                    {tc.result.content !== undefined && tc.result.content !== null
-                                      ? tc.result.content
-                                      : tc.result.error || '(empty)'}
-                                  </pre>
-                                </div>
-                              )}
-                            </details>
-                          );
-                        })}
+                      <div className="tool-calls-section">
+                        <div className="tool-calls-label">
+                          Using tool{msg.tool_calls.length > 1 ? 's' : ''}
+                        </div>
+                        {msg.tool_calls.map((tc, i) => (
+                          <ToolCallEntry key={i} tc={tc} />
+                        ))}
                       </div>
                     )}
                     {msg.error && <div className="message-error">{msg.error}</div>}

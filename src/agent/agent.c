@@ -356,6 +356,31 @@ static int tool_calls_remaining(ToolCall *calls, int count)
     return 0;
 }
 
+static void
+attach_tool_calls_to_resp(LLMResponse *resp, const Message *msgs, int count)
+{
+    if (!resp || resp->tool_calls_count > 0) return;
+
+    for (int i = count - 1; i >= 0; i--)
+    {
+        if (msgs[i].role && strcmp(msgs[i].role, "assistant") != 0) continue;
+        if (msgs[i].tool_calls_count == 0) continue;
+
+        int n = msgs[i].tool_calls_count;
+        resp->tool_calls = calloc((size_t)n, sizeof(ToolCall));
+        if (!resp->tool_calls) return;
+
+        resp->tool_calls_count = n;
+        for (int j = 0; j < n; j++)
+        {
+            resp->tool_calls[j].name = str_dup(msgs[i].tool_calls[j].name);
+            resp->tool_calls[j].arguments = str_dup(msgs[i].tool_calls[j].arguments);
+            resp->tool_calls[j].id = str_dup(msgs[i].tool_calls[j].id);
+        }
+        return;
+    }
+}
+
 /* strip <think>...</think> blocks (the non-overlapping first match only), then
  * return a fresh malloc'd copy.  Returns the original unchanged if no tag found. */
 static char *strip_think_tags(const char *str)
@@ -634,6 +659,7 @@ LLMResponse *agent_run(Agent *agent, const char *user_input)
 
         if (!has_tool_calls)
         {
+            attach_tool_calls_to_resp(resp, agent->messages, agent->messages_count);
             agent_save_session(agent);
             agent_generate_title(agent);
             cb_manager_run_end(agent->cb_mgr, run_id, resp->content);
@@ -719,6 +745,7 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
 
         if (!has_tool_calls)
         {
+            attach_tool_calls_to_resp(resp, agent->messages, agent->messages_count);
             agent_save_session(agent);
             agent_generate_title(agent);
             return resp;
