@@ -20,11 +20,12 @@ static ToolResult *list_dir_execute(Tool *self, const char *args_json)
     if (!args) return tool_result_error("invalid arguments JSON", "validation_error");
 
     cJSON *path_json = cJSON_GetObjectItem(args, "path");
-    const char *dir_path = path_json && cJSON_IsString(path_json)
-        ? cJSON_GetStringValue(path_json) : ".";
+    int has_path = path_json && cJSON_IsString(path_json);
+    char *dir_path = has_path ? str_dup(cJSON_GetStringValue(path_json)) : str_dup(".");
     cJSON_Delete(args);
 
     char *resolved = safety_resolve_path(ctx->safety, dir_path);
+    free(dir_path);
     if (!resolved) return tool_result_error("path resolution failed", "execution_error");
 
     DIR *d = opendir(resolved);

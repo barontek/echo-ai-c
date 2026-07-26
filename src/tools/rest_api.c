@@ -55,19 +55,19 @@ static ToolResult *rest_api_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'url' argument", "validation_error");
     }
 
-    const char *url = cJSON_GetStringValue(url_json);
-    const char *method = method_json && cJSON_IsString(method_json)
-                         ? cJSON_GetStringValue(method_json) : "GET";
-    cJSON_Delete(args);
+    char *url = str_dup(cJSON_GetStringValue(url_json));
+    char *method = str_dup(method_json && cJSON_IsString(method_json)
+                           ? cJSON_GetStringValue(method_json) : "GET");
 
-    if (!safety_check_url(ctx->safety, url))
-        return tool_result_error("URL rejected by network policy", "policy_denied");
-
-    CURL *curl = curl_easy_init();
-    if (!curl) return tool_result_error("curl init failed", "execution_error");
+    if (!url || !method)
+    {
+        free(url); free(method);
+        cJSON_Delete(args);
+        return tool_result_error("oom", "execution_error");
+    }
 
     struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(NULL, "Content-Type: application/json");
     headers = curl_slist_append(headers, "Accept: application/json");
 
     if (headers_json && cJSON_IsObject(headers_json))
@@ -87,6 +87,32 @@ static ToolResult *rest_api_execute(Tool *self, const char *args_json)
         }
     }
 
+    char *body_str = NULL;
+    if (body_json)
+    {
+        if (cJSON_IsString(body_json))
+            body_str = str_dup(cJSON_GetStringValue(body_json));
+        else
+            body_str = cJSON_PrintUnformatted(body_json);
+    }
+
+    cJSON_Delete(args);
+
+    if (!safety_check_url(ctx->safety, url))
+    {
+        free(url); free(method); free(body_str);
+        curl_slist_free_all(headers);
+        return tool_result_error("URL rejected by network policy", "policy_denied");
+    }
+
+    CURL *curl = curl_easy_init();
+    if (!curl)
+    {
+        free(url); free(method); free(body_str);
+        curl_slist_free_all(headers);
+        return tool_result_error("curl init failed", "execution_error");
+    }
+
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
@@ -97,37 +123,22 @@ static ToolResult *rest_api_execute(Tool *self, const char *args_json)
     if (strcmp(method, "POST") == 0)
     {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        if (body_json && cJSON_IsString(body_json))
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, cJSON_GetStringValue(body_json));
-        else if (body_json)
-        {
-            char *body_str = cJSON_PrintUnformatted(body_json);
-            if (body_str) curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body_str);
-        }
+        if (body_str)
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body_str);
     }
     else if (strcmp(method, "PUT") == 0)
     {
         curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
-        if (body_json && cJSON_IsString(body_json))
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, cJSON_GetStringValue(body_json));
-        else if (body_json)
-        {
-            char *body_str = cJSON_PrintUnformatted(body_json);
-            if (body_str) curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body_str);
-        }
+        if (body_str)
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body_str);
     }
     else if (strcmp(method, "DELETE") == 0)
         curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
     else if (strcmp(method, "PATCH") == 0)
     {
         curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PATCH");
-        if (body_json && cJSON_IsString(body_json))
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, cJSON_GetStringValue(body_json));
-        else if (body_json)
-        {
-            char *body_str = cJSON_PrintUnformatted(body_json);
-            if (body_str) curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body_str);
-        }
+        if (body_str)
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body_str);
     }
 
     WriteBuf buf = {0};
@@ -139,6 +150,9 @@ static ToolResult *rest_api_execute(Tool *self, const char *args_json)
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(curl);
     curl_slist_free_all(headers);
+    free(url);
+    free(method);
+    free(body_str);
 
     if (res != CURLE_OK)
     {

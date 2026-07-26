@@ -23,17 +23,23 @@ static ToolResult *deep_search_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'query' argument", "validation_error");
     }
 
-    const char *query = cJSON_GetStringValue(query_json);
+    char *query = str_dup(cJSON_GetStringValue(query_json));
     cJSON_Delete(args);
 
     /* Step 1: search the web */
     Tool *web_search_tool = registry_get("web_search");
     if (!web_search_tool)
+    {
+        free(query);
         return tool_result_error("web_search tool not available", "tool_not_found");
+    }
 
     char *search_args = NULL;
     if (asprintf(&search_args, "{\"query\":\"%s\",\"num_results\":5}", query) < 0)
+    {
+        free(query);
         return tool_result_error("oom", "execution_error");
+    }
 
     ToolResult *search_result = web_search_tool->execute(web_search_tool, search_args);
     free(search_args);
@@ -43,6 +49,7 @@ static ToolResult *deep_search_execute(Tool *self, const char *args_json)
         ToolResult *err = tool_result_error(search_result ? search_result->error : "search failed",
                                             search_result ? search_result->error_category : "execution_error");
         if (search_result) tool_result_free(search_result);
+        free(query);
         return err;
     }
 
@@ -107,6 +114,7 @@ static ToolResult *deep_search_execute(Tool *self, const char *args_json)
     /* Step 3: build combined result */
     cJSON *output = cJSON_CreateObject();
     cJSON_AddStringToObject(output, "query", query);
+    free(query);
     if (results_json)
         cJSON_AddItemToObject(output, "search_results", results_json);
     else

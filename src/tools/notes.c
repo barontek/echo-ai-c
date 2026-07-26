@@ -47,13 +47,14 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
                                  "validation_error");
     }
 
-    const char *action = cJSON_GetStringValue(action_json);
+    char *action = str_dup(cJSON_GetStringValue(action_json));
     cJSON *name_json = cJSON_GetObjectItem(args, "name");
 
     const char *ndir = notes_dir_path(ctx);
 
     if (strcmp(action, "list") == 0)
     {
+        free(action);
         cJSON_Delete(args);
         DIR *dir = opendir(ndir);
         if (!dir) return tool_result_create("(no notes)");
@@ -79,37 +80,65 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
         return tr;
     }
 
+    char *name = NULL;
+    char *note_content = NULL;
+
     if (!name_json || !cJSON_IsString(name_json))
     {
         cJSON_Delete(args);
+        free(action);
         return tool_result_error("missing 'name' argument", "validation_error");
     }
+    name = str_dup(cJSON_GetStringValue(name_json));
 
-    const char *name = cJSON_GetStringValue(name_json);
+    cJSON *content_json = cJSON_GetObjectItem(args, "content");
+    if (content_json && cJSON_IsString(content_json))
+        note_content = str_dup(cJSON_GetStringValue(content_json));
+
+    cJSON_Delete(args);
 
     if (strcmp(action, "read") == 0)
     {
-        cJSON_Delete(args);
+        free(action);
         char *fpath = NULL;
         if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
+        {
+            free(name); free(note_content);
             return tool_result_error("oom", "execution_error");
+        }
 
         struct stat st;
-        if (stat(fpath, &st) != 0) { free(fpath); return tool_result_error("note not found", "file_not_found"); }
+        if (stat(fpath, &st) != 0)
+        {
+            free(fpath); free(name); free(note_content);
+            return tool_result_error("note not found", "file_not_found");
+        }
 
         FILE *f = fopen(fpath, "rb");
-        if (!f) { free(fpath); return tool_result_error("cannot read note", "execution_error"); }
+        if (!f)
+        {
+            free(fpath); free(name); free(note_content);
+            return tool_result_error("cannot read note", "execution_error");
+        }
 
         if (st.st_size > (long)ctx->safety->max_file_size)
-        { fclose(f); free(fpath); return tool_result_error("note too large", "policy_denied"); }
+        {
+            fclose(f); free(fpath); free(name); free(note_content);
+            return tool_result_error("note too large", "policy_denied");
+        }
 
         char *content = malloc((size_t)st.st_size + 1);
-        if (!content) { fclose(f); free(fpath); return tool_result_error("oom", "execution_error"); }
+        if (!content)
+        {
+            fclose(f); free(fpath); free(name); free(note_content);
+            return tool_result_error("oom", "execution_error");
+        }
 
         size_t read = fread(content, 1, (size_t)st.st_size, f);
         fclose(f);
         content[read] = '\0';
         free(fpath);
+        free(name); free(note_content);
 
         ToolResult *tr = tool_result_create(content);
         free(content);
@@ -117,43 +146,53 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
     }
     else if (strcmp(action, "write") == 0)
     {
-        cJSON *content_json = cJSON_GetObjectItem(args, "content");
-        if (!content_json || !cJSON_IsString(content_json))
+        free(action);
+        if (!note_content)
         {
-            cJSON_Delete(args);
+            free(name);
             return tool_result_error("missing 'content' for write action", "validation_error");
         }
-        const char *content = cJSON_GetStringValue(content_json);
-        cJSON_Delete(args);
 
         char *fpath = NULL;
         if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
+        {
+            free(name); free(note_content);
             return tool_result_error("oom", "execution_error");
+        }
 
         FILE *f = fopen(fpath, "w");
-        if (!f) { free(fpath); return tool_result_error("cannot write note", "execution_error"); }
+        if (!f)
+        {
+            free(fpath); free(name); free(note_content);
+            return tool_result_error("cannot write note", "execution_error");
+        }
 
-        fwrite(content, 1, strlen(content), f);
+        fwrite(note_content, 1, strlen(note_content), f);
         fclose(f);
         free(fpath);
+        free(name); free(note_content);
 
         return tool_result_create("Note written successfully.");
     }
     else if (strcmp(action, "delete") == 0)
     {
-        cJSON_Delete(args);
+        free(action);
         char *fpath = NULL;
         if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
+        {
+            free(name); free(note_content);
             return tool_result_error("oom", "execution_error");
+        }
 
         int rc = unlink(fpath);
         free(fpath);
+        free(name); free(note_content);
 
         if (rc != 0) return tool_result_error("note not found or cannot delete", "file_not_found");
         return tool_result_create("Note deleted.");
     }
 
-    cJSON_Delete(args);
+    free(action); free(name); free(note_content);
     return tool_result_error("unknown action (use list, read, write, delete)", "validation_error");
 }
 

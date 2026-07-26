@@ -26,13 +26,17 @@ static ToolResult *read_file_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'file_path' argument", "validation_error");
     }
 
-    const char *path = cJSON_GetStringValue(path_json);
+    char *path = str_dup(cJSON_GetStringValue(path_json));
     cJSON_Delete(args);
 
     if (!safety_check_path(ctx->safety, path))
+    {
+        free(path);
         return tool_result_error("path rejected by safety policy", "policy_denied");
+    }
 
     char *resolved = safety_resolve_path(ctx->safety, path);
+    free(path);
     if (!resolved) return tool_result_error("path resolution failed", "execution_error");
 
     FILE *fp = fopen(resolved, "r");

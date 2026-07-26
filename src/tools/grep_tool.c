@@ -102,19 +102,25 @@ static ToolResult *grep_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'pattern' argument", "validation_error");
     }
 
-    const char *pattern = cJSON_GetStringValue(pattern_json);
-    const char *search_path = path_json && cJSON_IsString(path_json)
-        ? cJSON_GetStringValue(path_json) : ".";
+    char *pattern = str_dup(cJSON_GetStringValue(pattern_json));
+    int has_path = path_json && cJSON_IsString(path_json);
+    char *search_path = has_path ? str_dup(cJSON_GetStringValue(path_json)) : str_dup(".");
     cJSON_Delete(args);
 
     GrepCtx *gctx = (GrepCtx *)self->ctx;
     if (gctx && gctx->safety && !safety_check_path(gctx->safety, search_path))
+    {
+        free(pattern);
+        free(search_path);
         return tool_result_error("path rejected by safety check", "validation_error");
+    }
 
     char buffer[32768] = {0};
     size_t pos = 0;
 
     search_dir(search_path, pattern, buffer, sizeof(buffer), &pos, 100);
+    free(pattern);
+    free(search_path);
 
     ToolResult *tr = tool_result_create(buffer[0] ? buffer : "(no matches)");
     return tr;

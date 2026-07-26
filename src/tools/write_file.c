@@ -30,18 +30,38 @@ static ToolResult *write_file_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'file_path' or 'content' argument", "validation_error");
     }
 
-    const char *path = cJSON_GetStringValue(path_json);
-    const char *content = cJSON_GetStringValue(content_json);
+    char *path = str_dup(cJSON_GetStringValue(path_json));
+    char *content = str_dup(cJSON_GetStringValue(content_json));
     cJSON_Delete(args);
 
+    if (!path || !content)
+    {
+        free(path);
+        free(content);
+        return tool_result_error("oom", "execution_error");
+    }
+
     if (!safety_check_path(ctx->safety, path))
+    {
+        free(path);
+        free(content);
         return tool_result_error("path rejected by safety policy", "policy_denied");
+    }
 
     if (strlen(content) > ctx->safety->max_file_size)
+    {
+        free(path);
+        free(content);
         return tool_result_error("content exceeds max file size", "policy_denied");
+    }
 
     char *resolved = safety_resolve_path(ctx->safety, path);
-    if (!resolved) return tool_result_error("path resolution failed", "execution_error");
+    if (!resolved)
+    {
+        free(path);
+        free(content);
+        return tool_result_error("path resolution failed", "execution_error");
+    }
 
     if (ctx->ct)
         ct_snapshot(ctx->ct, resolved);
@@ -50,6 +70,8 @@ static ToolResult *write_file_execute(Tool *self, const char *args_json)
     if (!fp)
     {
         free(resolved);
+        free(path);
+        free(content);
         return tool_result_error("cannot write to path", "permission_denied");
     }
 
@@ -60,6 +82,8 @@ static ToolResult *write_file_execute(Tool *self, const char *args_json)
     char *result = NULL;
     if (asprintf(&result, "Written %zu bytes to %s", strlen(content), path) < 0)
         result = NULL;
+    free(path);
+    free(content);
     ToolResult *tr = tool_result_create(result);
     free(result);
     return tr;

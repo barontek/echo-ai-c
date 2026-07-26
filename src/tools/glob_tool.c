@@ -26,15 +26,19 @@ static ToolResult *glob_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'pattern' argument", "validation_error");
     }
 
-    const char *pattern = cJSON_GetStringValue(pattern_json);
+    char *pattern = str_dup(cJSON_GetStringValue(pattern_json));
     cJSON_Delete(args);
 
     GlobCtx *gctx = (GlobCtx *)self->ctx;
     if (gctx && gctx->safety && !safety_check_path(gctx->safety, pattern))
+    {
+        free(pattern);
         return tool_result_error("pattern rejected by safety check", "validation_error");
+    }
 
     glob_t globbuf;
     int ret = glob(pattern, GLOB_NOSORT | GLOB_NOCHECK, NULL, &globbuf);
+    free(pattern);
 
     if (ret != 0 && ret != GLOB_NOMATCH)
     {

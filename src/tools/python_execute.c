@@ -28,7 +28,7 @@ static ToolResult *python_execute_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'code' argument", "validation_error");
     }
 
-    const char *code = cJSON_GetStringValue(code_json);
+    char *code = str_dup(cJSON_GetStringValue(code_json));
     cJSON_Delete(args);
 
     int stdin_pipe[2];

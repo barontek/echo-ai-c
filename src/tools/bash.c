@@ -83,11 +83,12 @@ static ToolResult *bash_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'command' argument", "validation_error");
     }
 
-    const char *command = cJSON_GetStringValue(cmd_json);
+    char *command = str_dup(cJSON_GetStringValue(cmd_json));
 
     if (!safety_check_command(ctx->safety, command))
     {
         cJSON_Delete(args);
+        free(command);
         return tool_result_error("command rejected by safety policy", "policy_denied");
     }
 
@@ -95,6 +96,7 @@ static ToolResult *bash_execute(Tool *self, const char *args_json)
 
     char *output = NULL;
     int rc = run_with_timeout(command, ctx->safety->max_execution_time, &output);
+    free(command);
 
     if (rc == -2)
     {

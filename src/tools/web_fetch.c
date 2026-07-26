@@ -51,16 +51,20 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'url' argument", "validation_error");
     }
 
-    const char *url = cJSON_GetStringValue(url_json);
+    char *url = str_dup(cJSON_GetStringValue(url_json));
     cJSON_Delete(args);
 
     if (!safety_check_url(ctx->safety, url))
+    {
+        free(url);
         return tool_result_error("URL rejected by network policy", "policy_denied");
+    }
 
     CURL *curl = curl_easy_init();
-    if (!curl) return tool_result_error("curl init failed", "execution_error");
+    if (!curl) { free(url); return tool_result_error("curl init failed", "execution_error"); }
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
+    free(url);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);

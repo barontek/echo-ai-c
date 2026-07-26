@@ -32,18 +32,28 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
                                  "validation_error");
     }
 
-    const char *path = cJSON_GetStringValue(path_json);
-    const char *old_str = cJSON_GetStringValue(old_json);
-    const char *new_str = cJSON_GetStringValue(new_json);
+    char *path = str_dup(cJSON_GetStringValue(path_json));
+    char *old_str = str_dup(cJSON_GetStringValue(old_json));
+    char *new_str = str_dup(cJSON_GetStringValue(new_json));
     cJSON_Delete(args);
+
+    if (!path || !old_str || !new_str)
+    {
+        free(path); free(old_str); free(new_str);
+        return tool_result_error("oom", "execution_error");
+    }
 
     char *resolved = safety_resolve_path(ctx->safety, path);
     if (!resolved)
+    {
+        free(path); free(old_str); free(new_str);
         return tool_result_error("path resolution failed", "policy_denied");
+    }
 
     if (!safety_check_path(ctx->safety, resolved))
     {
         free(resolved);
+        free(path); free(old_str); free(new_str);
         return tool_result_error("path rejected by safety check", "policy_denied");
     }
 
@@ -51,6 +61,7 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
     if (!f)
     {
         free(resolved);
+        free(path); free(old_str); free(new_str);
         return tool_result_error("file not found", "file_not_found");
     }
 
@@ -61,11 +72,13 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
     {
         fclose(f);
         free(resolved);
+        free(path); free(old_str); free(new_str);
         return tool_result_error("file empty or too large", "policy_denied");
     }
 
     char *content = malloc((size_t)fsize + 1);
-    if (!content) { fclose(f); free(resolved); return tool_result_error("oom", "execution_error"); }
+    if (!content) { fclose(f); free(resolved); free(path); free(old_str); free(new_str);
+        return tool_result_error("oom", "execution_error"); }
 
     size_t read = fread(content, 1, (size_t)fsize, f);
     fclose(f);
@@ -76,6 +89,7 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
     {
         free(content);
         free(resolved);
+        free(path); free(old_str); free(new_str);
         return tool_result_create("No match found for old_string in file.");
     }
 
@@ -85,7 +99,8 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
     size_t suffix_len = read - prefix_len - old_len;
 
     char *new_content = malloc(prefix_len + new_len + suffix_len + 1);
-    if (!new_content) { free(content); free(resolved); return tool_result_error("oom", "execution_error"); }
+    if (!new_content) { free(content); free(resolved); free(path); free(old_str); free(new_str);
+        return tool_result_error("oom", "execution_error"); }
 
     memcpy(new_content, content, prefix_len);
     memcpy(new_content + prefix_len, new_str, new_len);
@@ -94,13 +109,17 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
     free(content);
 
     f = fopen(resolved, "wb");
-    if (!f) { free(new_content); free(resolved); return tool_result_error("cannot write file", "execution_error"); }
+    if (!f) { free(new_content); free(resolved); free(path); free(old_str); free(new_str);
+        return tool_result_error("cannot write file", "execution_error"); }
 
     size_t written = fwrite(new_content, 1, prefix_len + new_len + suffix_len, f);
     fclose(f);
 
     free(new_content);
     free(resolved);
+    free(path);
+    free(old_str);
+    free(new_str);
 
     char *result = NULL;
     if (asprintf(&result, "Replaced 1 occurrence (%zu bytes written).", written) < 0)

@@ -36,7 +36,8 @@ static ToolResult *ingest_document_execute(Tool *self, const char *args_json)
 
     if (content_json && cJSON_IsString(content_json))
     {
-        content = cJSON_GetStringValue(content_json);
+        freed_content = str_dup(cJSON_GetStringValue(content_json));
+        content = freed_content;
     }
     else if (path_json && cJSON_IsString(path_json))
     {

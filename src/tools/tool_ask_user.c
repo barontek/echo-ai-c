@@ -27,7 +27,7 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'question' argument", "validation_error");
     }
 
-    const char *q = cJSON_GetStringValue(question);
+    char *q = str_dup(cJSON_GetStringValue(question));
     cJSON_Delete(args);
 
     char *answer = registry_invoke_ask_user(q);
@@ -41,11 +41,14 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
         if (len < 0)
         {
             free(answer);
+            free(q);
             return tool_result_create("(user did not respond)");
         }
         if (len > 0 && answer[len - 1] == '\n')
             answer[len - 1] = '\0';
     }
+
+    free(q);
 
     ToolResult *tr = tool_result_create(answer ? answer : "(user did not respond)");
     free(answer);

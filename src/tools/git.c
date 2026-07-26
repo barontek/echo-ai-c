@@ -173,10 +173,21 @@ static ToolResult *git_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'operation' argument", "validation_error");
     }
 
-    const char *op = cJSON_GetStringValue(op_json);
+    char *op = str_dup(cJSON_GetStringValue(op_json));
+
     cJSON *path_json = cJSON_GetObjectItem(args, "path");
     cJSON *msg_json = cJSON_GetObjectItem(args, "message");
     cJSON *count_json = cJSON_GetObjectItem(args, "count");
+
+    char *path_str = NULL;
+    if (path_json && cJSON_IsString(path_json))
+        path_str = str_dup(cJSON_GetStringValue(path_json));
+
+    char *msg_str = NULL;
+    if (msg_json && cJSON_IsString(msg_json))
+        msg_str = str_dup(cJSON_GetStringValue(msg_json));
+
+    int count_val = count_json && cJSON_IsNumber(count_json) ? count_json->valueint : 10;
     cJSON_Delete(args);
 
     char *result = NULL;
@@ -184,13 +195,13 @@ static ToolResult *git_execute(Tool *self, const char *args_json)
     if (strcmp(op, "status") == 0)
         result = git_status();
     else if (strcmp(op, "diff") == 0)
-        result = git_diff(path_json && cJSON_IsString(path_json) ? cJSON_GetStringValue(path_json) : NULL);
+        result = git_diff(path_str);
     else if (strcmp(op, "log") == 0)
-        result = git_log(count_json && cJSON_IsNumber(count_json) ? count_json->valueint : 10);
+        result = git_log(count_val);
     else if (strcmp(op, "add") == 0)
-        result = git_add(path_json && cJSON_IsString(path_json) ? cJSON_GetStringValue(path_json) : NULL);
+        result = git_add(path_str);
     else if (strcmp(op, "commit") == 0)
-        result = git_commit(msg_json && cJSON_IsString(msg_json) ? cJSON_GetStringValue(msg_json) : NULL);
+        result = git_commit(msg_str);
     else if (strcmp(op, "push") == 0)
         result = git_push();
     else if (strcmp(op, "pull") == 0)
@@ -200,7 +211,16 @@ static ToolResult *git_execute(Tool *self, const char *args_json)
     else if (strcmp(op, "stash") == 0)
         result = git_stash();
     else
+    {
+        free(op);
+        free(path_str);
+        free(msg_str);
         return tool_result_error("unknown git operation", "validation_error");
+    }
+
+    free(op);
+    free(path_str);
+    free(msg_str);
 
     if (!result)
         return tool_result_error("git operation failed or timed out", "execution_error");

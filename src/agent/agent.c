@@ -615,20 +615,24 @@ LLMResponse *agent_run(Agent *agent, const char *user_input)
             return NULL;
         }
 
+        int has_tool_calls = tool_calls_remaining(resp->tool_calls, resp->tool_calls_count);
+        ToolCall *exec_calls = resp->tool_calls;
+        int exec_count = resp->tool_calls_count;
+
         if (resp->content)
         {
             Message *assistant_msg = message_create("assistant", resp->content);
-            if (resp->tool_calls_count > 0)
+            if (has_tool_calls)
             {
                 message_set_tool_calls(assistant_msg, resp->tool_calls, resp->tool_calls_count);
-                resp->tool_calls = NULL;
+                resp->tool_calls = NULL; /* ownership transferred */
                 resp->tool_calls_count = 0;
             }
             agent_append_message(agent, assistant_msg);
             agent_save_session(agent);
         }
 
-        if (!tool_calls_remaining(resp->tool_calls, resp->tool_calls_count))
+        if (!has_tool_calls)
         {
             agent_save_session(agent);
             agent_generate_title(agent);
@@ -637,7 +641,7 @@ LLMResponse *agent_run(Agent *agent, const char *user_input)
             return resp;
         }
 
-        execute_tool_calls(agent, resp->tool_calls, resp->tool_calls_count);
+        execute_tool_calls(agent, exec_calls, exec_count);
         agent_save_session(agent);
         llm_response_free(resp);
     }
@@ -696,27 +700,31 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
 
         if (!resp) return NULL;
 
+        int has_tool_calls = tool_calls_remaining(resp->tool_calls, resp->tool_calls_count);
+        ToolCall *exec_calls = resp->tool_calls;
+        int exec_count = resp->tool_calls_count;
+
         if (resp->content)
         {
             Message *assistant_msg = message_create("assistant", resp->content);
-            if (resp->tool_calls_count > 0)
+            if (has_tool_calls)
             {
                 message_set_tool_calls(assistant_msg, resp->tool_calls, resp->tool_calls_count);
-                resp->tool_calls = NULL;
+                resp->tool_calls = NULL; /* ownership transferred */
                 resp->tool_calls_count = 0;
             }
             agent_append_message(agent, assistant_msg);
             agent_save_session(agent);
         }
 
-        if (!tool_calls_remaining(resp->tool_calls, resp->tool_calls_count))
+        if (!has_tool_calls)
         {
             agent_save_session(agent);
             agent_generate_title(agent);
             return resp;
         }
 
-        execute_tool_calls(agent, resp->tool_calls, resp->tool_calls_count);
+        execute_tool_calls(agent, exec_calls, exec_count);
         agent_save_session(agent);
         llm_response_free(resp);
     }

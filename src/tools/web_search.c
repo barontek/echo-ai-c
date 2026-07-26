@@ -26,7 +26,7 @@ static ToolResult *web_search_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'query' argument", "validation_error");
     }
 
-    const char *query = cJSON_GetStringValue(query_json);
+    char *query = str_dup(cJSON_GetStringValue(query_json));
 
     cJSON *num_json = cJSON_GetObjectItem(args, "num_results");
     int num_results = num_json && cJSON_IsNumber(num_json) ? num_json->valueint : 5;
@@ -34,10 +34,14 @@ static ToolResult *web_search_execute(Tool *self, const char *args_json)
 
     SearchProvider *sp = registry_get_search_provider();
     if (!sp)
+    {
+        free(query);
         return tool_result_create("Web search requires a search provider to be configured.\n"
                                   "Set [search] provider and api_key in config.conf");
+    }
 
     char *raw = sp->search(sp, query, num_results);
+    free(query);
     if (!raw)
         return tool_result_error("search returned no result", "execution_error");
 

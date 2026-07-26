@@ -27,12 +27,15 @@ static ToolResult *humanizer_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'content' argument", "validation_error");
     }
 
-    const char *text = cJSON_GetStringValue(content);
+    char *text = str_dup(cJSON_GetStringValue(content));
 
-    const char *style = "paragraph";
+    char *style = str_dup("paragraph");
     cJSON *style_item = cJSON_GetObjectItem(args, "style");
     if (style_item && cJSON_IsString(style_item))
-        style = cJSON_GetStringValue(style_item);
+    {
+        free(style);
+        style = str_dup(cJSON_GetStringValue(style_item));
+    }
 
     cJSON_Delete(args);
 
@@ -97,10 +100,16 @@ static ToolResult *humanizer_execute(Tool *self, const char *args_json)
     }
 
     if (!result)
+    {
+        free(text);
+        free(style);
         return tool_result_error("oom", "execution_error");
+    }
 
     ToolResult *tr = tool_result_create(result);
     free(result);
+    free(text);
+    free(style);
     return tr;
 }
 
