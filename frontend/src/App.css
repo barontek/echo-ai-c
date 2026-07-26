@@ -858,34 +858,11 @@ body {
   border-top: 1px solid var(--border);
 }
 
-.tool-call-args-display {
-  padding: 0;
-}
-
-.args-row {
-  padding: 6px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.args-row + .args-row {
-  border-top: 1px solid var(--border);
-}
-
-.args-key {
-  font-size: 10px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-weight: 600;
-}
-
-.args-value {
+.tool-call-description {
+  padding: 10px 12px;
   font-size: 13px;
   color: var(--text-primary);
-  font-family: var(--font-mono, monospace);
-  word-break: break-all;
+  line-height: 1.5;
 }
 
 .tool-call-args {

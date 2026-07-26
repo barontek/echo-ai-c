@@ -128,6 +128,52 @@ function formatLabel(name: string, args: Record<string, unknown>): string {
   }
 }
 
+function formatDescription(name: string, args: Record<string, unknown>): string | null {
+  switch (name) {
+    case 'bash': return args.command ? 'Ran command' : null;
+    case 'read_file': return args.file_path ? `Read ${String(args.file_path)}` : null;
+    case 'write_file': return args.file_path ? `Wrote to ${String(args.file_path)}` : null;
+    case 'replace_in_file': return args.path ? `Edited ${String(args.path)}` : null;
+    case 'glob': return args.pattern ? `Found files matching ${String(args.pattern)}` : null;
+    case 'grep': return args.pattern ? `Searched for "${String(args.pattern)}"` : null;
+    case 'list_dir': return `Listed ${String(args.path || 'current directory')}`;
+    case 'web_fetch': return args.url ? `Fetched ${String(args.url)}` : null;
+    case 'python_execute': return 'Executed Python code';
+    case 'semantic_search': return args.query ? `Searched memory for "${String(args.query)}"` : null;
+    case 'git': return args.operation ? `Ran git ${String(args.operation)}` : null;
+    case 'notes': {
+      const act = String(args.action || '');
+      const nm = args.name ? `"${String(args.name)}"` : '';
+      if (act === 'write') return nm ? `Saved note ${nm}` : 'Saved note';
+      if (act === 'read') return nm ? `Read note ${nm}` : 'Read note';
+      if (act === 'delete') return nm ? `Deleted note ${nm}` : 'Deleted note';
+      if (act === 'list') return 'Listed all notes';
+      return null;
+    }
+    case 'memory': {
+      const act = String(args.action || '');
+      const k = args.key ? String(args.key) : '';
+      const v = args.value ? String(args.value) : '';
+      if (act === 'set') return v ? `Stored ${k || 'value'} = "${v}"` : null;
+      if (act === 'get') return k ? `Retrieved ${k}` : null;
+      if (act === 'delete') return k ? `Deleted ${k}` : null;
+      if (act === 'list') return 'Listed all stored values';
+      return null;
+    }
+    case 'rest_api': {
+      const method = String(args.method || 'GET');
+      return args.url ? `Called ${method} ${String(args.url)}` : null;
+    }
+    case 'ask_user': return args.question ? `Asked: "${String(args.question)}"` : null;
+    case 'delegate': return `Delegated task to sub-agent`;
+    case 'humanizer': return `Formatted text as ${String(args.style || 'paragraph')}`;
+    case 'sqlite_query': return 'Ran SQL query';
+    case 'sqlite_schema': return 'Fetched database schema';
+    case 'ingest_document': return args.path ? `Indexed ${String(args.path)}` : 'Indexed text content for search';
+    default: return null;
+  }
+}
+
 function ResultContent({ content }: { content: string }) {
   const MAX_LINES = 20;
   const [showAll, setShowAll] = useState(false);
@@ -145,6 +191,10 @@ function ResultContent({ content }: { content: string }) {
       )}
     </>
   );
+}
+
+function CodeBlock({ code }: { code: string }) {
+  return <pre className="tool-call-args">{code}</pre>;
 }
 
 function ToolCallEntry({ tc }: { tc: ToolCall }) {
@@ -167,10 +217,18 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
 
   const isWebSearch = tc.name === 'web_search' || tc.name === 'deep_search';
   const label = formatLabel(tc.name, argsObj);
+  const description = formatDescription(tc.name, argsObj);
 
   let statusClass = 'tool-call-status tool-call-status--running';
   if (hasError) statusClass = 'tool-call-status tool-call-status--error';
   else if (!inProgress) statusClass = 'tool-call-status tool-call-status--success';
+
+  const showCode = tc.name === 'bash' ? String(argsObj.command || '')
+    : tc.name === 'python_execute' ? String(argsObj.code || '')
+    : tc.name === 'sqlite_query' ? String(argsObj.query || '')
+    : tc.name === 'write_file' ? String(argsObj.content || '')
+    : tc.name === 'humanizer' ? String(argsObj.content || '')
+    : '';
 
   return (
     <details className="tool-call-card">
@@ -182,16 +240,8 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
         </span>
       </summary>
       <div className="tool-call-body">
-        {Object.keys(argsObj).length > 0 && (
-          <div className="tool-call-args-display">
-            {Object.entries(argsObj).map(([key, value]) => (
-              <div key={key} className="args-row">
-                <span className="args-key">{key}</span>
-                <ArgsValue name={tc.name} argsKey={key} value={value} />
-              </div>
-            ))}
-          </div>
-        )}
+        {description && <div className="tool-call-description">{description}</div>}
+        {showCode && <CodeBlock code={showCode} />}
         {isWebSearch && hasSearchResults && (
           <div className="search-results">
             <div className="search-results-header">
@@ -234,17 +284,6 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
       </div>
     </details>
   );
-}
-
-function ArgsValue({ name, argsKey, value }: { name: string; argsKey: string; value: unknown }) {
-  const s = String(value);
-  const isCode = argsKey === 'code' || argsKey === 'content' || argsKey === 'command'
-    || (argsKey === 'task' && name === 'delegate')
-    || (argsKey === 'query' && name === 'sqlite_query');
-  if (isCode || s.length > 100 || s.includes('\n')) {
-    return <pre className="tool-call-args">{s}</pre>;
-  }
-  return <span className="args-value">{s}</span>;
 }
 
 export const MessageList = memo(function MessageList() {
