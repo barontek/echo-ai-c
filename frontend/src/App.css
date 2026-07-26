@@ -858,15 +858,44 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.tool-call-args-display {
+  padding: 0;
+}
+
+.args-row {
+  padding: 6px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.args-row + .args-row {
+  border-top: 1px solid var(--border);
+}
+
+.args-key {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+}
+
+.args-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+}
+
 .tool-call-args {
   font-size: 11px;
   color: var(--text-secondary);
   background: var(--bg-secondary);
-  padding: 10px 12px;
+  padding: 8px 12px;
   margin: 0;
   overflow: auto;
   max-height: 150px;
-  border-radius: 0 0 8px 8px;
 }
 
 .search-results {

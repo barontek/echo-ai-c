@@ -100,6 +100,34 @@ function ToolIcon({ name }: { name: string }) {
   }
 }
 
+function formatLabel(name: string, args: Record<string, unknown>): string {
+  switch (name) {
+    case 'web_search': return `Web Search: ${String(args.query || '')}`;
+    case 'deep_search': return `Deep Search: ${String(args.query || '')}`;
+    case 'web_fetch': return `Web Fetch: ${String(args.url || '')}`;
+    case 'bash': return `Bash: ${String(args.command || '')}`;
+    case 'read_file': return `Read: ${String(args.file_path || '')}`;
+    case 'write_file': return `Write: ${String(args.file_path || '')}`;
+    case 'replace_in_file': return `Edit: ${String(args.path || '')}`;
+    case 'glob': return `Glob: ${String(args.pattern || '')}`;
+    case 'grep': return `Grep: ${String(args.pattern || '')}`;
+    case 'list_dir': return `List: ${String(args.path || '.')}`;
+    case 'python_execute': return `Python Execute`;
+    case 'semantic_search': return `Search Memory: ${String(args.query || '')}`;
+    case 'git': return `Git: ${String(args.operation || '')}`;
+    case 'notes': return `Notes: ${String(args.action || '')} ${String(args.name || '')}`;
+    case 'memory': return `Memory: ${String(args.action || '')} ${String(args.key || '')}`;
+    case 'rest_api': return `REST ${String(args.method || 'GET')} ${String(args.url || '')}`;
+    case 'ask_user': return `Ask: ${String(args.question || '')}`;
+    case 'delegate': return `Delegate: ${String(args.task || '').slice(0, 60)}`;
+    case 'humanizer': return `Humanize: ${String(args.style || 'paragraph')}`;
+    case 'sqlite_query': return `SQL Query`;
+    case 'sqlite_schema': return `SQLite Schema`;
+    case 'ingest_document': return `Ingest: ${String(args.path || 'text content')}`;
+    default: return name.replace(/_/g, ' ');
+  }
+}
+
 function ResultContent({ content }: { content: string }) {
   const MAX_LINES = 20;
   const [showAll, setShowAll] = useState(false);
@@ -137,11 +165,8 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
     argsObj = tc.arguments as Record<string, unknown>;
   }
 
-  const argsStr = Object.keys(argsObj).length > 0 ? JSON.stringify(argsObj, null, 2) : '';
-  const query = typeof argsObj.query === 'string' ? argsObj.query : null;
-  const isWebSearch = tc.name === 'web_search';
-
-  const label = tc.name.replace(/_/g, ' ');
+  const isWebSearch = tc.name === 'web_search' || tc.name === 'deep_search';
+  const label = formatLabel(tc.name, argsObj);
 
   let statusClass = 'tool-call-status tool-call-status--running';
   if (hasError) statusClass = 'tool-call-status tool-call-status--error';
@@ -151,18 +176,23 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
     <details className="tool-call-card">
       <summary className="tool-call-summary">
         <ToolIcon name={tc.name} />
-        <span className="tool-call-label">
-          {isWebSearch && query ? `Web Search: ${query}` : label}
-        </span>
+        <span className="tool-call-label">{label}</span>
         <span className={statusClass}>
           {inProgress && <span className="tool-call-spinner" />}
         </span>
       </summary>
       <div className="tool-call-body">
-        {!isWebSearch && argsStr && (
-          <pre className="tool-call-args">{argsStr}</pre>
+        {Object.keys(argsObj).length > 0 && (
+          <div className="tool-call-args-display">
+            {Object.entries(argsObj).map(([key, value]) => (
+              <div key={key} className="args-row">
+                <span className="args-key">{key}</span>
+                <ArgsValue name={tc.name} argsKey={key} value={value} />
+              </div>
+            ))}
+          </div>
         )}
-        {hasSearchResults && (
+        {isWebSearch && hasSearchResults && (
           <div className="search-results">
             <div className="search-results-header">
               <span className="search-results-count">{searchResults.length} results</span>
@@ -181,7 +211,17 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
             ))}
           </div>
         )}
-        {hasResult && !hasSearchResults && (
+        {hasResult && !isWebSearch && (
+          <div className="tool-call-result">
+            {hasError && (
+              <div className="tool-call-error">{tc.result!.error}</div>
+            )}
+            {tc.result!.content && (
+              <ResultContent content={tc.result!.content} />
+            )}
+          </div>
+        )}
+        {hasResult && isWebSearch && !hasSearchResults && (
           <div className="tool-call-result">
             {hasError && (
               <div className="tool-call-error">{tc.result!.error}</div>
@@ -194,6 +234,17 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
       </div>
     </details>
   );
+}
+
+function ArgsValue({ name, argsKey, value }: { name: string; argsKey: string; value: unknown }) {
+  const s = String(value);
+  const isCode = argsKey === 'code' || argsKey === 'content' || argsKey === 'command'
+    || (argsKey === 'task' && name === 'delegate')
+    || (argsKey === 'query' && name === 'sqlite_query');
+  if (isCode || s.length > 100 || s.includes('\n')) {
+    return <pre className="tool-call-args">{s}</pre>;
+  }
+  return <span className="args-value">{s}</span>;
 }
 
 export const MessageList = memo(function MessageList() {
