@@ -20,6 +20,7 @@ export interface Message {
 export interface ToolCall {
   name: string;
   arguments: string | Record<string, unknown>;
+  tool_call_id?: string;
   result?: {
     content: string;
     error: string | null;
@@ -53,7 +54,8 @@ export interface StreamEvent {
     | 'approval_request'
     | 'title_updated'
     | 'history'
-    | 'tool_start';
+    | 'tool_start'
+    | 'tool_end';
   content?: string;
   has_tools?: boolean;
   tool_calls?: ToolCall[];
@@ -65,6 +67,9 @@ export interface StreamEvent {
   request_id?: string;
   tool_name?: string;
   arguments?: string;
+  tool_call_id?: string;
+  result_content?: string;
+  result_error?: string;
 }
 
 export interface ApiError {

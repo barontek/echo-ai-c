@@ -25,6 +25,9 @@ typedef struct {
 
 typedef void (*title_callback)(const char *session_id, const char *title, void *userdata);
 typedef void (*tool_start_callback)(const char *tool_name, const char *arguments, void *userdata);
+typedef void (*tool_end_callback)(const char *tool_name, const char *tool_call_id,
+                                  const char *result_content, const char *result_error,
+                                  void *userdata);
 
 typedef struct {
     LLMProvider *provider;
@@ -51,6 +54,8 @@ typedef struct {
     void *title_userdata;
     tool_start_callback on_tool_start;
     void *tool_start_userdata;
+    tool_end_callback on_tool_end;
+    void *tool_end_userdata;
 } Agent;
 
 Agent *agent_create(const AgentConfig *cfg);
@@ -67,6 +72,7 @@ void agent_cancel(Agent *agent);
 void agent_set_metrics(Agent *agent, Metrics *metrics);
 void agent_set_title_callback(Agent *agent, title_callback cb, void *userdata);
 void agent_set_tool_start_callback(Agent *agent, tool_start_callback cb, void *userdata);
+void agent_set_tool_end_callback(Agent *agent, tool_end_callback cb, void *userdata);
 void agent_set_callback_manager(Agent *agent, CallbackManager *mgr);
 
 #endif

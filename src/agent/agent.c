@@ -168,6 +168,11 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
         calls[i].result_content = str_dup(result->content ? result->content : "");
         calls[i].result_error = str_dup(result->error ? result->error : "");
 
+        if (agent->on_tool_end)
+            agent->on_tool_end(tname, calls[i].id,
+                               calls[i].result_content, calls[i].result_error,
+                               agent->tool_end_userdata);
+
         double elapsed = time_sec() - start;
 
         if (agent->metrics)
@@ -852,6 +857,12 @@ void agent_set_tool_start_callback(Agent *agent, tool_start_callback cb, void *u
 {
     agent->on_tool_start = cb;
     agent->tool_start_userdata = userdata;
+}
+
+void agent_set_tool_end_callback(Agent *agent, tool_end_callback cb, void *userdata)
+{
+    agent->on_tool_end = cb;
+    agent->tool_end_userdata = userdata;
 }
 
 void agent_set_callback_manager(Agent *agent, CallbackManager *mgr)

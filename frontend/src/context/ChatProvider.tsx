@@ -195,6 +195,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               });
               break;
 
+            case 'tool_end':
+              debugLog('tool_end', { name: data.tool_name });
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last?.role !== 'assistant' || !last.tool_calls) return prev;
+                return [
+                  ...prev.slice(0, -1),
+                  {
+                    ...last,
+                    tool_calls: last.tool_calls.map((tc) =>
+                      tc.name === data.tool_name && !tc.result
+                        ? {
+                            ...tc,
+                            result: {
+                              content: data.result_content || '',
+                              error: data.result_error || null,
+                            },
+                          }
+                        : tc
+                    ),
+                  },
+                ];
+              });
+              break;
+
             case 'content':
               if (data.session_id) {
                 if (activeSessionIdRef.current === null) {
