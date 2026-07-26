@@ -433,6 +433,10 @@ static void ws_add_message_to_json(cJSON *m, const Message *msg)
             cJSON_AddStringToObject(tc, "name", msg->tool_calls[j].name ? msg->tool_calls[j].name : "");
             cJSON_AddStringToObject(tc, "arguments",
                 msg->tool_calls[j].arguments ? msg->tool_calls[j].arguments : "{}");
+            if (msg->tool_calls[j].result_content && msg->tool_calls[j].result_content[0])
+                cJSON_AddStringToObject(tc, "result_content", msg->tool_calls[j].result_content);
+            if (msg->tool_calls[j].result_error && msg->tool_calls[j].result_error[0])
+                cJSON_AddStringToObject(tc, "result_error", msg->tool_calls[j].result_error);
             cJSON_AddItemToArray(tc_arr, tc);
         }
         cJSON_AddItemToObject(m, "tool_calls", tc_arr);
@@ -1126,6 +1130,10 @@ static void ws_send_done(WSClient *ws, const char *session_id, const char *title
                 cJSON *tc = cJSON_CreateObject();
                 cJSON_AddStringToObject(tc, "name", resp->tool_calls[i].name ? resp->tool_calls[i].name : "");
                 cJSON_AddStringToObject(tc, "arguments", resp->tool_calls[i].arguments ? resp->tool_calls[i].arguments : "{}");
+                if (resp->tool_calls[i].result_content && resp->tool_calls[i].result_content[0])
+                    cJSON_AddStringToObject(tc, "result_content", resp->tool_calls[i].result_content);
+                if (resp->tool_calls[i].result_error && resp->tool_calls[i].result_error[0])
+                    cJSON_AddStringToObject(tc, "result_error", resp->tool_calls[i].result_error);
                 cJSON_AddItemToArray(tc_arr, tc);
             }
             cJSON_AddItemToObject(done, "tool_calls", tc_arr);

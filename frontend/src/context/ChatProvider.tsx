@@ -260,16 +260,45 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 const lastAssistantIdx = prev.findLastIndex((m) => m.role === 'assistant');
                 if (lastAssistantIdx >= 0) {
                   const last = prev[lastAssistantIdx];
+
+                  const mergedToolCalls = (last.tool_calls || []).map((existing) => {
+                    const doneMatch =
+                      data.tool_calls?.find(
+                        (dtc: { name?: string }) => dtc.name === existing.name
+                      );
+                    if (doneMatch && (doneMatch as { result_content?: string; result_error?: string }).result_content) {
+                      return {
+                        ...existing,
+                        result: {
+                          content: (doneMatch as { result_content?: string; result_error?: string }).result_content || '',
+                          error: (doneMatch as { result_content?: string; result_error?: string }).result_error || null,
+                        },
+                      };
+                    }
+                    return existing;
+                  });
+
+                  const finalToolCalls =
+                    mergedToolCalls.length > 0
+                      ? mergedToolCalls
+                      : data.tool_calls?.map((tc) => ({
+                          name: tc.name || '',
+                          arguments: (typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments)),
+                          result: (tc as unknown as { result_content?: string; result_error?: string }).result_content
+                            ? {
+                                content: (tc as unknown as { result_content?: string }).result_content || '',
+                                error: (tc as unknown as { result_error?: string }).result_error || null,
+                              }
+                            : undefined,
+                        })) || last.tool_calls || [];
+
                   return [
                     ...prev.slice(0, lastAssistantIdx),
                     {
                       ...last,
                       content: data.content || last.content,
-                      has_tools: data.has_tools ?? last.has_tools,
-                      tool_calls:
-                        data.tool_calls && data.tool_calls.length > 0
-                          ? data.tool_calls
-                          : last.tool_calls,
+                      has_tools: data.has_tools ?? (finalToolCalls.length > 0),
+                      tool_calls: finalToolCalls,
                       timestamp: data.timestamp || last.timestamp,
                     },
                   ];

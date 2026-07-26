@@ -281,6 +281,16 @@ export const MessageList = memo(function MessageList() {
                               </div>
                             </details>
                           )}
+                          {msg.tool_calls && msg.tool_calls.length > 0 && (
+                            <div className="tool-calls-section">
+                              <div className="tool-calls-label">
+                                Using tool{msg.tool_calls.length > 1 ? 's' : ''}
+                              </div>
+                              {msg.tool_calls.map((tc, i) => (
+                                <ToolCallEntry key={i} tc={tc} />
+                              ))}
+                            </div>
+                          )}
                           {contentText && (
                             <div className="markdown-content">
                               <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -291,16 +301,6 @@ export const MessageList = memo(function MessageList() {
                         </>
                       );
                     })()}
-                    {msg.tool_calls && msg.tool_calls.length > 0 && (
-                      <div className="tool-calls-section">
-                        <div className="tool-calls-label">
-                          Using tool{msg.tool_calls.length > 1 ? 's' : ''}
-                        </div>
-                        {msg.tool_calls.map((tc, i) => (
-                          <ToolCallEntry key={i} tc={tc} />
-                        ))}
-                      </div>
-                    )}
                     {msg.error && <div className="message-error">{msg.error}</div>}
                     {isStreaming && idx === messages.length - 1 && (
                       <div className="typing-indicator">

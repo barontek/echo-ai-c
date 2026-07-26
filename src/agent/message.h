@@ -7,6 +7,8 @@ typedef struct {
     char *id;
     char *name;
     char *arguments;
+    char *result_content;
+    char *result_error;
 } ToolCall;
 
 typedef struct {

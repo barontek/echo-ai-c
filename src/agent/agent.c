@@ -163,6 +163,11 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
         if (!result)
             result = tool_result_error("tool returned no result", "execution_error");
 
+        free(calls[i].result_content);
+        free(calls[i].result_error);
+        calls[i].result_content = str_dup(result->content ? result->content : "");
+        calls[i].result_error = str_dup(result->error ? result->error : "");
+
         double elapsed = time_sec() - start;
 
         if (agent->metrics)
@@ -379,6 +384,8 @@ attach_tool_calls_to_resp(LLMResponse *resp, const Message *msgs, int count)
             resp->tool_calls[j].name = str_dup(msgs[i].tool_calls[j].name);
             resp->tool_calls[j].arguments = str_dup(msgs[i].tool_calls[j].arguments);
             resp->tool_calls[j].id = str_dup(msgs[i].tool_calls[j].id);
+            resp->tool_calls[j].result_content = str_dup(msgs[i].tool_calls[j].result_content);
+            resp->tool_calls[j].result_error = str_dup(msgs[i].tool_calls[j].result_error);
         }
         return;
     }

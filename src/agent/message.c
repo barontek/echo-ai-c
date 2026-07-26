@@ -153,6 +153,8 @@ void tool_call_free(ToolCall *call)
     free(call->id);
     free(call->name);
     free(call->arguments);
+    free(call->result_content);
+    free(call->result_error);
 }
 
 LLMResponse *llm_response_create(void)
