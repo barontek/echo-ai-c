@@ -22,6 +22,7 @@
 #include "../utils/logging.h"
 #include "../utils/string_utils.h"
 #include "../session/session_manager.h"
+#include "../session/memory.h"
 
 Agent *agent_create(const AgentConfig *cfg)
 {
@@ -63,22 +64,14 @@ void agent_destroy(Agent *agent)
     if (agent->provider) agent->provider->destroy(agent->provider);
     if (agent->messages)
     {
+        /* C15: route through message_clear so adding a Message field only
+         * requires updating one place. Also closes a real leak here — the
+         * inline loop in agent_free originally did NOT call tool_call_free on
+         * each message's tool_calls inner array, leaking every tool_call's
+         * strings + the tool_calls buffer itself whenever the agent owned
+         * tool-call-bearing messages. */
         for (int i = 0; i < agent->messages_count; i++)
-        {
-            free(agent->messages[i].role);
-            free(agent->messages[i].content);
-            free(agent->messages[i].id);
-            free(agent->messages[i].tool_call_id);
-            free(agent->messages[i].tool_name);
-            free(agent->messages[i].error_category);
-            free(agent->messages[i].thinking);
-            if (agent->messages[i].tool_calls)
-            {
-                for (int j = 0; j < agent->messages[i].tool_calls_count; j++)
-                    tool_call_free(&agent->messages[i].tool_calls[j]);
-                free(agent->messages[i].tool_calls);
-            }
-        }
+            message_clear(&agent->messages[i]);
         free(agent->messages);
     }
     free(agent->model);
@@ -102,7 +95,7 @@ static int agent_append_message(Agent *agent, Message *msg)
     return idx;
 }
 
-static void agent_save_session(Agent *agent);
+void agent_save_session(Agent *agent);
 static void agent_generate_title(Agent *agent);
 static void agent_perform_summarization(Agent *agent, int original_count);
 static int count_dropped_messages(Agent *agent, int *original);
@@ -228,18 +221,56 @@ static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
              "Current Working Directory: %s\nCurrent Time: %s\n",
              cwd, time_buf);
 
+    char *mem_buf = NULL;
+    if (agent->sm && agent->sm->db)
+    {
+        int mem_count = 0;
+        MemoryFact *memories = memory_list_all(agent->sm->db, &mem_count);
+        if (memories && mem_count > 0)
+        {
+            size_t mbsz = 512;
+            mem_buf = malloc(mbsz);
+            if (mem_buf)
+            {
+                size_t pos = 0;
+                int w = snprintf(mem_buf, mbsz, "\n\n[Persistent Memory]\n");
+                if (w > 0) pos = (size_t)w;
+                int limit = mem_count < 64 ? mem_count : 64;
+                for (int i = 0; i < limit; i++)
+                {
+                    size_t needed = pos + strlen(memories[i].key)
+                                    + strlen(memories[i].value) + 12;
+                    if (needed >= mbsz)
+                    {
+                        mbsz = needed + 256;
+                        char *newbuf = realloc(mem_buf, mbsz);
+                        if (!newbuf) { free(mem_buf); mem_buf = NULL; break; }
+                        mem_buf = newbuf;
+                    }
+                    w = snprintf(mem_buf + pos, mbsz - pos,
+                                 "%s = %s\n", memories[i].key, memories[i].value);
+                    if (w > 0) pos += (size_t)w;
+                }
+            }
+        }
+        memory_facts_free(memories, mem_count);
+    }
+
     const char *base = agent->system_prompt ? agent->system_prompt : "";
     if (agent->context_summary)
     {
-        if (asprintf(out, "%s%s\n\nPrevious conversation summary: %s",
-                     base, context_buf, agent->context_summary) < 0)
-            return -1;
+        if (asprintf(out, "%s%s%s\n\nPrevious conversation summary: %s",
+                     base, context_buf, mem_buf ? mem_buf : "",
+                     agent->context_summary) < 0)
+            { free(mem_buf); return -1; }
     }
     else
     {
-        if (asprintf(out, "%s%s", base, context_buf) < 0)
-            return -1;
+        if (asprintf(out, "%s%s%s",
+                     base, context_buf, mem_buf ? mem_buf : "") < 0)
+            { free(mem_buf); return -1; }
     }
+    free(mem_buf);
     if (out_len && *out) *out_len = strlen(*out);
     return 0;
 }
@@ -313,15 +344,7 @@ static LLMResponse *agent_llm_call(Agent *agent)
         if (dropped > 0) agent_perform_summarization(agent, dropped);
 
         for (int i = 0; i < agent->messages_count; i++)
-        {
-            free(agent->messages[i].role);
-            free(agent->messages[i].content);
-            free(agent->messages[i].id);
-            free(agent->messages[i].tool_call_id);
-            free(agent->messages[i].tool_name);
-            free(agent->messages[i].error_category);
-            free(agent->messages[i].thinking);
-        }
+            message_clear(&agent->messages[i]);
         free(agent->messages);
         agent->messages = ctx_msgs;
         agent->messages_count = current_messages;
@@ -663,6 +686,8 @@ LLMResponse *agent_run(Agent *agent, const char *user_input)
         if (resp->content)
         {
             Message *assistant_msg = message_create("assistant", resp->content);
+            if (assistant_msg && resp->thinking)
+                assistant_msg->thinking = str_dup(resp->thinking);
             if (has_tool_calls)
             {
                 message_set_tool_calls(assistant_msg, resp->tool_calls, resp->tool_calls_count);
@@ -749,6 +774,8 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
         if (resp->content)
         {
             Message *assistant_msg = message_create("assistant", resp->content);
+            if (assistant_msg && resp->thinking)
+                assistant_msg->thinking = str_dup(resp->thinking);
             if (has_tool_calls)
             {
                 message_set_tool_calls(assistant_msg, resp->tool_calls, resp->tool_calls_count);
@@ -780,7 +807,7 @@ void agent_set_session_manager(Agent *agent, SessionManager *sm)
     agent->sm = sm;
 }
 
-static void agent_save_session(Agent *agent)
+void agent_save_session(Agent *agent)
 {
     if (!agent->sm) return;
     Session *s = NULL;
@@ -790,6 +817,17 @@ static void agent_save_session(Agent *agent)
 
     if (!s)
     {
+        /* C7: the existing row vanished (operator deleted it, DB corruption
+         * refused per the C4+C5 fix, or session_id was supplied externally
+         * before being persisted). Silently reminting the id diverges from
+         * the client's view (c->active_session_id in the WS handler still
+         * holds the old id and will continue to relay it back). Log with
+         * context so the divergence is at least observable in the operator
+         * log; a true client↔server session_id reconciliation protocol is
+         * out of scope here. */
+        if (agent->session_id)
+            log_warn("agent_save_session: existing session not found, minting new id",
+                     "old_id", agent->session_id, NULL);
         s = session_create("Echo AI Session");
         if (!s) return;
         if (agent->session_id) free(agent->session_id);
@@ -824,8 +862,12 @@ static void agent_save_session(Agent *agent)
         }
     }
 
-    if (s->messages_count > 0)
-        session_manager_save_session(agent->sm, s);
+    /* C6: previously guarded by `if (s->messages_count > 0)`, which made
+     * `/clear` or any other path that reduces agent->messages_count to 0
+     * skip the save and leave the prior messages blob in the DB. After the
+     * fix we always persist `s` (including the empty state), matching
+     * session_manager_truncate_history's behavior of saving unconditionally. */
+    session_manager_save_session(agent->sm, s);
 
     session_free(s);
 }

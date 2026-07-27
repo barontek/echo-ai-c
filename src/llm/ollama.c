@@ -15,6 +15,8 @@ typedef struct {
     int keep_alive_secs;
 } OllamaCtx;
 
+static int call_seq = 1;
+
 typedef struct {
     char *data;
     size_t len;
@@ -318,7 +320,11 @@ static LLMResponse *ollama_parse_response(const char *raw)
 
                     resp->tool_calls[i].name = str_dup(name && cJSON_IsString(name)
                         ? cJSON_GetStringValue(name) : "");
-                    resp->tool_calls[i].id = str_dup("");
+                    {
+                        char id_buf[32];
+                        snprintf(id_buf, sizeof(id_buf), "call_%d", call_seq++);
+                        resp->tool_calls[i].id = str_dup(id_buf);
+                    }
 
                     if (args)
                     {

@@ -107,7 +107,7 @@ MemoryFact *memory_list_all(sqlite3 *db, int *count)
     if (!db) return NULL;
 
     sqlite3_stmt *stmt = NULL;
-    const char *sql = "SELECT key, value FROM user_memory ORDER BY key";
+    const char *sql = "SELECT key, value FROM user_memory ORDER BY updated_at DESC";
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) return NULL;
 

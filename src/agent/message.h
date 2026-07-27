@@ -42,6 +42,15 @@ int message_copy(Message *dst, const Message *src);
 void message_free(Message *msg);
 void message_free_all(Message *msgs, int count);
 
+/* C15: clear all owned fields of `msg` (role, content, id, tool_call_id,
+ * tool_name, error_category, thinking, and every owned entry of `tool_calls`)
+ * AND reset the field pointers / counts to NULL / 0. Does NOT free `msg`
+ * itself — the caller still owns the surrounding array (or single Message
+ * allocation). Use this for every per-message teardown path so that adding a
+ * field to Message only requires updating one place. After return, `*msg` is
+ * safe to discard or re-initialize. */
+void message_clear(Message *msg);
+
 ToolCall *tool_call_create(const char *id, const char *name, const char *arguments);
 void tool_call_free(ToolCall *call);
 

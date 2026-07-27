@@ -235,7 +235,6 @@ static void run_cli(Conf *conf)
     if (g_session_manager)
     {
         registry_set_session_manager(g_session_manager);
-        memory_table_init(g_session_manager->db);
         agent_set_session_manager(agent, g_session_manager);
         log_info("session manager ready", NULL);
     }
@@ -477,7 +476,6 @@ static void run_web(Conf *conf, const char *config_path)
     if (g_session_manager)
     {
         registry_set_session_manager(g_session_manager);
-        memory_table_init(g_session_manager->db);
         agent_set_session_manager(agent, g_session_manager);
     }
 

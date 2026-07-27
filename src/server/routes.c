@@ -265,7 +265,6 @@ static void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
             {
                 ctx->sm = sm;
                 registry_set_session_manager(sm);
-                memory_table_init(sm->db);
             }
         }
     }
@@ -404,7 +403,16 @@ static const char *session_id_from_path(const char *path)
 static int is_export_path(const char *sid)
 {
     size_t slen = strlen(sid);
-    return slen > 7 && strcmp(sid + slen - 7, "/export") == 0;
+    return (slen > 7 && strcmp(sid + slen - 7, "/export") == 0)
+        || (slen > 13 && strcmp(sid + slen - 13, "/debug-export") == 0);
+}
+
+static size_t export_suffix_len(const char *sid)
+{
+    size_t slen = strlen(sid);
+    if (slen > 13 && strcmp(sid + slen - 13, "/debug-export") == 0) return 13;
+    if (slen > 7 && strcmp(sid + slen - 7, "/export") == 0) return 7;
+    return 0;
 }
 
 static void ws_add_message_to_json(cJSON *m, const Message *msg)
@@ -463,7 +471,8 @@ static void handle_session_get(HTTPRequest *req, Client *client, ServerContext *
     {
         char *id_copy = str_dup(sid);
         if (!id_copy) { server_response_error(client, 500, "oom"); return; }
-        id_copy[strlen(id_copy) - 7] = '\0';
+        size_t slen = export_suffix_len(sid);
+        id_copy[strlen(id_copy) - slen] = '\0';
         char *exported = session_manager_export_session(ctx->sm, id_copy);
         free(id_copy);
         if (exported)
@@ -519,7 +528,13 @@ static void handle_session_delete(HTTPRequest *req, Client *client, ServerContex
         return;
     }
 
-    if (session_manager_delete_session(ctx->sm, sid) != 0)
+    int del_rc = session_manager_delete_session(ctx->sm, sid);
+    if (del_rc < 0)
+    {
+        server_response_error(client, 500, "delete failed");
+        return;
+    }
+    if (del_rc == 0)
     {
         server_response_error(client, 404, "session not found");
         return;
@@ -1354,21 +1369,7 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
                 {
                     int keep = idx < c->agent->messages_count ? idx : c->agent->messages_count - 1;
                     for (int i = keep; i < c->agent->messages_count; i++)
-                    {
-                        free(c->agent->messages[i].role);
-                        free(c->agent->messages[i].content);
-                        free(c->agent->messages[i].id);
-                        free(c->agent->messages[i].tool_call_id);
-                        free(c->agent->messages[i].tool_name);
-                        free(c->agent->messages[i].error_category);
-                        free(c->agent->messages[i].thinking);
-                        if (c->agent->messages[i].tool_calls)
-                        {
-                            for (int j = 0; j < c->agent->messages[i].tool_calls_count; j++)
-                                tool_call_free(&c->agent->messages[i].tool_calls[j]);
-                            free(c->agent->messages[i].tool_calls);
-                        }
-                    }
+                        message_clear(&c->agent->messages[i]);
                     c->agent->messages_count = keep;
                 }
 

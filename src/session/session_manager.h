@@ -47,6 +47,8 @@ int migration_change_password(SessionManager *sm, const char *new_password);
 
 #ifdef SESSION_MANAGER_TEST
 void session_manager_test_set_alloc_fail(int nth_allocation);
+void session_manager_test_set_bind_fail(int nth_bind);
+void session_manager_test_set_encrypt_fail(int nth_encrypt);
 #endif
 
 #endif

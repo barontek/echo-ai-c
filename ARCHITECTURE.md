@@ -178,15 +178,15 @@ When the LLM returns tool calls, they are processed:
 ```
 agent_sessions:
   id: TEXT PRIMARY KEY
-  title: encrypted JSON (nullable)
-  title_generation_attempted: BOOLEAN (default false)
-  created_at: DATETIME
-  messages: encrypted JSON (default [])
-  session_metadata: encrypted JSON (default {})
-  events: encrypted JSON (default [])
+  title_encrypted: BLOB (Fernet-encrypted title; nullable)
+  title_generation_attempted: INTEGER (default 0)
+  created_at: TEXT (ISO 8601 `YYYY-MM-DDTHH:MM:SS`, no timezone)
+  messages_encrypted: BLOB (Fernet-encrypted JSON array of messages)
+  metadata_encrypted: BLOB (Fernet-encrypted JSON object)
+  events_encrypted: BLOB (Fernet-encrypted JSON array of events)
 ```
 
-**Encryption**: Column-level transparent encryption. Uses Fernet (AES-128-CBC + HMAC-SHA256). Key derived from user password using Scrypt. Salt stored in `.db_salt` file next to the database.
+**Encryption**: Column-level transparent encryption. Uses Fernet (AES-128-CBC + HMAC-SHA256). Key derived from user password using Scrypt. Salt stored in a file literally named `salt` inside the data directory (`SALT_FILE = "salt"` in `src/session/session_manager.c`; same convention in `src/session/encryption.c`).
 
 **Session** (in-memory domain object):
 ```
@@ -198,26 +198,24 @@ agent_sessions:
 }
 ```
 
-**SessionManager** operations:
-- `create_session(id?, title?)` -> creates in DB and sets as current
-- `load_session(id)` -> loads from DB into current_session
-- `save_session(session?)` -> upserts to DB (with write lock)
+**SessionManager** operations (as implemented in `src/session/session_manager.{c,h}`):
+- `create_session(title)` -> creates in DB and returns the Session
+- `load_session(id)` -> loads from DB into a fresh Session (returns NULL on miss/error)
+- `save_session(session)` -> upserts to DB (acquires process-wide mutex)
 - `delete_session(id)` -> removes from DB
-- `list_sessions(limit, offset, search?)` -> paginated listing (search filters in-memory because titles are encrypted)
-- `add_message(role, content, **kwargs)` -> appends to current session messages and persists
-- `truncate_history(index)` -> removes all messages at and after index
-- `save_checkpoint(workflow_id, node, state)` -> saves workflow state to metadata.checkpoints
-- `purge_sessions(older_than_days?)` -> bulk delete old sessions
-- `purge_empty_sessions()` -> delete sessions with no user messages
-- `export_session(id)` -> exports to dict for JSON serialization
-- `import_session(data)` -> imports from dict (rejects duplicates)
-- `get_history()` -> returns current session messages
-- `log_event(event_type, data)` -> appends to session event log
-- `close()` -> final checkpoint + dispose connection
+- `list_sessions()` -> non-paginated listing of all sessions (titles decrypted in-memory)
+- `add_message(session_id, role, content, tool_call_id?, tool_name?)` -> load-modify-save cycle
+- `truncate_history(session_id, index)` -> removes all messages at and after index (load-modify-save)
+- `purge_sessions(older_than_days)` -> bulk delete old sessions
+- `export_session(id)` -> exports to JSON string
+- `import_session(json_str)` -> imports from JSON string (rejects duplicate ids)
+- `log_event(session_id, event_type, data)` -> appends to session event log (load-modify-save)
 
-**Migration system**: Methods to add columns/indexes to existing databases. Encrypts any plaintext titles from before encryption was added.
+Not implemented (documented previously but absent from the C port): `save_checkpoint`, `purge_empty_sessions`, `get_history`, `close`, paginated list, in-memory title search.
 
-**Concurrency**: A process-wide write lock serializes all writes. Multi-threaded SQLite with connection pooling.
+**Migration system**: No schema migration machinery. The DB schema is fixed at table-creation time by `init_db` (CREATE TABLE IF NOT EXISTS); adding or renaming a column requires dropping the DB and re-creating it. Plaintext-title re-encryption is not performed (titles are encrypted at first write only).
+
+**Concurrency**: A process-wide `pthread_mutex_t` serializes all writes against a single shared `sqlite3*` connection. No connection pooling.
 
 **SQLite settings**: journal_mode=DELETE, synchronous=FULL for maximum durability.
 
@@ -234,20 +232,20 @@ Key derivation: **Scrypt** (N=2^18, r=8, p=1, 32-byte key) -> base64-urlsafe -> 
 - v1 (legacy): 16 raw random bytes, Scrypt N=2^14
 - v2 (current): byte[0]=0x02, byte[1:17]=random bytes, Scrypt N=2^18
 
-**Password resolution order**:
-1. Environment variable `ECHO_DB_PASSWORD` (scraped from env after reading)
-2. Interactive prompt (only if TTY attached)
-3. If neither: exit with error
+**Password resolution order** (see `encryption_resolve_password` in `src/session/encryption.c`):
+1. Environment variable `ECHO_PASSWORD`
+2. Plaintext file at `~/.config/echo-ai/password`
+3. If neither: returns NULL; the caller (CLI/web bootstrap) is responsible for surfacing the error or prompting interactively
 
-**First-run detection**: True only if neither salt file nor database file exists. Used to gate password creation vs unlock.
+**First-run detection**: True only if the salt file is absent. (The DB file is not consulted, since a user may legitimately delete their DB while keeping their password/salt; in that case a fresh DB is created on the existing key.) Used to gate salt creation vs unlock.
 
 **Atomic salt creation**: Uses exclusive-create open flags to prevent race conditions between processes.
 
 **Change-password crash recovery**:
-- Uses SQLite PRAGMA user_version as atomic commit marker
-- Writes new salt to a temp file BEFORE touching DB
-- Re-encrypts all rows in a single transaction with user_version=1
-- On crash recovery at startup: reads user_version and temp salt file existence to decide recovery action
+- Uses a `.changing_pwd` marker file (not SQLite PRAGMA user_version) as the crash signal
+- Writes the old salt to `salt.old` BEFORE touching DB
+- Re-encrypts all rows one at a time (no single-transaction guarantee; see `migration_change_password` in `src/session/migration.c`)
+- On crash recovery at startup: `migration_check_and_recover` restores `salt.old` -> `salt` and removes the marker file; rows re-encrypted before the crash remain under the new key and may become unreadable
 - Full crash-coverage table documented in the code
 
 **Memory scrubbing**: Best-effort zeroing of password string after use. Environment variable removed after reading.

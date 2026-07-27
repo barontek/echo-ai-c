@@ -11,6 +11,7 @@ add_test(NAME test_string COMMAND test_string)
 
 add_executable(test_message
     ../src/agent/message.c
+    ../src/session/session.c
     ../src/utils/string_utils.c
     ../src/utils/json.c
     test_message.c
@@ -53,6 +54,7 @@ add_executable(test_session_manager
     ../src/session/session.c
     ../src/session/encryption.c
     ../src/session/migration.c
+    ../src/session/memory.c
     ../src/agent/message.c
     ../src/tools/tool.c
     ../src/utils/string_utils.c
@@ -113,3 +115,23 @@ add_executable(test_ollama_tool_calls test_ollama_tool_calls.c)
 target_include_directories(test_ollama_tool_calls PRIVATE ${CHECK_INCLUDE_DIRS} ${CJSON_INCLUDE_DIRS} ../src)
 target_link_libraries(test_ollama_tool_calls PRIVATE ${CHECK_LIBRARIES} ${CJSON_LIBRARIES})
 add_test(NAME test_ollama_tool_calls COMMAND test_ollama_tool_calls)
+
+add_executable(test_agent_save
+    ../src/agent/agent.c
+    ../src/agent/message.c
+    ../src/session/session_manager.c
+    ../src/session/session.c
+    ../src/session/encryption.c
+    ../src/session/migration.c
+    ../src/session/memory.c
+    ../src/utils/string_utils.c
+    ../src/utils/logging.c
+    ../src/tools/tool.c
+    test_agent_save.c
+)
+target_compile_definitions(test_agent_save PRIVATE AGENT_TEST=1)
+target_include_directories(test_agent_save PRIVATE
+    ${CHECK_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIRS} ${CJSON_INCLUDE_DIRS} ../src)
+target_link_libraries(test_agent_save PRIVATE
+    ${CHECK_LIBRARIES} ${SQLITE3_LIBRARIES} ${OPENSSL_LIBRARIES} ${CJSON_LIBRARIES})
+add_test(NAME test_agent_save COMMAND test_agent_save)

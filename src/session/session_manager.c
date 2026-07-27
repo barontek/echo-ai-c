@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
@@ -10,6 +11,7 @@
 #include <sqlite3.h>
 
 #include "session_manager.h"
+#include "memory.h"
 #include "migration.h"
 #include "../utils/logging.h"
 #include "../utils/string_utils.h"
@@ -32,6 +34,76 @@ static char *sm_test_strdup(const char *s)
 }
 
 #define str_dup sm_test_strdup
+
+/* Fault-injection knob for B1: lets a test force the Nth
+ * sqlite3_bind_* call (across bind_text/bind_int/bind_blob/bind_null in any
+ * session_manager function) to return SQLITE_NOMEM so we can prove the
+ * save path actually checks binds instead of trusting them. Production
+ * builds never see this; only translation units compiled with
+ * -DSESSION_MANAGER_TEST=1 do. */
+static int sm_bind_counter = 0;
+static int sm_bind_fail_at = -1;
+
+void session_manager_test_set_bind_fail(int nth_bind)
+{
+    sm_bind_counter = 0;
+    sm_bind_fail_at = nth_bind;
+}
+
+static int sm_test_bind_text(sqlite3_stmt *s, int idx, const char *t, int n,
+                             void (*del)(void *))
+{
+    sm_bind_counter++;
+    if (sm_bind_counter == sm_bind_fail_at) return SQLITE_NOMEM;
+    return sqlite3_bind_text(s, idx, t, n, del);
+}
+static int sm_test_bind_int(sqlite3_stmt *s, int idx, int v)
+{
+    sm_bind_counter++;
+    if (sm_bind_counter == sm_bind_fail_at) return SQLITE_NOMEM;
+    return sqlite3_bind_int(s, idx, v);
+}
+static int sm_test_bind_blob(sqlite3_stmt *s, int idx, const void *p, int n,
+                             void (*del)(void *))
+{
+    sm_bind_counter++;
+    if (sm_bind_counter == sm_bind_fail_at) return SQLITE_NOMEM;
+    return sqlite3_bind_blob(s, idx, p, n, del);
+}
+static int sm_test_bind_null(sqlite3_stmt *s, int idx)
+{
+    sm_bind_counter++;
+    if (sm_bind_counter == sm_bind_fail_at) return SQLITE_NOMEM;
+    return sqlite3_bind_null(s, idx);
+}
+
+/* Fault-injection knob for C13: lets a test force the Nth
+ * encryption_encrypt call (across all session_manager functions) to return
+ * NULL, so we can prove the save path actually checks encrypt failures
+ * instead of letting `bind_null` silently overwrite the existing blob. */
+static int sm_enc_counter = 0;
+static int sm_enc_fail_at = -1;
+
+void session_manager_test_set_encrypt_fail(int nth_encrypt)
+{
+    sm_enc_counter = 0;
+    sm_enc_fail_at = nth_encrypt;
+}
+
+static unsigned char *sm_test_encrypt(const EncryptionKey *key,
+                                      const unsigned char *pt, int pt_len,
+                                      int *out_len)
+{
+    sm_enc_counter++;
+    if (sm_enc_counter == sm_enc_fail_at) return NULL;
+    return encryption_encrypt(key, pt, pt_len, out_len);
+}
+
+#define sqlite3_bind_text  sm_test_bind_text
+#define sqlite3_bind_int   sm_test_bind_int
+#define sqlite3_bind_blob  sm_test_bind_blob
+#define sqlite3_bind_null  sm_test_bind_null
+#define encryption_encrypt sm_test_encrypt
 #endif
 
 #define SALT_FILE "salt"
@@ -59,7 +131,7 @@ static int init_db(sqlite3 *db)
 {
     const char *sql = "CREATE TABLE IF NOT EXISTS agent_sessions ("
                       "id TEXT PRIMARY KEY,"
-                      "title TEXT,"
+                      "title_encrypted BLOB,"
                       "title_generation_attempted INTEGER DEFAULT 0,"
                       "created_at TEXT,"
                       "messages_encrypted BLOB,"
@@ -178,6 +250,17 @@ SessionManager *session_manager_create(const char *data_dir, const char *passwor
         return NULL;
     }
 
+    /* user_memory is a sibling table in the same DB; create it here so every
+     * consumer of a SessionManager (build_system_prompt -> memory_list_all,
+     * the memory tool, REST/WS init paths) has the same existence guarantee as
+     * agent_sessions, regardless of which entrypoint constructed the SM. */
+    if (memory_table_init(sm->db) != 0)
+    {
+        log_error("failed to initialize user_memory table", NULL);
+        session_manager_free(sm);
+        return NULL;
+    }
+
     log_info("session manager initialized", "data_dir", sm->data_dir, NULL);
     return sm;
 }
@@ -211,11 +294,15 @@ Session *session_manager_create_session(SessionManager *sm, const char *title)
 Session *session_manager_load_session(SessionManager *sm, const char *id)
 {
     if (!sm || !id || !sm->key_initialized || !sm->db) return NULL;
+    /* B10: an empty id can never match a row (PRIMARY KEY), and a NULL id
+     * would silently bind SQL NULL (which never compares equal in WHERE).
+     * Refuse up-front instead. */
+    if (!id[0]) return NULL;
 
     pthread_mutex_lock(&sm->lock);
 
     sqlite3_stmt *stmt = NULL;
-    const char *sql = "SELECT id, title, title_generation_attempted, created_at, "
+    const char *sql = "SELECT id, title_encrypted, title_generation_attempted, created_at, "
                       "messages_encrypted, metadata_encrypted, events_encrypted "
                       "FROM agent_sessions WHERE id = ?";
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
@@ -230,16 +317,23 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW)
     {
+        /* Distinguish "not found" (SQLITE_DONE) from a real DB error so the
+         * operator can correlate the NULL return. The caller still gets NULL
+         * either way; full behavioral distinguishability would require an
+         * out-status parameter and is intentionally out of scope here. */
+        if (rc != SQLITE_DONE)
+            log_error("sqlite step load", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
         pthread_mutex_unlock(&sm->lock);
         return NULL;
     }
 
     Session *s = calloc(1, sizeof(Session));
-    if (!s) { sqlite3_finalize(stmt); pthread_mutex_unlock(&sm->lock); return NULL; }
+    if (!s) { log_error("calloc Session in load", NULL); sqlite3_finalize(stmt); pthread_mutex_unlock(&sm->lock); return NULL; }
 
     const char *db_id = (const char *)sqlite3_column_text(stmt, 0);
-    const char *db_title = (const char *)sqlite3_column_text(stmt, 1);
+    const void *title_blob = sqlite3_column_blob(stmt, 1);
+    int title_len = sqlite3_column_bytes(stmt, 1);
     int db_tga = sqlite3_column_int(stmt, 2);
     const char *db_created = (const char *)sqlite3_column_text(stmt, 3);
     const void *msgs_blob = sqlite3_column_blob(stmt, 4);
@@ -250,11 +344,38 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
     int events_len = sqlite3_column_bytes(stmt, 6);
 
     s->id = str_dup(db_id ? db_id : "");
-    s->title = str_dup(db_title ? db_title : "");
+    s->title = str_dup("");
     s->title_generation_attempted = db_tga;
     s->created_at = str_dup(db_created ? db_created : "");
     s->events = cJSON_CreateArray();
     s->metadata = cJSON_CreateObject();
+
+    /* C4+C5: track per-blob decrypt/parse failures. If a non-empty blob was
+     * present but failed to decrypt OR failed to JSON-parse, the session is
+     * not loadable in a consistent state. Returning NULL preserves the
+     * original DB row (so a future agent_save_session with a freshly-minted
+     * session_id does NOT overwrite the corrupt blob with empty defaults),
+     * and the per-blob log lines let the operator distinguish corruption from
+     * "missing session". Previously the silent empty-defaults leave combined
+     * with the next save would irrecoverably destroy the original. */
+    int partial_fail = 0;
+
+    if (title_blob && title_len > 0 && sm->key_initialized)
+    {
+        int dec_len = 0;
+        unsigned char *dec = encryption_decrypt(&sm->enc_key, title_blob, title_len, &dec_len);
+        if (dec)
+        {
+            free(s->title);
+            s->title = str_dup((const char *)dec);
+            free(dec);
+        }
+        else
+        {
+            log_error("load_session: title could not be decrypted", "id", id, NULL);
+            partial_fail = 1;
+        }
+    }
 
     if (msgs_blob && msgs_len > 0 && sm->key_initialized)
     {
@@ -262,8 +383,19 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
         unsigned char *dec = encryption_decrypt(&sm->enc_key, msgs_blob, msgs_len, &dec_len);
         if (dec)
         {
-            session_deserialize_messages(s, (const char *)dec);
+            int rc_d = session_deserialize_messages(s, (const char *)dec);
+            if (rc_d != 0)
+            {
+                log_error("load_session: messages decrypted but failed to parse",
+                          "id", id, NULL);
+                partial_fail = 1;
+            }
             free(dec);
+        }
+        else
+        {
+            log_error("load_session: messages could not be decrypted", "id", id, NULL);
+            partial_fail = 1;
         }
     }
 
@@ -273,8 +405,19 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
         unsigned char *dec = encryption_decrypt(&sm->enc_key, meta_blob, meta_len, &dec_len);
         if (dec)
         {
-            session_deserialize_metadata(s, (const char *)dec);
+            int rc_d = session_deserialize_metadata(s, (const char *)dec);
+            if (rc_d != 0)
+            {
+                log_error("load_session: metadata decrypted but failed to parse",
+                          "id", id, NULL);
+                partial_fail = 1;
+            }
             free(dec);
+        }
+        else
+        {
+            log_error("load_session: metadata could not be decrypted", "id", id, NULL);
+            partial_fail = 1;
         }
     }
 
@@ -284,23 +427,97 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
         unsigned char *dec = encryption_decrypt(&sm->enc_key, events_blob, events_len, &dec_len);
         if (dec)
         {
-            session_deserialize_events(s, (const char *)dec);
+            int rc_d = session_deserialize_events(s, (const char *)dec);
+            if (rc_d != 0)
+            {
+                log_error("load_session: events decrypted but failed to parse",
+                          "id", id, NULL);
+                partial_fail = 1;
+            }
             free(dec);
+        }
+        else
+        {
+            log_error("load_session: events could not be decrypted", "id", id, NULL);
+            partial_fail = 1;
         }
     }
 
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&sm->lock);
+
+    if (partial_fail)
+    {
+        /* Do not return a partially-loaded session; the caller would save it
+         * back over the original corrupt row, destroying possibly-recoverable
+         * data. The corrupt row is preserved in the DB. */
+        session_free(s);
+        return NULL;
+    }
+
     return s;
 }
 
-int session_manager_save_session(SessionManager *sm, Session *session)
-{
-    if (!sm || !session || !sm->key_initialized || !sm->db) return -1;
+/* Mode for save_session_core. SM_UPSERT is the historical "save-or-overwrite"
+ * behavior used by every caller that has already loaded-or-created the row.
+ * SM_INSERT_IF_ABSENT is used by import_session, where the "reject duplicates"
+ * promise must be enforced atomically. With SM_INSERT_IF_ABSENT, the SQL is
+ * `INSERT INTO ... ON CONFLICT(id) DO NOTHING` so the PRIMARY KEY uniqueness
+ * check is the test-and-insert; a 0-changes result means the id already
+ * existed and the caller treats it as a duplicate. This eliminates the
+ * pre-import `load_session` precheck that was a TOCTOU race (it acquired and
+ * released the mutex for the check, then again for the save, with another
+ * writer free to insert the same id in between). */
+enum save_core_mode { SM_UPSERT, SM_INSERT_IF_ABSENT };
 
+/* Shared core of session_manager_save_session and the import path.
+ * Returns:
+ *   SM_UPSERT mode:       0 on success, -1 on any error.
+ *   SM_INSERT_IF_ABSENT:  1 if a new row was inserted,
+ *                         0 if the id already existed (no row written),
+ *                        -1 on any SQLite/serialize/encrypt error.
+ *
+ * Caller guarantees: sm non-NULL, sm->key_initialized != 0, sm->db non-NULL,
+ * session non-NULL, session->id non-NULL and non-empty. */
+static int save_session_core(SessionManager *sm, Session *session,
+                              enum save_core_mode mode)
+{
     char *messages_json = session_serialize_messages(session);
     char *metadata_json = session_serialize_metadata(session);
     char *events_json = session_serialize_events(session);
+
+    /* C13: previously each `encryption_encrypt` returning NULL fell through
+     * to the `else sqlite3_bind_null(...)` branch, the row was written with
+     * SQL NULL, sqlite3_step returned SQLITE_DONE, and save_session reported
+     * 0 (success). On the next load the column was undecryptable NULL →
+     * load_session returned NULL (per the C5 fix) and the operator saw
+     * "session not found" while the prior (recoverable) blob had been
+     * overwritten. Irreversible silent permanent data loss. Now we detect
+     * the failure here and refuse the save entirely: log with context and
+     * return -1 BEFORE touching the DB, so the previous row is preserved.
+     *
+     * Also detect serialize-OOM that masquerades as "nothing to write": for
+     * messages we always want at least "[]" (count==0 is legitimate), so a
+     * NULL messages_json is OOM. For metadata/events NULL json is
+     * legitimate ONLY when the corresponding session field is NULL
+     * ("no metadata yet"); if the field is non-NULL but serialize returned
+     * NULL, treat as OOM and abort. */
+    int abort_save = 0;
+    if (!messages_json)
+    {
+        log_error("save_session: serialize messages failed (OOM)", NULL);
+        abort_save = 1;
+    }
+    if (session->metadata && !metadata_json)
+    {
+        log_error("save_session: serialize metadata failed (OOM)", NULL);
+        abort_save = 1;
+    }
+    if (session->events && !events_json)
+    {
+        log_error("save_session: serialize events failed (OOM)", NULL);
+        abort_save = 1;
+    }
 
     unsigned char *msgs_enc = NULL;
     int msgs_enc_len = 0;
@@ -308,34 +525,110 @@ int session_manager_save_session(SessionManager *sm, Session *session)
     int meta_enc_len = 0;
     unsigned char *events_enc = NULL;
     int events_enc_len = 0;
+    unsigned char *title_enc = NULL;
+    int title_enc_len = 0;
 
-    if (messages_json)
+    if (!abort_save && session->title && session->title[0])
     {
+        title_enc = encryption_encrypt(&sm->enc_key,
+                                       (const unsigned char *)session->title,
+                                       (int)strlen(session->title), &title_enc_len);
+        if (!title_enc)
+        {
+            log_error("save_session: encryption_encrypt failed for title", NULL);
+            abort_save = 1;
+        }
+    }
+
+    if (!abort_save && messages_json)
+    {
+        /* C12: `strlen(messages_json)` is the plaintext byte length ONLY
+         * because cJSON's `cJSON_PrintUnformatted` never emits embedded
+         * NUL bytes — it escapes any byte that would via `\u00XX`. This is
+         * an undocumented dependency: the save path here relies on the
+         * serializer's output contract. If you change the serializer to
+         * raw bytes (e.g. a future Message-attached binary field), you MUST
+         * switch to a length-prefix + explicit byte count — strlen would
+         * silently truncate at the first NUL and save corrupt ciphertext. */
         msgs_enc = encryption_encrypt(&sm->enc_key,
                                        (const unsigned char *)messages_json,
                                        strlen(messages_json), &msgs_enc_len);
+        if (!msgs_enc)
+        {
+            log_error("save_session: encryption_encrypt failed for messages", NULL);
+            abort_save = 1;
+        }
     }
 
-    if (metadata_json)
+    if (!abort_save && metadata_json)
     {
+        /* C12: same strlen assumption as messages — metadata_json is
+         * cJSON_PrintUnformatted output, NUL-free by cJSON's contract. */
         meta_enc = encryption_encrypt(&sm->enc_key,
                                        (const unsigned char *)metadata_json,
                                        strlen(metadata_json), &meta_enc_len);
+        if (!meta_enc)
+        {
+            log_error("save_session: encryption_encrypt failed for metadata", NULL);
+            abort_save = 1;
+        }
     }
 
-    if (events_json)
+    if (!abort_save && events_json)
     {
+        /* C12: same strlen assumption — events_json is cJSON output. */
         events_enc = encryption_encrypt(&sm->enc_key,
                                          (const unsigned char *)events_json,
                                          strlen(events_json), &events_enc_len);
+        if (!events_enc)
+        {
+            log_error("save_session: encryption_encrypt failed for events", NULL);
+            abort_save = 1;
+        }
     }
+
+    if (abort_save)
+    {
+        free(messages_json);
+        free(metadata_json);
+        free(events_json);
+        free(msgs_enc);
+        free(meta_enc);
+        free(events_enc);
+        free(title_enc);
+        return -1;
+    }
+
+    /* C8: ON CONFLICT(id) DO NOTHING makes the existence check atomic with
+     * the insert. Under SM_UPSERT we use DO UPDATE SET all-the-columns so the
+     * row is overwritten; under SM_INSERT_IF_ABSENT we use DO NOTHING and
+     * inspect sqlite3_changes(). Both variants run as a single statement
+     * while we hold sm->lock, so no other thread can insert the same id
+     * between the test and the write. */
+    const char *sql_upsert =
+        "INSERT INTO agent_sessions "
+        "(id, title_encrypted, title_generation_attempted, created_at, "
+        "messages_encrypted, metadata_encrypted, events_encrypted) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "title_encrypted=excluded.title_encrypted, "
+        "title_generation_attempted=excluded.title_generation_attempted, "
+        "created_at=excluded.created_at, "
+        "messages_encrypted=excluded.messages_encrypted, "
+        "metadata_encrypted=excluded.metadata_encrypted, "
+        "events_encrypted=excluded.events_encrypted";
+    const char *sql_insert_if_absent =
+        "INSERT INTO agent_sessions "
+        "(id, title_encrypted, title_generation_attempted, created_at, "
+        "messages_encrypted, metadata_encrypted, events_encrypted) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO NOTHING";
+
+    const char *sql = (mode == SM_INSERT_IF_ABSENT) ? sql_insert_if_absent
+                                                   : sql_upsert;
 
     pthread_mutex_lock(&sm->lock);
 
-    const char *sql = "INSERT OR REPLACE INTO agent_sessions "
-                      "(id, title, title_generation_attempted, created_at, "
-                      "messages_encrypted, metadata_encrypted, events_encrypted) "
-                      "VALUES (?, ?, ?, ?, ?, ?, ?)";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
     {
@@ -347,25 +640,57 @@ int session_manager_save_session(SessionManager *sm, Session *session)
         free(msgs_enc);
         free(meta_enc);
         free(events_enc);
+        free(title_enc);
         return -1;
     }
 
-    sqlite3_bind_text(stmt, 1, session->id, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, session->title, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 3, session->title_generation_attempted);
-    sqlite3_bind_text(stmt, 4, session->created_at, -1, SQLITE_TRANSIENT);
-    if (msgs_enc && msgs_enc_len > 0)
-        sqlite3_bind_blob(stmt, 5, msgs_enc, msgs_enc_len, SQLITE_TRANSIENT);
-    else
-        sqlite3_bind_null(stmt, 5);
-    if (meta_enc && meta_enc_len > 0)
-        sqlite3_bind_blob(stmt, 6, meta_enc, meta_enc_len, SQLITE_TRANSIENT);
-    else
-        sqlite3_bind_null(stmt, 6);
-    if (events_enc && events_enc_len > 0)
-        sqlite3_bind_blob(stmt, 7, events_enc, events_enc_len, SQLITE_TRANSIENT);
-    else
-        sqlite3_bind_null(stmt, 7);
+    int bind_rc = sqlite3_bind_text(stmt, 1, session->id, -1, SQLITE_TRANSIENT);
+    if (bind_rc == SQLITE_OK)
+    {
+        if (title_enc && title_enc_len > 0)
+            bind_rc = sqlite3_bind_blob(stmt, 2, title_enc, title_enc_len, SQLITE_TRANSIENT);
+        else
+            bind_rc = sqlite3_bind_null(stmt, 2);
+    }
+    if (bind_rc == SQLITE_OK)
+        bind_rc = sqlite3_bind_int(stmt, 3, session->title_generation_attempted);
+    if (bind_rc == SQLITE_OK)
+        bind_rc = sqlite3_bind_text(stmt, 4, session->created_at, -1, SQLITE_TRANSIENT);
+    if (bind_rc == SQLITE_OK)
+    {
+        if (msgs_enc && msgs_enc_len > 0)
+            bind_rc = sqlite3_bind_blob(stmt, 5, msgs_enc, msgs_enc_len, SQLITE_TRANSIENT);
+        else
+            bind_rc = sqlite3_bind_null(stmt, 5);
+    }
+    if (bind_rc == SQLITE_OK)
+    {
+        if (meta_enc && meta_enc_len > 0)
+            bind_rc = sqlite3_bind_blob(stmt, 6, meta_enc, meta_enc_len, SQLITE_TRANSIENT);
+        else
+            bind_rc = sqlite3_bind_null(stmt, 6);
+    }
+    if (bind_rc == SQLITE_OK)
+    {
+        if (events_enc && events_enc_len > 0)
+            bind_rc = sqlite3_bind_blob(stmt, 7, events_enc, events_enc_len, SQLITE_TRANSIENT);
+        else
+            bind_rc = sqlite3_bind_null(stmt, 7);
+    }
+    if (bind_rc != SQLITE_OK)
+    {
+        log_error("sqlite bind save", "err", sqlite3_errmsg(sm->db), NULL);
+        sqlite3_finalize(stmt);
+        pthread_mutex_unlock(&sm->lock);
+        free(messages_json);
+        free(metadata_json);
+        free(events_json);
+        free(msgs_enc);
+        free(meta_enc);
+        free(events_enc);
+        free(title_enc);
+        return -1;
+    }
 
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE)
@@ -379,9 +704,11 @@ int session_manager_save_session(SessionManager *sm, Session *session)
         free(msgs_enc);
         free(meta_enc);
         free(events_enc);
+        free(title_enc);
         return -1;
     }
 
+    int changes = sqlite3_changes(sm->db);
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&sm->lock);
 
@@ -391,9 +718,32 @@ int session_manager_save_session(SessionManager *sm, Session *session)
     free(msgs_enc);
     free(meta_enc);
     free(events_enc);
+    free(title_enc);
+
+    if (mode == SM_INSERT_IF_ABSENT)
+        return changes > 0 ? 1 : 0;
     return 0;
 }
 
+int session_manager_save_session(SessionManager *sm, Session *session)
+{
+    if (!sm || !session || !sm->key_initialized || !sm->db) return -1;
+    /* B10: a NULL session->id would silently bind SQL NULL, breaking the
+     * PRIMARY KEY constraint and producing a generic step-save error with no
+     * useful context. Refuse up-front instead. */
+    if (!session->id || !session->id[0]) return -1;
+    return save_session_core(sm, session, SM_UPSERT);
+}
+
+/* Delete the session identified by `id`.
+ * Returns:  1 if a row was deleted
+ *           0 if no row matched (caller should treat as 404)
+ *          -1 on SQLite error (prepare/bind/step failure)
+ *
+ * Note: does NOT require sm->key_initialized, because delete does not need
+ * to decrypt. This is the deliberate asymmetry vs load/save/add_message, all
+ * of which need the key. Caller passes a non-empty NUL-terminated id; sm and
+ * sm->db must be non-NULL. */
 int session_manager_delete_session(SessionManager *sm, const char *id)
 {
     if (!sm || !id || !sm->db) return -1;
@@ -409,22 +759,36 @@ int session_manager_delete_session(SessionManager *sm, const char *id)
         return -1;
     }
 
-    sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT);
+    int bind_rc = sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT);
+    if (bind_rc != SQLITE_OK)
+    {
+        log_error("sqlite bind delete", "err", sqlite3_errmsg(sm->db), NULL);
+        sqlite3_finalize(stmt);
+        pthread_mutex_unlock(&sm->lock);
+        return -1;
+    }
+
     int rc = sqlite3_step(stmt);
+    int changed = sqlite3_changes(sm->db);
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&sm->lock);
 
-    return (rc == SQLITE_DONE) ? 0 : -1;
+    if (rc != SQLITE_DONE)
+    {
+        log_error("sqlite step delete", "err", sqlite3_errmsg(sm->db), NULL);
+        return -1;
+    }
+    return (changed > 0) ? 1 : 0;
 }
 
 SessionList *session_manager_list_sessions(SessionManager *sm)
 {
-    if (!sm || !sm->data_dir || !sm->db) return NULL;
+    if (!sm || !sm->data_dir || !sm->db || !sm->key_initialized) return NULL;
 
     pthread_mutex_lock(&sm->lock);
 
     sqlite3_stmt *stmt = NULL;
-    const char *sql = "SELECT id, title, title_generation_attempted, created_at "
+    const char *sql = "SELECT id, title_encrypted, title_generation_attempted, created_at "
                       "FROM agent_sessions ORDER BY created_at DESC";
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
     {
@@ -458,7 +822,22 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
             char **new_titles = realloc(list->titles, sizeof(char *) * capacity);
             char **new_dates = realloc(list->created_ats, sizeof(char *) * capacity);
             int *new_tgas = realloc(list->title_generation_attempteds, sizeof(int) * capacity);
-            if (!new_ids || !new_titles || !new_dates || !new_tgas) break;
+            if (!new_ids || !new_titles || !new_dates || !new_tgas)
+            {
+                /* B6+B7: realloc failure must not silently truncate and must
+                 * not leak whichever halfway reallocs succeeded (those are
+                 * not yet assigned to list->*, so freeing list* via
+                 * session_list_free still owns the originals; only the new
+                 * buffers leak unless we free them here). */
+                free(new_ids);
+                free(new_titles);
+                free(new_dates);
+                free(new_tgas);
+                sqlite3_finalize(stmt);
+                pthread_mutex_unlock(&sm->lock);
+                session_list_free(list);
+                return NULL;
+            }
             list->ids = new_ids;
             list->titles = new_titles;
             list->created_ats = new_dates;
@@ -466,19 +845,39 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
         }
 
         const char *id = (const char *)sqlite3_column_text(stmt, 0);
-        const char *title = (const char *)sqlite3_column_text(stmt, 1);
+        const void *title_blob = sqlite3_column_blob(stmt, 1);
+        int title_len = sqlite3_column_bytes(stmt, 1);
         int tga = sqlite3_column_int(stmt, 2);
         const char *created = (const char *)sqlite3_column_text(stmt, 3);
 
+        char *title_dup = NULL;
+        unsigned char *dec = NULL;
+        int dec_len = 0;
+        if (title_blob && title_len > 0)
+            dec = encryption_decrypt(&sm->enc_key, title_blob, title_len, &dec_len);
+        if (dec)
+        {
+            title_dup = str_dup((const char *)dec);
+            free(dec);
+        }
+        else
+        {
+            title_dup = str_dup("");
+        }
+
         char *id_dup = str_dup(id ? id : "");
-        char *title_dup = str_dup(title ? title : "");
         char *created_dup = str_dup(created ? created : "");
         if (!id_dup || !title_dup || !created_dup)
         {
+            /* B6: str_dup failure must not silently truncate; free locals and
+             * return NULL via the cleanup path so the caller knows it failed. */
             free(id_dup);
             free(title_dup);
             free(created_dup);
-            break;
+            sqlite3_finalize(stmt);
+            pthread_mutex_unlock(&sm->lock);
+            session_list_free(list);
+            return NULL;
         }
         list->ids[list->count] = id_dup;
         list->titles[list->count] = title_dup;
@@ -516,8 +915,15 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
     if (!s) return -1;
 
     int idx = s->messages_count;
+    if (idx >= (int)(SIZE_MAX / sizeof(Message)) - 1)
+    {
+        /* B8: idx + 1 would overflow (or the eventual calloc/realloc byte
+         * count would). Refuse the append rather than rely on UB. */
+        session_free(s);
+        return -1;
+    }
     int new_count = idx + 1;
-    Message *new_msgs = realloc(s->messages, sizeof(Message) * new_count);
+    Message *new_msgs = realloc(s->messages, sizeof(Message) * (size_t)new_count);
     if (!new_msgs) { session_free(s); return -1; }
 
     s->messages = new_msgs;
@@ -601,26 +1007,26 @@ char *session_manager_export_session(SessionManager *sm, const char *session_id)
 
 Session *session_manager_import_session(SessionManager *sm, const char *json_str)
 {
-    if (!sm || !json_str) return NULL;
+    if (!sm || !sm->key_initialized || !json_str) return NULL;
 
     cJSON *json = cJSON_Parse(json_str);
     if (!json) return NULL;
 
-    cJSON *id_item = cJSON_GetObjectItem(json, "id");
-    if (id_item && id_item->valuestring)
-    {
-        Session *existing = session_manager_load_session(sm, id_item->valuestring);
-        if (existing)
-        {
-            session_free(existing);
-            cJSON_Delete(json);
-            return NULL;
-        }
-    }
+    /* C8: previously we did a `load_session` precheck here to refuse
+     * duplicates, then called `session_manager_save_session` (INSERT OR
+     * REPLACE) afterward. The two were separate mutex acquisitions, so a
+     * concurrent thread could insert the same id in between — the precheck
+     * would pass, the save would silently overwrite. The atomic
+     * save_session_core(SM_INSERT_IF_ABSENT) does the existence-check + insert
+     * as a single SQLite statement (`INSERT ... ON CONFLICT(id) DO NOTHING`)
+     * while already holding sm->lock, so the "reject duplicates" promise is
+     * now load-bearing. Duplicate-id detection is dropped from this function
+     * because it would just duplicate the SQL-level check that follows. */
 
     Session *s = session_create("Imported Session");
     if (!s) { cJSON_Delete(json); return NULL; }
 
+    cJSON *id_item = cJSON_GetObjectItem(json, "id");
     if (id_item && id_item->valuestring)
     {
         free(s->id);
@@ -680,8 +1086,13 @@ Session *session_manager_import_session(SessionManager *sm, const char *json_str
 
     cJSON_Delete(json);
 
-    if (session_manager_save_session(sm, s) != 0)
+    int rc = save_session_core(sm, s, SM_INSERT_IF_ABSENT);
+    if (rc <= 0)
     {
+        /* rc == 0 means "duplicate id" — caller (routes.c) reports 400
+         * "import failed — duplicate or invalid session data", same as the
+         * old precheck path. rc == -1 is a real SQLite/encrypt error and
+         * also maps to "import failed". Either way we drop our Session. */
         session_free(s);
         return NULL;
     }
@@ -692,6 +1103,17 @@ Session *session_manager_import_session(SessionManager *sm, const char *json_str
 int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
 {
     if (!sm || !sm->db) return -1;
+
+    /* B9: validate the input so the (time_t)older_than_days * 86400
+     * multiplication can't overflow for huge or negative values. The purge
+     * semantics only make sense for older_than_days >= 0; anything else is
+     * operator error and refuses rather than risking UB or a flipped cutoff. */
+    if (older_than_days < 0 || older_than_days > 365 * 100)
+    {
+        log_error("purge_sessions refusing bad older_than_days",
+                  "days", "out of range [0, 36500]", NULL);
+        return -1;
+    }
 
     time_t cutoff = time(NULL) - (time_t)older_than_days * 86400;
     struct tm *tm_cutoff = localtime(&cutoff);
@@ -710,13 +1132,25 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
         return -1;
     }
 
-    sqlite3_bind_text(stmt, 1, cutoff_str, -1, SQLITE_TRANSIENT);
-    sqlite3_step(stmt);
-    int deleted = sqlite3_changes(sm->db);
+    int bind_rc = sqlite3_bind_text(stmt, 1, cutoff_str, -1, SQLITE_TRANSIENT);
+    if (bind_rc != SQLITE_OK)
+    {
+        log_error("sqlite bind purge", "err", sqlite3_errmsg(sm->db), NULL);
+        sqlite3_finalize(stmt);
+        pthread_mutex_unlock(&sm->lock);
+        return -1;
+    }
+
+    int step_rc = sqlite3_step(stmt);
+    int deleted = 0;
+    if (step_rc == SQLITE_DONE)
+        deleted = sqlite3_changes(sm->db);
+    else
+        log_error("sqlite step purge", "err", sqlite3_errmsg(sm->db), NULL);
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&sm->lock);
 
-    return deleted;
+    return (step_rc == SQLITE_DONE) ? deleted : -1;
 }
 
 int session_manager_log_event(SessionManager *sm, const char *session_id,

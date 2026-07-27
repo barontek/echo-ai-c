@@ -3,6 +3,7 @@
 #include <string.h>
 #include "agent/message.h"
 #include "utils/string_utils.h"
+#include "session/session.h"
 
 START_TEST(test_message_create_free)
 {
@@ -197,6 +198,202 @@ START_TEST(test_message_copy_null_args)
 }
 END_TEST
 
+/* Regression test for A4: Message.timestamp is set by message_create but
+ * used to be silently dropped by messages_to_json_array. After the fix, the
+ * JSON contains a "timestamp" number, and round-tripping through
+ * session_deserialize_messages restores the same value. On the old code this
+ * test fails because the JSON has no timestamp key and the deserialized value
+ * is 0.0. */
+START_TEST(test_message_timestamp_roundtrip)
+{
+    Message src;
+    memset(&src, 0, sizeof(src));
+    src.role = str_dup("user");
+    src.content = str_dup("hello");
+    src.timestamp = 1735689600.123; /* fixed value so the assertion is exact */
+
+    cJSON *arr = messages_to_json_array(&src, 1);
+    ck_assert_ptr_nonnull(arr);
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    ck_assert_ptr_nonnull(json);
+    ck_assert(strstr(json, "\"timestamp\":") != NULL);
+    ck_assert(strstr(json, "1735689600") != NULL);
+
+    Session *s = session_create(NULL);
+    ck_assert_ptr_nonnull(s);
+    ck_assert_int_eq(session_deserialize_messages(s, json), 0);
+    ck_assert_int_eq(s->messages_count, 1);
+    ck_assert(s->messages[0].timestamp > 0.0);
+    ck_assert_double_eq_tol(s->messages[0].timestamp, 1735689600.123, 1.0);
+
+    free(json);
+    session_free(s);
+    free(src.role);
+    free(src.content);
+}
+END_TEST
+
+/* Regression test for A5: Message.id was read by session_deserialize_messages
+ * but never emitted by messages_to_json_array, so reload silently wiped the id
+ * to NULL. After the fix the JSON contains an "id" key and the round-trip
+ * restores it. On the old code this test fails because the JSON has no "id"
+ * and the deserialized value is NULL. */
+START_TEST(test_message_id_roundtrip)
+{
+    Message src;
+    memset(&src, 0, sizeof(src));
+    src.role = str_dup("assistant");
+    src.content = str_dup("ok");
+    src.id = str_dup("msg-abc-123");
+
+    cJSON *arr = messages_to_json_array(&src, 1);
+    ck_assert_ptr_nonnull(arr);
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    ck_assert_ptr_nonnull(json);
+    ck_assert(strstr(json, "\"id\":\"msg-abc-123\"") != NULL);
+
+    Session *s = session_create(NULL);
+    ck_assert_ptr_nonnull(s);
+    ck_assert_int_eq(session_deserialize_messages(s, json), 0);
+    ck_assert_int_eq(s->messages_count, 1);
+    ck_assert_ptr_nonnull(s->messages[0].id);
+    ck_assert_str_eq(s->messages[0].id, "msg-abc-123");
+
+    free(json);
+    session_free(s);
+    free(src.role);
+    free(src.content);
+    free(src.id);
+}
+END_TEST
+
+/* Regression test for A6: ToolCall.result_content/result_error were populated
+ * by execute_tool_calls and emitted via the WebSocket "done" frame, but never
+ * persisted by messages_to_json_array, so a reloaded session lost all tool
+ * results. After the fix the JSON carries result_content/result_error on each
+ * tool_call and the deserializer restores them. On the old code this test
+ * fails because the JSON has neither field. */
+START_TEST(test_tool_call_result_roundtrip)
+{
+    Message *src = calloc(1, sizeof(Message));
+    ck_assert_ptr_nonnull(src);
+    src->role = str_dup("assistant");
+    src->content = str_dup("");
+    src->tool_calls = calloc(1, sizeof(ToolCall));
+    ck_assert_ptr_nonnull(src->tool_calls);
+    src->tool_calls_count = 1;
+    src->tool_calls[0].id = str_dup("call_42");
+    src->tool_calls[0].name = str_dup("bash");
+    src->tool_calls[0].arguments = str_dup("{\"command\":\"ls\"}");
+    src->tool_calls[0].result_content = str_dup("file1\nfile2");
+    src->tool_calls[0].result_error = NULL;
+
+    cJSON *arr = messages_to_json_array(src, 1);
+    ck_assert_ptr_nonnull(arr);
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    ck_assert_ptr_nonnull(json);
+    ck_assert(strstr(json, "\"result_content\":\"file1\\nfile2\"") != NULL);
+    ck_assert(strstr(json, "\"result_error\"") == NULL);
+
+    Session *s = session_create(NULL);
+    ck_assert_ptr_nonnull(s);
+    ck_assert_int_eq(session_deserialize_messages(s, json), 0);
+    ck_assert_int_eq(s->messages_count, 1);
+    ck_assert_int_eq(s->messages[0].tool_calls_count, 1);
+    ck_assert_ptr_nonnull(s->messages[0].tool_calls[0].result_content);
+    ck_assert_str_eq(s->messages[0].tool_calls[0].result_content, "file1\nfile2");
+    ck_assert_ptr_null(s->messages[0].tool_calls[0].result_error);
+
+    free(json);
+    session_free(s);
+    message_free_all(src, 1);
+}
+END_TEST
+
+/* Regression test for C1: session_deserialize_messages used to overwrite
+ * session->messages without freeing the prior array — a memory leak. After
+ * the fix it calls message_free_all first (same pattern as the
+ * metadata/events deserializers). The test populates a session with one
+ * message, then deserializes a new JSON array into the same session, and
+ * asserts the new messages replaced the old ones (count=1 matching the new
+ * JSON, not 2). ASan's leak detector also catches the leaked old array. */
+START_TEST(test_deserialize_replaces_prior_messages)
+{
+    Session *s = session_create(NULL);
+    ck_assert_ptr_nonnull(s);
+
+    s->messages = calloc(1, sizeof(Message));
+    ck_assert_ptr_nonnull(s->messages);
+    s->messages_count = 1;
+    s->messages[0].role = str_dup("user");
+    s->messages[0].content = str_dup("old message that should be freed");
+
+    const char *new_json = "[{\"role\":\"assistant\",\"content\":\"new\"}]";
+    ck_assert_int_eq(session_deserialize_messages(s, new_json), 0);
+    ck_assert_int_eq(s->messages_count, 1);
+    ck_assert_str_eq(s->messages[0].role, "assistant");
+    ck_assert_str_eq(s->messages[0].content, "new");
+
+    session_free(s);
+}
+END_TEST
+
+/* C15 regression: previously every per-Message teardown was open-coded as an
+ * inline loop in 4 different sites (session.c:55-69, agent.c:67-81,
+ * agent.c:355-361, routes.c:1366-1380). The agent.c:355-361 site additionally
+ * FORGOT to free `msgs[i].tool_calls` and each `tool_calls[j]`'s inner strings
+ * — a real leak affecting every chat turn where apply_context_window actually
+ * shrank the message list. The C15 fix extracts `message_clear()` as the
+ * single source of truth and wires every per-Message teardown through it.
+ *
+ * This test constructs a Message that owns every optional field INCLUDING two
+ * tool_calls (each owning its own id/name/arguments/result strings), calls
+ * `message_clear` once, then frees the surrounding allocation, and asserts
+ * (under ASan) that nothing leaks. On the OLD `agent.c:355-361` pattern
+ * (which inlined a per-Message loop without the tool_calls block), running
+ * this exact Message through a `message_free_all`-equivalent would leak
+ * every ToolCall — but we cannot replicate the old loop inside this test
+ * without open-coding it, which defeats the point. The test instead proves
+ * `message_clear` itself is correct; the failure-mode for the refactor's
+ * correctness is "if message_clear ever drops the tool_calls block, this
+ * test starts leaking under ASan". */
+START_TEST(test_message_clear_frees_all_fields_incl_tool_calls)
+{
+    Message *msg = message_create("assistant", "content with tool calls");
+    ck_assert_ptr_nonnull(msg);
+    msg->id = str_dup("msg-id-1");
+    msg->tool_call_id = str_dup("tool_call_id-1");
+    msg->tool_name = str_dup("bash");
+    msg->error_category = str_dup("network");
+    msg->thinking = str_dup("Considering options...");
+
+    ToolCall *tc1 = tool_call_create("tcall-1", "bash", "{\"cmd\":\"ls\"}");
+    ck_assert_ptr_nonnull(tc1);
+    tc1->result_content = str_dup("file1\nfile2");
+    tc1->result_error = str_dup("warn");
+
+    ToolCall *tc2 = tool_call_create("tcall-2", "grep", "{\"pat\":\"foo\"}");
+    ck_assert_ptr_nonnull(tc2);
+    tc2->result_content = str_dup("foo: bar");
+
+    /* Build a small tool_calls array (Take manual ownership; message_set_tool_calls
+     * would also work but pulls in too much surrounding code). */
+    ToolCall *calls = calloc(2, sizeof(ToolCall));
+    ck_assert_ptr_nonnull(calls);
+    calls[0] = *tc1; free(tc1);
+    calls[1] = *tc2; free(tc2);
+    message_set_tool_calls(msg, calls, 2);
+
+    /* The single clear+free pair — if message_clear drops any field,
+     * ASan detect_leaks will flag it. */
+    message_clear(msg);
+    free(msg);
+}
+END_TEST
+
 Suite *message_suite(void)
 {
     Suite *s = suite_create("Message");
@@ -208,6 +405,11 @@ Suite *message_suite(void)
     tcase_add_test(tc, test_message_copy_deep);
     tcase_add_test(tc, test_message_copy_sparse);
     tcase_add_test(tc, test_message_copy_null_args);
+    tcase_add_test(tc, test_message_timestamp_roundtrip);
+    tcase_add_test(tc, test_message_id_roundtrip);
+    tcase_add_test(tc, test_tool_call_result_roundtrip);
+    tcase_add_test(tc, test_deserialize_replaces_prior_messages);
+    tcase_add_test(tc, test_message_clear_frees_all_fields_incl_tool_calls);
     suite_add_tcase(s, tc);
     return s;
 }

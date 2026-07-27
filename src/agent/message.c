@@ -94,6 +94,13 @@ cleanup:
 void message_free(Message *msg)
 {
     if (!msg) return;
+    message_clear(msg);
+    free(msg);
+}
+
+void message_clear(Message *msg)
+{
+    if (!msg) return;
     free(msg->role);
     free(msg->content);
     free(msg->id);
@@ -107,27 +114,23 @@ void message_free(Message *msg)
             tool_call_free(&msg->tool_calls[i]);
         free(msg->tool_calls);
     }
-    free(msg);
+    /* Zero the owned pointers and count so a stale reference can't double-free
+     * or be used after clear. */
+    msg->role = NULL;
+    msg->content = NULL;
+    msg->id = NULL;
+    msg->tool_call_id = NULL;
+    msg->tool_name = NULL;
+    msg->error_category = NULL;
+    msg->thinking = NULL;
+    msg->tool_calls = NULL;
+    msg->tool_calls_count = 0;
 }
 
 void message_free_all(Message *msgs, int count)
 {
     for (int i = 0; i < count; i++)
-    {
-        free(msgs[i].role);
-        free(msgs[i].content);
-        free(msgs[i].id);
-        free(msgs[i].tool_call_id);
-        free(msgs[i].tool_name);
-        free(msgs[i].error_category);
-        free(msgs[i].thinking);
-        if (msgs[i].tool_calls)
-        {
-            for (int j = 0; j < msgs[i].tool_calls_count; j++)
-                tool_call_free(&msgs[i].tool_calls[j]);
-            free(msgs[i].tool_calls);
-        }
-    }
+        message_clear(&msgs[i]);
     free(msgs);
 }
 
@@ -198,6 +201,18 @@ cJSON *messages_to_json_array(Message *msgs, int count)
         if (msgs[i].error_category)
             cJSON_AddStringToObject(item, "error_category", msgs[i].error_category);
 
+        /* Persist per-message id so reload preserves stable identity. Emit
+         * only when non-NULL to keep legacy blobs shape-equivalent on first
+         * save. The deserializer reads it back into Message.id. */
+        if (msgs[i].id)
+            cJSON_AddStringToObject(item, "id", msgs[i].id);
+
+        /* Persist timestamp so reload preserves per-message timing. Emit only
+         * when non-zero to keep legacy blobs (which never carried a timestamp)
+         * shape-equivalent on first save. */
+        if (msgs[i].timestamp > 0.0)
+            cJSON_AddNumberToObject(item, "timestamp", msgs[i].timestamp);
+
         if (msgs[i].tool_calls && msgs[i].tool_calls_count > 0)
         {
             cJSON *tc_arr = cJSON_CreateArray();
@@ -216,6 +231,15 @@ cJSON *messages_to_json_array(Message *msgs, int count)
                     cJSON_AddStringToObject(fn, "arguments", msgs[i].tool_calls[j].arguments ? msgs[i].tool_calls[j].arguments : "");
 
                 cJSON_AddItemToObject(tc, "function", fn);
+
+                /* Persist tool results so reload preserves UI state. Emit only
+                 * when non-NULL to keep legacy blobs shape-equivalent on first
+                 * save; the deserializer reads them back. */
+                if (msgs[i].tool_calls[j].result_content)
+                    cJSON_AddStringToObject(tc, "result_content", msgs[i].tool_calls[j].result_content);
+                if (msgs[i].tool_calls[j].result_error)
+                    cJSON_AddStringToObject(tc, "result_error", msgs[i].tool_calls[j].result_error);
+
                 cJSON_AddItemToArray(tc_arr, tc);
             }
             cJSON_AddItemToObject(item, "tool_calls", tc_arr);
