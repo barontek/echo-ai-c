@@ -927,3 +927,10 @@ void agent_set_callback_manager(Agent *agent, CallbackManager *mgr)
 {
     agent->cb_mgr = mgr;
 }
+
+void agent_set_model(Agent *agent, const char *model)
+{
+    if (!agent || !model) return;
+    free(agent->model);
+    agent->model = str_dup(model);
+}

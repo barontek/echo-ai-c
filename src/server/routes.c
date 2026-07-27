@@ -1320,6 +1320,9 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
         cJSON *provider = cJSON_GetObjectItem(json, "provider");
         if (provider)
         {
+            cJSON *model = cJSON_GetObjectItem(json, "model");
+            if (model && model->valuestring && c->agent)
+                agent_set_model(c->agent, model->valuestring);
             cJSON_Delete(json);
             cJSON *ready = cJSON_CreateObject();
             cJSON_AddStringToObject(ready, "type", "ready");

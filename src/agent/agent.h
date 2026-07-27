@@ -77,5 +77,6 @@ void agent_set_tool_start_callback(Agent *agent, tool_start_callback cb, void *u
 void agent_set_tool_end_callback(Agent *agent, tool_end_callback cb, void *userdata);
 void agent_set_safety(Agent *agent, SafetyConfig *safety);
 void agent_set_callback_manager(Agent *agent, CallbackManager *mgr);
+void agent_set_model(Agent *agent, const char *model);
 
 #endif
