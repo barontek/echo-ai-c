@@ -20,7 +20,9 @@ function parseSearchResults(content: string): SearchResult[] {
         url: r.url || '',
       }));
     }
-  } catch {}
+    } catch {
+      /* JSON parse failed — return empty results */
+    }
   return [];
 }
 
