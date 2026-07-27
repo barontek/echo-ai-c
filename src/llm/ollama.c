@@ -187,6 +187,7 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
                                  ToolCall **out_tool_calls,
                                  int *out_tool_calls_count)
 {
+    (void)timeout;
     CURL *curl = curl_easy_init();
     if (!curl) return NULL;
 
@@ -200,9 +201,9 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_body);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)timeout);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
 
     WriteBuf buf = {0};
     if (stream && on_chunk)
