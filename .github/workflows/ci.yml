@@ -7,7 +7,7 @@ on:
     branches: [ "master" ]
 
 jobs:
-  build:
+  backend:
     runs-on: ubuntu-latest
     container: debian:bookworm-slim
 
@@ -25,3 +25,32 @@ jobs:
 
     - name: test
       run: ctest --test-dir build -V
+
+  frontend:
+    runs-on: ubuntu-latest
+    container: debian:bookworm-slim
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: install Node.js 22
+      run: |
+        apt-get update && apt-get install -y curl
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+        apt-get install -y nodejs
+
+    - name: install deps
+      run: npm ci
+      working-directory: frontend
+
+    - name: lint
+      run: npm run lint
+      working-directory: frontend
+
+    - name: typecheck
+      run: npm run typecheck
+      working-directory: frontend
+
+    - name: test
+      run: npm run test:run
+      working-directory: frontend
