@@ -15,9 +15,9 @@ void log_set_level(LogLevel level);
 void log_msg(LogLevel level, const char *file, int line,
              const char *message, ...);
 
-#define log_debug(msg, ...)  log_msg(LOG_DEBUG, __FILE__, __LINE__, msg, ##__VA_ARGS__)
-#define log_info(msg, ...)   log_msg(LOG_INFO,  __FILE__, __LINE__, msg, ##__VA_ARGS__)
-#define log_warn(msg, ...)   log_msg(LOG_WARN,  __FILE__, __LINE__, msg, ##__VA_ARGS__)
-#define log_error(msg, ...)  log_msg(LOG_ERROR, __FILE__, __LINE__, msg, ##__VA_ARGS__)
+#define log_debug(...)  log_msg(LOG_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
+#define log_info(...)   log_msg(LOG_INFO,  __FILE__, __LINE__, __VA_ARGS__)
+#define log_warn(...)   log_msg(LOG_WARN,  __FILE__, __LINE__, __VA_ARGS__)
+#define log_error(...)  log_msg(LOG_ERROR, __FILE__, __LINE__, __VA_ARGS__)
 
 #endif
