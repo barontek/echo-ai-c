@@ -7,11 +7,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
 
-pkg_check_modules(LIBUV REQUIRED libuv)
-pkg_check_modules(LIBCURL REQUIRED libcurl)
-pkg_check_modules(SQLITE3 REQUIRED sqlite3)
-pkg_check_modules(OPENSSL REQUIRED openssl)
-pkg_check_modules(CJSON REQUIRED libcjson)
+pkg_check_modules(LIBUV REQUIRED IMPORTED_TARGET libuv)
+pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
+pkg_check_modules(OPENSSL REQUIRED IMPORTED_TARGET openssl)
+pkg_check_modules(CJSON REQUIRED IMPORTED_TARGET libcjson)
 
 add_executable(echo-ai
     src/main.c
@@ -70,28 +70,12 @@ add_executable(echo-ai
     src/server/middleware.c
 )
 
-target_include_directories(echo-ai PRIVATE
-    ${LIBUV_INCLUDE_DIRS}
-    ${LIBCURL_INCLUDE_DIRS}
-    ${SQLITE3_INCLUDE_DIRS}
-    ${OPENSSL_INCLUDE_DIRS}
-    ${CJSON_INCLUDE_DIRS}
-)
-
-target_link_directories(echo-ai PRIVATE
-    ${LIBUV_LIBRARY_DIRS}
-    ${LIBCURL_LIBRARY_DIRS}
-    ${SQLITE3_LIBRARY_DIRS}
-    ${OPENSSL_LIBRARY_DIRS}
-    ${CJSON_LIBRARY_DIRS}
-)
-
 target_link_libraries(echo-ai PRIVATE
-    ${LIBUV_LIBRARIES}
-    ${LIBCURL_LIBRARIES}
-    ${SQLITE3_LIBRARIES}
-    ${OPENSSL_LIBRARIES}
-    ${CJSON_LIBRARIES}
+    PkgConfig::LIBUV
+    PkgConfig::LIBCURL
+    PkgConfig::SQLITE3
+    PkgConfig::OPENSSL
+    PkgConfig::CJSON
     m
 )
 
@@ -119,7 +103,7 @@ add_custom_target(frontend-build
 # Tests
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
-    pkg_check_modules(CHECK check)
+    pkg_check_modules(CHECK IMPORTED_TARGET check)
     if(CHECK_FOUND)
         enable_testing()
         add_subdirectory(tests)
