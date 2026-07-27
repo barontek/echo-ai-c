@@ -90,9 +90,21 @@ static SessionManager *init_session_manager(Conf *conf)
     char *password = encryption_resolve_password();
     if (!password)
     {
-        log_error("no password available (set ECHO_PASSWORD or create ~/.config/echo-ai/password)", NULL);
-        free(data_dir);
-        return NULL;
+        int is_first_run = encryption_first_run_detect(data_dir);
+        const char *prompt = is_first_run ? "Create a database password: " : "Enter database password: ";
+        password = getpass(prompt);
+        if (!password)
+        {
+            log_error("no password provided", NULL);
+            free(data_dir);
+            return NULL;
+        }
+        password = str_dup(password);
+        if (!password)
+        {
+            free(data_dir);
+            return NULL;
+        }
     }
 
     SessionManager *sm = session_manager_create(data_dir, password);
@@ -474,28 +486,48 @@ static void run_web(Conf *conf, const char *config_path)
     AgentConfig cfg_copy = *cfg;
     free(cfg);
 
-    g_session_manager = init_session_manager(conf);
-    if (g_session_manager)
-    {
-        registry_set_session_manager(g_session_manager);
-        agent_set_session_manager(agent, g_session_manager);
-    }
+    const char *session_enabled_str = conf_get(conf, "session.enabled");
+    int session_enabled = session_enabled_str && strcmp(session_enabled_str, "true") == 0;
 
     int port = conf_get_int(conf, "server.port", 8080);
 
     ServerContext ctx;
     memset(&ctx, 0, sizeof(ctx));
-    ctx.state = g_session_manager ? STATE_LOCKED : STATE_UNLOCKED;
-    /* D2: inner string pointers alias Conf strings which outlive the server */
-    ctx.agent_cfg = cfg_copy;
-    if (!g_session_manager)
+
+    if (session_enabled)
+    {
+        const char *home = getenv("HOME");
+        if (home)
+        {
+            char *data_dir = NULL;
+            if (asprintf(&data_dir, "%s/.config/echo-ai", home) >= 0)
+            {
+                int is_first_run = encryption_first_run_detect(data_dir);
+                free(data_dir);
+                ctx.state = is_first_run ? STATE_SETUP : STATE_LOCKED;
+            }
+            else
+            {
+                ctx.state = STATE_LOCKED;
+            }
+        }
+        else
+        {
+            log_error("HOME not set, cannot determine auth state", NULL);
+            ctx.state = STATE_LOCKED;
+        }
+    }
+    else
     {
         ctx.state = STATE_UNLOCKED;
         ctx.unlock_token = str_dup("noop");
     }
+
+    /* D2: inner string pointers alias Conf strings which outlive the server */
+    ctx.agent_cfg = cfg_copy;
     ctx.config_path = str_dup(config_path);
     ctx.agent = agent;
-    ctx.sm = g_session_manager;
+    ctx.sm = NULL;
     ctx.safety = safety;
     ctx.conf = (Conf *)conf;
     ctx.port = port;
@@ -527,7 +559,7 @@ static void run_web(Conf *conf, const char *config_path)
     metrics_destroy(ctx.metrics);
     ct_destroy(ctx.change_tracker);
     agent_destroy(agent);
-    if (g_session_manager) session_manager_free(g_session_manager);
+    if (ctx.sm) session_manager_free(ctx.sm);
     registry_destroy();
     safety_config_free(safety);
 }

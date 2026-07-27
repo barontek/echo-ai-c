@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
@@ -113,36 +114,33 @@ static void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
     const char *home = getenv("HOME");
     if (!home) { free(password); server_response_error(client, 500, "HOME not set"); return; }
 
-    char *salt_path = NULL;
-    if (asprintf(&salt_path, "%s/.config/echo-ai/salt", home) < 0)
+    char *data_dir = NULL;
+    if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0)
     { free(password); server_response_error(client, 500, "out of memory"); return; }
 
-    if (encryption_salt_create(salt_path) != 0)
+    mkdir(data_dir, 0755);
+
+    SessionManager *sm = session_manager_create(data_dir, password);
+    free(data_dir);
+
+    size_t pw_len = strlen(password);
+    memset(password, 0, pw_len);
+    free(password);
+
+    if (!sm)
     {
-        free(salt_path);
-        free(password);
-        server_response_error(client, 500, "failed to create salt");
+        server_response_error(client, 500, "failed to initialize session manager");
         return;
     }
-    free(salt_path);
 
-    char *pw_path = NULL;
-    if (asprintf(&pw_path, "%s/.config/echo-ai/password", home) >= 0)
-    {
-        FILE *f = fopen(pw_path, "w");
-        if (f)
-        {
-            fputs(password, f);
-            fclose(f);
-        }
-        free(pw_path);
-    }
+    ctx->sm = sm;
+    registry_set_session_manager(sm);
+    if (ctx->agent) agent_set_session_manager(ctx->agent, sm);
 
     char token[64];
     snprintf(token, sizeof(token), "tok_%ld_%d", (long)time(NULL), rand() % 100000);
     ctx->unlock_token = str_dup(token);
     ctx->state = STATE_UNLOCKED;
-    free(password);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "token", token);
@@ -242,18 +240,6 @@ static void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
     memset(&key, 0, sizeof(key));
     free(salt_path);
 
-    char *pw_path = NULL;
-    if (asprintf(&pw_path, "%s/.config/echo-ai/password", home) >= 0)
-    {
-        FILE *f = fopen(pw_path, "w");
-        if (f)
-        {
-            fputs(password, f);
-            fclose(f);
-        }
-        free(pw_path);
-    }
-
     if (!ctx->sm)
     {
         char *data_dir = NULL;
@@ -265,6 +251,7 @@ static void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
             {
                 ctx->sm = sm;
                 registry_set_session_manager(sm);
+                if (ctx->agent) agent_set_session_manager(ctx->agent, sm);
             }
         }
     }

@@ -176,30 +176,8 @@ unsigned char *encryption_decrypt(const EncryptionKey *key, const unsigned char 
 
 char *encryption_resolve_password(void)
 {
-    char *password = getenv("ECHO_PASSWORD");
+    const char *password = getenv("ECHO_PASSWORD");
     if (password) return str_dup(password);
-
-    const char *data_dir = getenv("HOME");
-    if (!data_dir) return NULL;
-    char *pw_path = NULL;
-    if (asprintf(&pw_path, "%s/.config/echo-ai/password", data_dir) < 0) return NULL;
-
-    FILE *f = fopen(pw_path, "r");
-    free(pw_path);
-    if (f)
-    {
-        char buf[256];
-        if (fgets(buf, sizeof(buf), f))
-        {
-            fclose(f);
-            size_t len = strlen(buf);
-            while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
-                buf[--len] = '\0';
-            if (len > 0) return str_dup(buf);
-        }
-        fclose(f);
-    }
-
     return NULL;
 }
 
