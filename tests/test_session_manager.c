@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <sqlite3.h>
 #include "session/session_manager.h"
 #include "session/encryption.h"

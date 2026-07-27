@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <sqlite3.h>
 #include "agent/agent.h"
 #include "agent/message.h"
