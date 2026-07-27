@@ -2,6 +2,8 @@
 
 Lean, self-contained C rewrite of the Echo AI agentic system. Single binary, minimal dependencies, vanilla JS frontend.
 
+[![CI](https://github.com/barontek/echo-ai-c/actions/workflows/ci.yml/badge.svg)](https://github.com/barontek/echo-ai-c/actions/workflows/ci.yml)
+
 ## Quick Start
 
 ```bash
@@ -31,20 +33,20 @@ Open http://localhost:8080 in your browser.
 nix develop
 
 # Debian/Ubuntu
-apt install libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check
+apt install cmake pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check
 
 # Fedora
-dnf install libuv-devel libcurl-devel sqlite-devel openssl-devel libcjson-devel check
+dnf install cmake pkg-config libuv-devel libcurl-devel sqlite-devel openssl-devel libcjson-devel check
 
 # Arch
-pacman -S libuv curl sqlite openssl cjson check
+pacman -S cmake pkg-config libuv curl sqlite openssl cjson check
 
 # macOS (Homebrew)
-brew install libuv curl sqlite3 openssl cjson check
-cmake -B build -DCMAKE_BUILD_TYPE=Release \
-  -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" \
-  -DCJSON_ROOT_DIR="$(brew --prefix libcjson)"
+brew install cmake pkg-config libuv curl openssl sqlite cjson check
+export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/opt/openssl/lib/pkgconfig"
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
+# note: on macOS, ASan leak detection is disabled — set ASAN_OPTIONS=detect_leaks=0 at runtime
 ```
 
 ## CLI Flags
@@ -57,6 +59,14 @@ cmake --build build
 | `--config PATH` | Path to config file (default: `config.conf`) |
 | `--debug` | Enable debug-level logging |
 | `--help` | Show help message |
+
+## Testing
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build -V
+```
 
 ## Configuration
 
