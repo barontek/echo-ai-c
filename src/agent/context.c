@@ -86,9 +86,6 @@ Message *smart_select(Message *msgs, int count, int keep_count)
 
     int recent_budget = (int)(keep_count * 0.4);
     if (recent_budget < 1) recent_budget = 1;
-    int system_count = 0;
-    int tool_pairs = 0;
-
     for (int i = 0; i < count; i++)
     {
         scores[i].orig_index = i;
@@ -97,13 +94,11 @@ Message *smart_select(Message *msgs, int count, int keep_count)
         {
             scores[i].priority_group = 1;
             scores[i].score = 0;
-            system_count++;
         }
         else if (is_tool_role(msgs[i].role))
         {
             scores[i].priority_group = 2;
             scores[i].score = (double)i;
-            tool_pairs++;
         }
         else
         {
