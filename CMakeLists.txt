@@ -78,6 +78,14 @@ target_include_directories(echo-ai PRIVATE
     ${CJSON_INCLUDE_DIRS}
 )
 
+target_link_directories(echo-ai PRIVATE
+    ${LIBUV_LIBRARY_DIRS}
+    ${LIBCURL_LIBRARY_DIRS}
+    ${SQLITE3_LIBRARY_DIRS}
+    ${OPENSSL_LIBRARY_DIRS}
+    ${CJSON_LIBRARY_DIRS}
+)
+
 target_link_libraries(echo-ai PRIVATE
     ${LIBUV_LIBRARIES}
     ${LIBCURL_LIBRARIES}
