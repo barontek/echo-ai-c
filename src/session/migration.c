@@ -133,29 +133,105 @@ int migration_change_password(SessionManager *sm, const char *new_password)
         return -1;
     }
 
-    /* re-encrypt all sessions: load with old key, save with new key */
+    /* E1: re-encrypt all sessions under the held lock inside a single
+     * SQLite transaction so a crash mid-loop rolls back atomically.
+     * Previously each per-row load/save was a separate mutex grab+release,
+     * and a crash left half the rows re-encrypted with the new key and
+     * half with the old — permanent data loss. Also a concurrent
+     * load/save from another thread could observe the transient enckey
+     * swap and mis-encrypt. */
+
     EncryptionKey old_key = sm->enc_key;
 
-    SessionList *list = session_manager_list_sessions(sm);
-    if (list)
+    /* E1: hold sm->lock for the full transaction to isolate the key swap */
+    session_manager_lock(sm);
+
+    char *exec_err = NULL;
+    if (sqlite3_exec(sm->db, "BEGIN IMMEDIATE", NULL, NULL, &exec_err) != SQLITE_OK)
     {
-        for (int i = 0; i < list->count; i++)
-        {
-            sm->enc_key = old_key;
-            Session *s = session_manager_load_session(sm, list->ids[i]);
-            if (!s) continue;
-
-            sm->enc_key = new_key;
-            if (session_manager_save_session(sm, s) != 0)
-                log_warn("failed to re-encrypt session", "id", list->ids[i], NULL);
-
-            session_free(s);
-        }
-
-        session_list_free(list);
+        log_error("migration: BEGIN IMMEDIATE failed",
+                  "err", exec_err ? exec_err : "?", NULL);
+        sqlite3_free(exec_err);
+        session_manager_unlock(sm);
+        /* revert marker + salt */
+        unlink(mp);
+        rename(old_sp, sp);
+        free(sp); free(old_sp); free(mp);
+        return -1;
     }
 
+    sqlite3_stmt *stmt = NULL;
+    const char *id_sql = "SELECT id FROM agent_sessions ORDER BY created_at";
+    int ok = (sqlite3_prepare_v2(sm->db, id_sql, -1, &stmt, NULL) == SQLITE_OK);
+    if (!ok)
+    {
+        log_error("migration: prepare SELECT id failed",
+                  "err", sqlite3_errmsg(sm->db), NULL);
+        sqlite3_exec(sm->db, "ROLLBACK", NULL, NULL, NULL);
+        sm->enc_key = old_key;
+        session_manager_unlock(sm);
+        unlink(mp); rename(old_sp, sp);
+        free(sp); free(old_sp); free(mp);
+        return -1;
+    }
+
+    int migration_failed = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        const char *sid = (const char *)sqlite3_column_text(stmt, 0);
+        if (!sid) continue;
+
+        /* Load with old key, save with new key.
+         * sm->enc_key swap is race-free only because sm->lock is held. */
+        sm->enc_key = old_key;
+        Session *s = session_manager_load_session_nolock(sm, sid);
+        if (!s) continue;
+
+        sm->enc_key = new_key;
+        if (session_manager_save_session_nolock(sm, s) != 0)
+        {
+            log_error("migration: re-encrypt failed, rolling back",
+                      "id", sid, NULL);
+            session_free(s);
+            migration_failed = 1;
+            break;
+        }
+        session_free(s);
+    }
+    sqlite3_finalize(stmt);
+
+    if (migration_failed)
+    {
+        sqlite3_exec(sm->db, "ROLLBACK", NULL, NULL, NULL);
+        /* E1 specific instruction: restore old key BEFORE unlock so the
+         * next waiter sees the key that matches the DB content (which
+         * was rolled back to old-key-encrypted). */
+        sm->enc_key = old_key;
+        session_manager_unlock(sm);
+        /* marker serves as "migration not complete" signal for crash
+         * recovery; since we rolled back in-process, clean it up. */
+        unlink(mp);
+        rename(old_sp, sp);
+        free(sp); free(old_sp); free(mp);
+        return -1;
+    }
+
+    if (sqlite3_exec(sm->db, "COMMIT", NULL, NULL, &exec_err) != SQLITE_OK)
+    {
+        log_error("migration: COMMIT failed",
+                  "err", exec_err ? exec_err : "?", NULL);
+        sqlite3_free(exec_err);
+        sqlite3_exec(sm->db, "ROLLBACK", NULL, NULL, NULL);
+        sm->enc_key = old_key;
+        session_manager_unlock(sm);
+        unlink(mp); rename(old_sp, sp);
+        free(sp); free(old_sp); free(mp);
+        return -1;
+    }
+
+    /* E1: only on COMMIT success do we make the new key permanent */
     sm->enc_key = new_key;
+    session_manager_unlock(sm);
 
     /* create new verifier */
     char *verifier_path = NULL;

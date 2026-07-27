@@ -45,6 +45,21 @@ int session_manager_log_event(SessionManager *sm, const char *session_id,
 
 int migration_change_password(SessionManager *sm, const char *new_password);
 
+/* C10: Public mutex acquire/release so callers in other TUs (agent.c,
+ * migration.c) can hold sm->lock across a load-modify-save triad.
+ * sm->lock is PTHREAD_MUTEX_NORMAL (default-initialized) — re-entrant
+ * misuse deadlocks immediately, by design. */
+void session_manager_lock(SessionManager *sm);
+void session_manager_unlock(SessionManager *sm);
+
+/* C10: _nolock variants for when the caller already holds sm->lock.
+ * Caller MUST hold sm->lock for the duration of this call; do not
+ * call any non-_nolock session_manager_* API from within — the
+ * non-recursive PTHREAD_MUTEX_NORMAL will deadlock on re-entry,
+ * by design. */
+Session *session_manager_load_session_nolock(SessionManager *sm, const char *id);
+int session_manager_save_session_nolock(SessionManager *sm, Session *session);
+
 #ifdef SESSION_MANAGER_TEST
 void session_manager_test_set_alloc_fail(int nth_allocation);
 void session_manager_test_set_bind_fail(int nth_bind);

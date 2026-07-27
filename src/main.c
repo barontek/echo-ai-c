@@ -470,6 +470,8 @@ static void run_web(Conf *conf, const char *config_path)
     registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
                                   cfg->num_ctx, cfg->keep_alive_secs,
                                   cfg->temperature, cfg->timeout, cfg->max_iterations);
+    /* D2: copy before freeing cfg; assign to ctx later once it's declared. */
+    AgentConfig cfg_copy = *cfg;
     free(cfg);
 
     g_session_manager = init_session_manager(conf);
@@ -484,6 +486,8 @@ static void run_web(Conf *conf, const char *config_path)
     ServerContext ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.state = g_session_manager ? STATE_LOCKED : STATE_UNLOCKED;
+    /* D2: inner string pointers alias Conf strings which outlive the server */
+    ctx.agent_cfg = cfg_copy;
     if (!g_session_manager)
     {
         ctx.state = STATE_UNLOCKED;

@@ -8,6 +8,11 @@
 #include "../utils/string_utils.h"
 #include "../utils/json.h"
 
+/* Create a new in-memory Session with minted id, default-empty metadata/-
+ * events, and a timestamped created_at. Returns a fully-owned Session or
+ * NULL on any allocation failure (in which case all partial state is freed
+ * before return). Caller owns the returned Session and must free via
+ * session_free. */
 Session *session_create(const char *title)
 {
     Session *s = calloc(1, sizeof(Session));
@@ -22,11 +27,23 @@ Session *session_create(const char *title)
         free(s->id);
         s->id = tmp;
     }
+
+    /* F1: str_dup can fail under OOM. Old code assigned the (possibly-NULL)
+     * result directly into s->title and let it flow on to sqlite3_bind_text
+     * as SQL NULL — a session silently created with no title. Now we abort
+     * the create and free all partial state. */
     s->title = str_dup(title ? title : "New Session");
+    if (!s->title) { free(s->id); free(s); return NULL; }
+
     s->title_generation_attempted = 0;
 
+    /* D3: localtime is thread-unsafe (writes to a shared static buffer);
+     * under a multi-threaded server two concurrent calls (here and in
+     * session_manager purge_sessions/log_event) race and can corrupt the
+     * stored created_at. localtime_r is the thread-safe variant. */
     char ts[64];
-    struct tm *tm_ptr = localtime(&now);
+    struct tm tm_storage;
+    struct tm *tm_ptr = localtime_r(&now, &tm_storage);
     if (tm_ptr)
     {
         strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm_ptr);
@@ -36,11 +53,29 @@ Session *session_create(const char *title)
     {
         s->created_at = str_dup("unknown");
     }
+    /* F1: created_at str_dup failure also aborts. */
+    if (!s->created_at) { free(s->title); free(s->id); free(s); return NULL; }
 
     s->messages = NULL;
     s->messages_count = 0;
+
+    /* F2: cJSON_CreateObject/CreateArray can return NULL under alloc failure.
+     * Old code returned `s` with metadata/events == NULL — inconsistent with
+     * the rest of the codebase's "session->metadata/events always non-NULL
+     * after session_create" assumption. Now we abort the create. */
     s->metadata = cJSON_CreateObject();
     s->events = cJSON_CreateArray();
+    if (!s->metadata || !s->events)
+    {
+        if (s->metadata) cJSON_Delete(s->metadata);
+        if (s->events) cJSON_Delete(s->events);
+        free(s->created_at);
+        free(s->title);
+        free(s->id);
+        free(s);
+        return NULL;
+    }
+
     return s;
 }
 
@@ -61,6 +96,14 @@ void session_free(Session *s)
     free(s);
 }
 
+/* F5: serialize `session->messages` as a NUL-terminated JSON array string.
+ * `session` must be non-NULL (no NULL-guard — caller responsibility, the
+ * single existing caller `session_manager_save_session` always passes a
+ * freshly-loaded or freshly-created Session). Returns a malloc'd string the
+ * caller must `free`, or NULL on cJSON-print OOM. A successful return is
+ * always at least `"[]"` (cJSON_PrintUnformatted of an empty array); the
+ * C13 fix in `save_session_core` treats a NULL return here as OOM and
+ * refuses the save. */
 char *session_serialize_messages(const Session *session)
 {
     cJSON *arr = messages_to_json_array(session->messages, session->messages_count);
@@ -75,7 +118,15 @@ char *session_serialize_messages(const Session *session)
  * array and all owned strings are freed first (consistent with
  * session_deserialize_metadata/_events). On parse failure `session->messages`
  * is left unchanged. Returns 0 on success, -1 on parse or alloc failure.
- * Owns: the caller owns `session` and all memory within it after return. */
+ *
+ * C2: every str_dup/calloc failure now propagates through unified cleanup
+ * labels. For each field the NULL check distinguishes OOM from missing-key:
+ * role and content are always present (guaranteed non-NULL str_dup result
+ * means OOM); optional fields (id, tool_call_id, tool_name, error_category,
+ * thinking, and tool_call inner members) only treat a NULL str_dup as OOM
+ * when the source cJSON item was actually a non-NULL string. The cleanup
+ * labels route everything through message_clear (NULL-safe, idempotent,
+ * zeros the struct) — same pattern as the C15 fix. */
 int session_deserialize_messages(Session *session, const char *json_str)
 {
     if (!json_str) return -1;
@@ -93,7 +144,8 @@ int session_deserialize_messages(Session *session, const char *json_str)
     if (!session->messages && count > 0) { cJSON_Delete(arr); return -1; }
     session->messages_count = count;
 
-    for (int i = 0; i < count; i++)
+    int i;
+    for (i = 0; i < count; i++)
     {
         cJSON *item = cJSON_GetArrayItem(arr, i);
         if (!item) continue;
@@ -107,13 +159,24 @@ int session_deserialize_messages(Session *session, const char *json_str)
         cJSON *tool_calls_arr = cJSON_GetObjectItem(item, "tool_calls");
         cJSON *ts_item = cJSON_GetObjectItem(item, "timestamp");
 
+        /* role and content are always-present fields — a NULL str_dup here
+         * is OOM, not a missing key (the ternary always yields at least ""). */
         session->messages[i].role = str_dup(role && role->valuestring ? role->valuestring : "");
+        if (!session->messages[i].role) goto partial_fail_msg;
         session->messages[i].content = str_dup(content && content->valuestring ? content->valuestring : "");
+        if (!session->messages[i].content) goto partial_fail_msg;
+
+        /* optional fields: NULL from str_dup is only OOM when source was a real string */
         session->messages[i].id = str_dup(msg_id && msg_id->valuestring ? msg_id->valuestring : NULL);
+        if (!session->messages[i].id && msg_id && msg_id->valuestring) goto partial_fail_msg;
         session->messages[i].tool_call_id = str_dup(tool_call_id && tool_call_id->valuestring ? tool_call_id->valuestring : NULL);
+        if (!session->messages[i].tool_call_id && tool_call_id && tool_call_id->valuestring) goto partial_fail_msg;
         session->messages[i].tool_name = str_dup(tool_name && tool_name->valuestring ? tool_name->valuestring : NULL);
+        if (!session->messages[i].tool_name && tool_name && tool_name->valuestring) goto partial_fail_msg;
         session->messages[i].error_category = str_dup(error_cat && error_cat->valuestring ? error_cat->valuestring : NULL);
+        if (!session->messages[i].error_category && error_cat && error_cat->valuestring) goto partial_fail_msg;
         session->messages[i].thinking = str_dup(thinking && thinking->valuestring ? thinking->valuestring : NULL);
+        if (!session->messages[i].thinking && thinking && thinking->valuestring) goto partial_fail_msg;
         session->messages[i].timestamp = (ts_item && cJSON_IsNumber(ts_item)) ? ts_item->valuedouble : 0.0;
 
         if (tool_calls_arr && cJSON_IsArray(tool_calls_arr))
@@ -133,15 +196,21 @@ int session_deserialize_messages(Session *session, const char *json_str)
                     cJSON *tc_args = tc_fn ? cJSON_GetObjectItem(tc_fn, "arguments") : NULL;
                     cJSON *tc_rc = cJSON_GetObjectItem(tc, "result_content");
                     cJSON *tc_re = cJSON_GetObjectItem(tc, "result_error");
+
                     session->messages[i].tool_calls[j].id = str_dup(tc_id && tc_id->valuestring ? tc_id->valuestring : NULL);
+                    if (!session->messages[i].tool_calls[j].id && tc_id && tc_id->valuestring) goto partial_fail_tc;
                     session->messages[i].tool_calls[j].name = str_dup(tc_name && tc_name->valuestring ? tc_name->valuestring : NULL);
+                    if (!session->messages[i].tool_calls[j].name && tc_name && tc_name->valuestring) goto partial_fail_tc;
                     if (tc_args)
                     {
                         char *arg_str = cJSON_PrintUnformatted(tc_args);
                         session->messages[i].tool_calls[j].arguments = arg_str;
+                        if (!arg_str && tc_args) goto partial_fail_tc;
                     }
                     session->messages[i].tool_calls[j].result_content = str_dup(tc_rc && tc_rc->valuestring ? tc_rc->valuestring : NULL);
+                    if (!session->messages[i].tool_calls[j].result_content && tc_rc && tc_rc->valuestring) goto partial_fail_tc;
                     session->messages[i].tool_calls[j].result_error = str_dup(tc_re && tc_re->valuestring ? tc_re->valuestring : NULL);
+                    if (!session->messages[i].tool_calls[j].result_error && tc_re && tc_re->valuestring) goto partial_fail_tc;
                 }
             }
         }
@@ -149,6 +218,28 @@ int session_deserialize_messages(Session *session, const char *json_str)
 
     cJSON_Delete(arr);
     return 0;
+
+partial_fail_tc:
+    /* message_clear frees all fields of message i including the partially-built
+     * tool_calls array; tool_calls_count was set at calloc time so every
+     * slot up to tc_count is safe for tool_call_free. Leave tool_calls_count
+     * as-is so message_clear can iterate and free all slots. */
+    message_clear(&session->messages[i]);
+
+partial_fail_msg:
+    /* free every message up to (but not including) current index i.
+     * message k < i is fully-built; message_clear frees all owned strings
+     * and tool_calls. message i (if reached via partial_fail_tc) was already
+     * cleared above. message_clear is NULL-safe and idempotent on a
+     * calloc-zero struct (the case when i==0 and partial_fail_msg is reached
+     * directly). */
+    for (int k = 0; k < i; k++)
+        message_clear(&session->messages[k]);
+    free(session->messages);
+    session->messages = NULL;
+    session->messages_count = 0;
+    cJSON_Delete(arr);
+    return -1;
 }
 
 /* C14: serialize/deserialize round-trip COLLAPSES the two distinct
@@ -191,6 +282,12 @@ char *session_serialize_metadata(const Session *session)
     return json;
 }
 
+/* Parse `json_str` as a JSON object and replace `session->metadata` with the
+ * result. `session->metadata` is overwritten unconditionally (the prior
+ * cJSON tree is deleted if non-NULL). On parse failure the metadata is
+ * reset to an empty `cJSON_CreateObject()` so the non-NULL invariant is
+ * preserved. Returns 0 on success, -1 on parse failure (session->metadata
+ * is always non-NULL on return — empty-object placeholder on failure). */
 int session_deserialize_metadata(Session *session, const char *json_str)
 {
     if (!json_str) return -1;
@@ -200,6 +297,15 @@ int session_deserialize_metadata(Session *session, const char *json_str)
     return 0;
 }
 
+/* F5: serialize `session->events` as a NUL-terminated JSON array string.
+ * `session` must be non-NULL. Returns NULL iff `session->events` is NULL
+ * (legitimate "no events" — save path's bind-null branch is correct here).
+ * For a non-NULL empty array, returns a malloc'd `"[]"` so the wire
+ * representation is well-formed. Caller `free`s the returned string. The
+ * C13 fix treats a NULL return here as legitimate only when
+ * `session->events` is NULL — if `session->events` is non-NULL and this
+ * returns NULL, it is a cJSON-print OOM and `save_session_core` refuses
+ * the save. */
 char *session_serialize_events(const Session *session)
 {
     if (!session->events) return NULL;
@@ -212,6 +318,12 @@ char *session_serialize_events(const Session *session)
     return json;
 }
 
+/* Parse `json_str` as a JSON array and replace `session->events` with the
+ * result. `session->events` is overwritten unconditionally (prior cJSON
+ * tree deleted if non-NULL). On parse failure or non-array input, events is
+ * reset to an empty `cJSON_CreateArray()` so the non-NULL invariant is
+ * preserved. Returns 0 on success, -1 on parse/type failure (session->events
+ * is always non-NULL and an array on return). */
 int session_deserialize_events(Session *session, const char *json_str)
 {
     if (!json_str) return -1;

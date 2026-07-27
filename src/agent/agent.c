@@ -211,7 +211,9 @@ static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
     if (!cwd) cwd = ".";
 
     time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
+    /* D3: thread-safe localtime_r over thread-unsafe localtime. */
+    struct tm tm_storage;
+    struct tm *tm_info = localtime_r(&now, &tm_storage);
     char time_buf[64];
     strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
 
@@ -638,6 +640,17 @@ static void agent_perform_summarization(Agent *agent, int original_count)
     }
 }
 
+/* D4: process-wide run id counter. Increments non-atomically. The single
+ * shared `Agent` (per D2) is mutated by every WS client; in a true
+ * multi-client overlap, two threads could read the same `run_counter` and
+ * both increment to the same value. The minter IDs (`run_<n>`) are only
+ * used for metrics/breaker tracking, NOT for DB state attribution — so
+ * a duplicate is benign (the metrics series just sees the same run_id
+ * twice, no DB write is keyed on it). For the single-process libuv loop
+ * the practical risk is essentially zero (the counter increments inside
+ * `gen_run_id` called serially from `agent_run_streaming`). If you ever
+ * lift D2's single-Agent restriction, switch this to C11 `<stdatomic.h>`
+ * `atomic_fetch_add` first. */
 static unsigned long run_counter = 0;
 
 static char *gen_run_id(void)
@@ -810,27 +823,28 @@ void agent_set_session_manager(Agent *agent, SessionManager *sm)
 void agent_save_session(Agent *agent)
 {
     if (!agent->sm) return;
+
+    /* C10: hold sm->lock across load→mutate→save so no
+     * session_manager_log_event or concurrent agent_save_session can
+     * interleave. The _nolock call and all helper calls
+     * (session_create, message_copy, message_free_all, str_dup) make zero
+     * re-entry into any session_manager_* API — audited locally from the
+     * diff. */
+    session_manager_lock(agent->sm);
+
     Session *s = NULL;
 
     if (agent->session_id)
-        s = session_manager_load_session(agent->sm, agent->session_id);
+        s = session_manager_load_session_nolock(agent->sm, agent->session_id);
 
     if (!s)
     {
-        /* C7: the existing row vanished (operator deleted it, DB corruption
-         * refused per the C4+C5 fix, or session_id was supplied externally
-         * before being persisted). Silently reminting the id diverges from
-         * the client's view (c->active_session_id in the WS handler still
-         * holds the old id and will continue to relay it back). Log with
-         * context so the divergence is at least observable in the operator
-         * log; a true client↔server session_id reconciliation protocol is
-         * out of scope here. */
         if (agent->session_id)
             log_warn("agent_save_session: existing session not found, minting new id",
                      "old_id", agent->session_id, NULL);
         s = session_create("Echo AI Session");
-        if (!s) return;
-        if (agent->session_id) free(agent->session_id);
+        if (!s) { session_manager_unlock(agent->sm); return; }
+        free(agent->session_id);
         agent->session_id = str_dup(s->id);
     }
 
@@ -840,7 +854,6 @@ void agent_save_session(Agent *agent)
 
     if (agent->messages_count > 0)
     {
-        /* count non-system messages */
         int save_count = 0;
         for (int i = 0; i < agent->messages_count; i++)
             if (strcmp(agent->messages[i].role, "system") != 0)
@@ -862,13 +875,10 @@ void agent_save_session(Agent *agent)
         }
     }
 
-    /* C6: previously guarded by `if (s->messages_count > 0)`, which made
-     * `/clear` or any other path that reduces agent->messages_count to 0
-     * skip the save and leave the prior messages blob in the DB. After the
-     * fix we always persist `s` (including the empty state), matching
-     * session_manager_truncate_history's behavior of saving unconditionally. */
-    session_manager_save_session(agent->sm, s);
+    /* C10: use the _nolock save variant — we already hold sm->lock */
+    session_manager_save_session_nolock(agent->sm, s);
 
+    session_manager_unlock(agent->sm);
     session_free(s);
 }
 

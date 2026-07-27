@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -291,16 +292,9 @@ Session *session_manager_create_session(SessionManager *sm, const char *title)
     return s;
 }
 
-Session *session_manager_load_session(SessionManager *sm, const char *id)
+/* C10: the shared load-with-decrypt body. Caller MUST hold sm->lock. */
+static Session *load_session_locked(SessionManager *sm, const char *id)
 {
-    if (!sm || !id || !sm->key_initialized || !sm->db) return NULL;
-    /* B10: an empty id can never match a row (PRIMARY KEY), and a NULL id
-     * would silently bind SQL NULL (which never compares equal in WHERE).
-     * Refuse up-front instead. */
-    if (!id[0]) return NULL;
-
-    pthread_mutex_lock(&sm->lock);
-
     sqlite3_stmt *stmt = NULL;
     const char *sql = "SELECT id, title_encrypted, title_generation_attempted, created_at, "
                       "messages_encrypted, metadata_encrypted, events_encrypted "
@@ -308,7 +302,6 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
     {
         log_error("sqlite prepare", "err", sqlite3_errmsg(sm->db), NULL);
-        pthread_mutex_unlock(&sm->lock);
         return NULL;
     }
 
@@ -317,19 +310,14 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW)
     {
-        /* Distinguish "not found" (SQLITE_DONE) from a real DB error so the
-         * operator can correlate the NULL return. The caller still gets NULL
-         * either way; full behavioral distinguishability would require an
-         * out-status parameter and is intentionally out of scope here. */
         if (rc != SQLITE_DONE)
             log_error("sqlite step load", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
-        pthread_mutex_unlock(&sm->lock);
         return NULL;
     }
 
     Session *s = calloc(1, sizeof(Session));
-    if (!s) { log_error("calloc Session in load", NULL); sqlite3_finalize(stmt); pthread_mutex_unlock(&sm->lock); return NULL; }
+    if (!s) { log_error("calloc Session in load", NULL); sqlite3_finalize(stmt); return NULL; }
 
     const char *db_id = (const char *)sqlite3_column_text(stmt, 0);
     const void *title_blob = sqlite3_column_blob(stmt, 1);
@@ -350,14 +338,6 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
     s->events = cJSON_CreateArray();
     s->metadata = cJSON_CreateObject();
 
-    /* C4+C5: track per-blob decrypt/parse failures. If a non-empty blob was
-     * present but failed to decrypt OR failed to JSON-parse, the session is
-     * not loadable in a consistent state. Returning NULL preserves the
-     * original DB row (so a future agent_save_session with a freshly-minted
-     * session_id does NOT overwrite the corrupt blob with empty defaults),
-     * and the per-blob log lines let the operator distinguish corruption from
-     * "missing session". Previously the silent empty-defaults leave combined
-     * with the next save would irrecoverably destroy the original. */
     int partial_fail = 0;
 
     if (title_blob && title_len > 0 && sm->key_initialized)
@@ -444,18 +424,49 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
     }
 
     sqlite3_finalize(stmt);
-    pthread_mutex_unlock(&sm->lock);
 
     if (partial_fail)
     {
-        /* Do not return a partially-loaded session; the caller would save it
-         * back over the original corrupt row, destroying possibly-recoverable
-         * data. The corrupt row is preserved in the DB. */
         session_free(s);
         return NULL;
     }
 
     return s;
+}
+
+Session *session_manager_load_session(SessionManager *sm, const char *id)
+{
+    if (!sm || !id || !sm->key_initialized || !sm->db) return NULL;
+    if (!id[0]) return NULL;
+
+    session_manager_lock(sm);
+    Session *s = load_session_locked(sm, id);
+    session_manager_unlock(sm);
+    return s;
+}
+
+/* C10: lock/unlock wrappers so callers in other TUs can hold sm->lock
+ * across a load-modify-save triad. PTHREAD_MUTEX_NORMAL — re-entry deadlocks
+ * immediately, by design. */
+void session_manager_lock(SessionManager *sm)
+{
+    if (sm) pthread_mutex_lock(&sm->lock);
+}
+
+void session_manager_unlock(SessionManager *sm)
+{
+    if (sm) pthread_mutex_unlock(&sm->lock);
+}
+
+/* _nolock variants forward to the locked-statics. Caller MUST already
+ * hold sm->lock; do not call any non-_nolock session_manager_* API from
+ * within — the non-recursive PTHREAD_MUTEX_NORMAL will deadlock on
+ * re-entry. */
+Session *session_manager_load_session_nolock(SessionManager *sm, const char *id)
+{
+    if (!sm || !id || !sm->key_initialized || !sm->db) return NULL;
+    if (!id[0]) return NULL;
+    return load_session_locked(sm, id);
 }
 
 /* Mode for save_session_core. SM_UPSERT is the historical "save-or-overwrite"
@@ -470,38 +481,14 @@ Session *session_manager_load_session(SessionManager *sm, const char *id)
  * writer free to insert the same id in between). */
 enum save_core_mode { SM_UPSERT, SM_INSERT_IF_ABSENT };
 
-/* Shared core of session_manager_save_session and the import path.
- * Returns:
- *   SM_UPSERT mode:       0 on success, -1 on any error.
- *   SM_INSERT_IF_ABSENT:  1 if a new row was inserted,
- *                         0 if the id already existed (no row written),
- *                        -1 on any SQLite/serialize/encrypt error.
- *
- * Caller guarantees: sm non-NULL, sm->key_initialized != 0, sm->db non-NULL,
- * session non-NULL, session->id non-NULL and non-empty. */
-static int save_session_core(SessionManager *sm, Session *session,
-                              enum save_core_mode mode)
+/* C10: the shared serialize+encrypt+SQL body; caller MUST hold sm->lock. */
+static int save_session_core_locked(SessionManager *sm, Session *session,
+                                     enum save_core_mode mode)
 {
     char *messages_json = session_serialize_messages(session);
     char *metadata_json = session_serialize_metadata(session);
     char *events_json = session_serialize_events(session);
 
-    /* C13: previously each `encryption_encrypt` returning NULL fell through
-     * to the `else sqlite3_bind_null(...)` branch, the row was written with
-     * SQL NULL, sqlite3_step returned SQLITE_DONE, and save_session reported
-     * 0 (success). On the next load the column was undecryptable NULL →
-     * load_session returned NULL (per the C5 fix) and the operator saw
-     * "session not found" while the prior (recoverable) blob had been
-     * overwritten. Irreversible silent permanent data loss. Now we detect
-     * the failure here and refuse the save entirely: log with context and
-     * return -1 BEFORE touching the DB, so the previous row is preserved.
-     *
-     * Also detect serialize-OOM that masquerades as "nothing to write": for
-     * messages we always want at least "[]" (count==0 is legitimate), so a
-     * NULL messages_json is OOM. For metadata/events NULL json is
-     * legitimate ONLY when the corresponding session field is NULL
-     * ("no metadata yet"); if the field is non-NULL but serialize returned
-     * NULL, treat as OOM and abort. */
     int abort_save = 0;
     if (!messages_json)
     {
@@ -516,6 +503,21 @@ static int save_session_core(SessionManager *sm, Session *session,
     if (session->events && !events_json)
     {
         log_error("save_session: serialize events failed (OOM)", NULL);
+        abort_save = 1;
+    }
+    if (!abort_save && messages_json && strlen(messages_json) > (size_t)INT_MAX)
+    {
+        log_error("save_session: messages JSON exceeds INT_MAX bytes", NULL);
+        abort_save = 1;
+    }
+    if (!abort_save && metadata_json && strlen(metadata_json) > (size_t)INT_MAX)
+    {
+        log_error("save_session: metadata JSON exceeds INT_MAX bytes", NULL);
+        abort_save = 1;
+    }
+    if (!abort_save && events_json && strlen(events_json) > (size_t)INT_MAX)
+    {
+        log_error("save_session: events JSON exceeds INT_MAX bytes", NULL);
         abort_save = 1;
     }
 
@@ -542,14 +544,6 @@ static int save_session_core(SessionManager *sm, Session *session,
 
     if (!abort_save && messages_json)
     {
-        /* C12: `strlen(messages_json)` is the plaintext byte length ONLY
-         * because cJSON's `cJSON_PrintUnformatted` never emits embedded
-         * NUL bytes — it escapes any byte that would via `\u00XX`. This is
-         * an undocumented dependency: the save path here relies on the
-         * serializer's output contract. If you change the serializer to
-         * raw bytes (e.g. a future Message-attached binary field), you MUST
-         * switch to a length-prefix + explicit byte count — strlen would
-         * silently truncate at the first NUL and save corrupt ciphertext. */
         msgs_enc = encryption_encrypt(&sm->enc_key,
                                        (const unsigned char *)messages_json,
                                        strlen(messages_json), &msgs_enc_len);
@@ -562,8 +556,6 @@ static int save_session_core(SessionManager *sm, Session *session,
 
     if (!abort_save && metadata_json)
     {
-        /* C12: same strlen assumption as messages — metadata_json is
-         * cJSON_PrintUnformatted output, NUL-free by cJSON's contract. */
         meta_enc = encryption_encrypt(&sm->enc_key,
                                        (const unsigned char *)metadata_json,
                                        strlen(metadata_json), &meta_enc_len);
@@ -576,7 +568,6 @@ static int save_session_core(SessionManager *sm, Session *session,
 
     if (!abort_save && events_json)
     {
-        /* C12: same strlen assumption — events_json is cJSON output. */
         events_enc = encryption_encrypt(&sm->enc_key,
                                          (const unsigned char *)events_json,
                                          strlen(events_json), &events_enc_len);
@@ -589,22 +580,11 @@ static int save_session_core(SessionManager *sm, Session *session,
 
     if (abort_save)
     {
-        free(messages_json);
-        free(metadata_json);
-        free(events_json);
-        free(msgs_enc);
-        free(meta_enc);
-        free(events_enc);
-        free(title_enc);
+        free(messages_json); free(metadata_json); free(events_json);
+        free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
         return -1;
     }
 
-    /* C8: ON CONFLICT(id) DO NOTHING makes the existence check atomic with
-     * the insert. Under SM_UPSERT we use DO UPDATE SET all-the-columns so the
-     * row is overwritten; under SM_INSERT_IF_ABSENT we use DO NOTHING and
-     * inspect sqlite3_changes(). Both variants run as a single statement
-     * while we hold sm->lock, so no other thread can insert the same id
-     * between the test and the write. */
     const char *sql_upsert =
         "INSERT INTO agent_sessions "
         "(id, title_encrypted, title_generation_attempted, created_at, "
@@ -625,22 +605,14 @@ static int save_session_core(SessionManager *sm, Session *session,
         "ON CONFLICT(id) DO NOTHING";
 
     const char *sql = (mode == SM_INSERT_IF_ABSENT) ? sql_insert_if_absent
-                                                   : sql_upsert;
-
-    pthread_mutex_lock(&sm->lock);
+                                                    : sql_upsert;
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
     {
         log_error("sqlite prepare save", "err", sqlite3_errmsg(sm->db), NULL);
-        pthread_mutex_unlock(&sm->lock);
-        free(messages_json);
-        free(metadata_json);
-        free(events_json);
-        free(msgs_enc);
-        free(meta_enc);
-        free(events_enc);
-        free(title_enc);
+        free(messages_json); free(metadata_json); free(events_json);
+        free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
         return -1;
     }
 
@@ -681,14 +653,8 @@ static int save_session_core(SessionManager *sm, Session *session,
     {
         log_error("sqlite bind save", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
-        pthread_mutex_unlock(&sm->lock);
-        free(messages_json);
-        free(metadata_json);
-        free(events_json);
-        free(msgs_enc);
-        free(meta_enc);
-        free(events_enc);
-        free(title_enc);
+        free(messages_json); free(metadata_json); free(events_json);
+        free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
         return -1;
     }
 
@@ -697,28 +663,16 @@ static int save_session_core(SessionManager *sm, Session *session,
     {
         log_error("sqlite step save", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
-        pthread_mutex_unlock(&sm->lock);
-        free(messages_json);
-        free(metadata_json);
-        free(events_json);
-        free(msgs_enc);
-        free(meta_enc);
-        free(events_enc);
-        free(title_enc);
+        free(messages_json); free(metadata_json); free(events_json);
+        free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
         return -1;
     }
 
     int changes = sqlite3_changes(sm->db);
     sqlite3_finalize(stmt);
-    pthread_mutex_unlock(&sm->lock);
 
-    free(messages_json);
-    free(metadata_json);
-    free(events_json);
-    free(msgs_enc);
-    free(meta_enc);
-    free(events_enc);
-    free(title_enc);
+    free(messages_json); free(metadata_json); free(events_json);
+    free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
 
     if (mode == SM_INSERT_IF_ABSENT)
         return changes > 0 ? 1 : 0;
@@ -728,11 +682,18 @@ static int save_session_core(SessionManager *sm, Session *session,
 int session_manager_save_session(SessionManager *sm, Session *session)
 {
     if (!sm || !session || !sm->key_initialized || !sm->db) return -1;
-    /* B10: a NULL session->id would silently bind SQL NULL, breaking the
-     * PRIMARY KEY constraint and producing a generic step-save error with no
-     * useful context. Refuse up-front instead. */
     if (!session->id || !session->id[0]) return -1;
-    return save_session_core(sm, session, SM_UPSERT);
+    session_manager_lock(sm);
+    int rc = save_session_core_locked(sm, session, SM_UPSERT);
+    session_manager_unlock(sm);
+    return rc;
+}
+
+int session_manager_save_session_nolock(SessionManager *sm, Session *session)
+{
+    if (!sm || !session || !sm->key_initialized || !sm->db) return -1;
+    if (!session->id || !session->id[0]) return -1;
+    return save_session_core_locked(sm, session, SM_UPSERT);
 }
 
 /* Delete the session identified by `id`.
@@ -911,20 +872,23 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
                                  const char *role, const char *content,
                                  const char *tool_call_id, const char *tool_name)
 {
-    Session *s = session_manager_load_session(sm, session_id);
-    if (!s) return -1;
+    /* C10: hold sm->lock across load→mutate→save so no other thread
+     * can interleave a save on the same row between our load and save,
+     * eliminating the last-writer-wins race. */
+    session_manager_lock(sm);
+    Session *s = load_session_locked(sm, session_id);
+    if (!s) { session_manager_unlock(sm); return -1; }
 
     int idx = s->messages_count;
     if (idx >= (int)(SIZE_MAX / sizeof(Message)) - 1)
     {
-        /* B8: idx + 1 would overflow (or the eventual calloc/realloc byte
-         * count would). Refuse the append rather than rely on UB. */
         session_free(s);
+        session_manager_unlock(sm);
         return -1;
     }
     int new_count = idx + 1;
     Message *new_msgs = realloc(s->messages, sizeof(Message) * (size_t)new_count);
-    if (!new_msgs) { session_free(s); return -1; }
+    if (!new_msgs) { session_free(s); session_manager_unlock(sm); return -1; }
 
     s->messages = new_msgs;
     s->messages_count = new_count;
@@ -934,17 +898,25 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
     if (tool_call_id) s->messages[idx].tool_call_id = str_dup(tool_call_id);
     if (tool_name) s->messages[idx].tool_name = str_dup(tool_name);
 
-    int rc = session_manager_save_session(sm, s);
+    int rc = save_session_core_locked(sm, s, SM_UPSERT);
+    session_manager_unlock(sm);
     session_free(s);
     return rc;
 }
 
 int session_manager_truncate_history(SessionManager *sm, const char *session_id, int index)
 {
-    Session *s = session_manager_load_session(sm, session_id);
-    if (!s) return -1;
+    /* C10: hold sm->lock across the load→mutate→save triad. */
+    session_manager_lock(sm);
+    Session *s = load_session_locked(sm, session_id);
+    if (!s) { session_manager_unlock(sm); return -1; }
 
-    if (index < 0 || index >= s->messages_count) { session_free(s); return -1; }
+    if (index < 0 || index >= s->messages_count)
+    {
+        session_free(s);
+        session_manager_unlock(sm);
+        return -1;
+    }
 
     for (int i = index; i < s->messages_count; i++)
     {
@@ -964,7 +936,8 @@ int session_manager_truncate_history(SessionManager *sm, const char *session_id,
     }
     s->messages_count = index;
 
-    int rc = session_manager_save_session(sm, s);
+    int rc = save_session_core_locked(sm, s, SM_UPSERT);
+    session_manager_unlock(sm);
     session_free(s);
     return rc;
 }
@@ -1054,6 +1027,35 @@ Session *session_manager_import_session(SessionManager *sm, const char *json_str
     cJSON *msgs = cJSON_GetObjectItem(json, "messages");
     if (msgs && cJSON_IsArray(msgs))
     {
+        /* J1: `agent_save_session` filters out "system" messages before
+         * persisting — the system prompt is regenerated by
+         * `inject_system_with_summary` on every `agent_run_streaming`
+         * cycle, so storing a stale copy would either (a) get
+         * overwritten on the next run, leaking memory and confusing the
+         * agent's messages array, or (b) if a future `agent_run_streaming`
+         * skipped `inject_system_with_summary`, it would send a stale
+         * system prompt. The import path used to bypass this filter
+         * (it called `session_deserialize_messages` directly on the
+         * imported JSON). Now we walk the parsed cJSON messages array
+         * and DETACH any "system"-role entry before deserializing, so
+         * what's written to the DB matches what agent_save_session
+         * would have written itself. Iterate by index, decrement on
+         * detach. The detached item is deleted, severing it from the
+         * cJSON tree; the rest of the array shifts down to fill the gap. */
+        for (int i = 0; i < cJSON_GetArraySize(msgs); )
+        {
+            cJSON *item = cJSON_GetArrayItem(msgs, i);
+            cJSON *role = item ? cJSON_GetObjectItem(item, "role") : NULL;
+            if (role && cJSON_IsString(role) &&
+                strcmp(role->valuestring, "system") == 0)
+            {
+                cJSON_DetachItemFromArray(msgs, i);
+                cJSON_Delete(item);
+                continue; /* don't advance — array shifted down */
+            }
+            i++;
+        }
+
         char *msgs_str = cJSON_PrintUnformatted(msgs);
         if (msgs_str)
         {
@@ -1086,16 +1088,19 @@ Session *session_manager_import_session(SessionManager *sm, const char *json_str
 
     cJSON_Delete(json);
 
-    int rc = save_session_core(sm, s, SM_INSERT_IF_ABSENT);
+    /* C10: hold sm->lock across the insert so the import+check are atomic
+     * at the mutex level too (the SQL-level DO NOTHING is already atomic
+     * per C8, but the import builds a fresh Session outside the lock; with
+     * the lock here, no other writer can race the build+insert pair). */
+    session_manager_lock(sm);
+    int rc = save_session_core_locked(sm, s, SM_INSERT_IF_ABSENT);
     if (rc <= 0)
     {
-        /* rc == 0 means "duplicate id" — caller (routes.c) reports 400
-         * "import failed — duplicate or invalid session data", same as the
-         * old precheck path. rc == -1 is a real SQLite/encrypt error and
-         * also maps to "import failed". Either way we drop our Session. */
+        session_manager_unlock(sm);
         session_free(s);
         return NULL;
     }
+    session_manager_unlock(sm);
 
     return s;
 }
@@ -1116,7 +1121,10 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
     }
 
     time_t cutoff = time(NULL) - (time_t)older_than_days * 86400;
-    struct tm *tm_cutoff = localtime(&cutoff);
+    /* D3: localtime_r is the thread-safe variant — localtime under a
+     * multi-threaded server races on the shared static buffer. */
+    struct tm tm_storage;
+    struct tm *tm_cutoff = localtime_r(&cutoff, &tm_storage);
     if (!tm_cutoff) return -1;
 
     char cutoff_str[64];
@@ -1128,6 +1136,13 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
     const char *sql = "DELETE FROM agent_sessions WHERE created_at < ?";
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
     {
+        /* H2: SQLite guarantees *ppStmt == NULL on prepare error so the
+         * `sqlite3_finalize(stmt)` here is a no-op defensively kept for
+         * review consistency (every other error path in this function
+         * finalizes the stmt before returning). Also log the prepare
+         * failure — the prior code returned -1 with no operator signal. */
+        log_error("sqlite prepare purge", "err", sqlite3_errmsg(sm->db), NULL);
+        sqlite3_finalize(stmt);
         pthread_mutex_unlock(&sm->lock);
         return -1;
     }
@@ -1156,8 +1171,12 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
 int session_manager_log_event(SessionManager *sm, const char *session_id,
                                const char *event_type, const char *data)
 {
-    Session *s = session_manager_load_session(sm, session_id);
-    if (!s) return -1;
+    /* C10: hold sm->lock across load→mutate→save. Also C11: an
+     * agent_save_session that holds the lock across its own triad blocks
+     * here, so its metadata/events written back ARE the freshest. */
+    session_manager_lock(sm);
+    Session *s = load_session_locked(sm, session_id);
+    if (!s) { session_manager_unlock(sm); return -1; }
 
     cJSON *ev = cJSON_CreateObject();
     cJSON_AddStringToObject(ev, "event_type", event_type ? event_type : "");
@@ -1165,14 +1184,16 @@ int session_manager_log_event(SessionManager *sm, const char *session_id,
 
     time_t now = time(NULL);
     char ts[64];
-    struct tm *tm_ptr = localtime(&now);
+    struct tm tm_storage;
+    struct tm *tm_ptr = localtime_r(&now, &tm_storage);
     if (tm_ptr) strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm_ptr);
     else snprintf(ts, sizeof(ts), "%ld", (long)now);
     cJSON_AddStringToObject(ev, "timestamp", ts);
 
     cJSON_AddItemToArray(s->events, ev);
 
-    int rc = session_manager_save_session(sm, s);
+    int rc = save_session_core_locked(sm, s, SM_UPSERT);
+    session_manager_unlock(sm);
     session_free(s);
     return rc;
 }

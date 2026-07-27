@@ -20,6 +20,12 @@ typedef enum {
 typedef struct {
     ServerState state;
     Agent *agent;
+    /* D2: per-connection Agent instances for the WS path are minted from
+     * this config in routes_ws_chat_init and destroyed in ws_chat_on_close.
+     * The shared `agent` field remains used by the REST /chat path only
+     * (single-threaded per libuv request). Stored by value so its inner
+     * string pointers alias Conf strings (which outlive the server). */
+    AgentConfig agent_cfg;
     SessionManager *sm;
     SafetyConfig *safety;
     char *config_path;

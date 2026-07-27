@@ -331,6 +331,11 @@ static void handle_sessions(HTTPRequest *req, Client *client, ServerContext *ctx
         cJSON_AddStringToObject(s, "session_id", list->ids[i]);
         cJSON_AddStringToObject(s, "title", list->titles[i]);
         cJSON_AddStringToObject(s, "created_at", list->created_ats[i]);
+        /* G1: previously list->title_generation_attempteds was populated
+         * by session_manager_list_sessions but never surfaced — pure dead
+         * data allocation. Now emitted so the field isn't wasted work. */
+        cJSON_AddBoolToObject(s, "title_generation_attempted",
+                              list->title_generation_attempteds[i]);
         cJSON_AddItemToArray(arr, s);
     }
     session_list_free(list);
@@ -1298,7 +1303,25 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
                     if (hist_str) ws_send_json(ws, hist_str);
                     free(hist_str);
                     cJSON_Delete(hist);
-                }                session_free(s);
+                }
+                /* J3: was previously `}                session_free(s);`
+                 * on one line — semantically OK but the visual elision of
+                 * `}` and `session_free` on the same column hid the
+                 * control-flow boundary. Split onto its own line for
+                 * review readability. */
+                session_free(s);
+            }
+            else
+            {
+                /* I2: the client explicitly named a session_id that does
+                 * not exist in the DB. Reject rather than silently ignore
+                 * — otherwise the agent would run without ever setting a
+                 * session_id and then agent_save_session would remint a
+                 * fresh id (per C7), creating a disconnect between the
+                 * client's expected session and reality. */
+                cJSON_Delete(json);
+                ws_send_json(ws, "{\"type\":\"error\",\"message\":\"session not found\"}");
+                return;
             }
         }
     }
@@ -1367,7 +1390,23 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
                 int trunc_rc = session_manager_truncate_history(c->sm, c->agent->session_id, idx);
                 if (trunc_rc == 0 && c->agent->messages_count > 0)
                 {
-                    int keep = idx < c->agent->messages_count ? idx : c->agent->messages_count - 1;
+                    /* J2: `idx` is a DB-side index — i.e. "keep the first
+                     * `idx` non-system messages". The in-memory
+                     * `agent->messages` array usually has a `system` message
+                     * at index 0 (injected by inject_system_with_summary
+                     * during agent_run_streaming), so an agent-side keep of
+                     * `idx` would drop one message too many — agent keeps
+                     * [system, m1..m(idx-2)] while DB keeps [m1..m(idx-1)].
+                     * Count the leading system message(s) and offset keep
+                     * so both sides end up with the same non-system
+                     * messages. */
+                    int system_prefix = 0;
+                    while (system_prefix < c->agent->messages_count &&
+                           strcmp(c->agent->messages[system_prefix].role, "system") == 0)
+                        system_prefix++;
+                    int keep = idx + system_prefix;
+                    if (keep > c->agent->messages_count)
+                        keep = c->agent->messages_count;
                     for (int i = keep; i < c->agent->messages_count; i++)
                         message_clear(&c->agent->messages[i]);
                     c->agent->messages_count = keep;
@@ -1518,7 +1557,16 @@ static void ws_chat_on_close(WSClient *ws, void *userdata)
         ws->userdata = NULL;
         c->approval_done = 1;
         c->approval_result = 0;
-        if (c->agent) agent_cancel(c->agent);
+        /* D2: per-connection Agent — cancel any in-flight streaming, then
+         * tear down the owned Agent (and its LLMProvider). This replaces
+         * the old code that cancelled the shared ctx->agent (a cross-client
+         * bug). */
+        if (c->agent)
+        {
+            agent_cancel(c->agent);
+            agent_destroy(c->agent);
+            c->agent = NULL;
+        }
         free(c->pending_request_id);
         free(c->active_session_id);
         QueuedMsg *q = c->msg_queue;
@@ -1617,7 +1665,16 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
 {
     WSChatCtx *c = calloc(1, sizeof(WSChatCtx));
     if (!c) return;
-    c->agent = ctx->agent;
+
+    /* D2: mint per-connection Agent instead of sharing ctx->agent.
+     * Each WS client owns its own messages, session_id, and callbacks. */
+    c->agent = agent_create(&ctx->agent_cfg);
+    if (!c->agent)
+    {
+        log_error("ws_chat_init: agent_create failed", NULL);
+        free(c);
+        return;
+    }
     c->sm = ctx->sm;
     c->safety = ctx->safety;
     c->ws = ws;
@@ -1627,14 +1684,20 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     ws->on_close = ws_chat_on_close;
     ws->userdata = c;
 
-    if (c->agent)
-    {
-        agent_set_approval_callback(c->agent, ws_approval_cb, c);
-        agent_set_title_callback(c->agent, ws_title_update_cb, c);
-        agent_set_tool_start_callback(c->agent, ws_tool_start_cb, c);
-        agent_set_tool_end_callback(c->agent, ws_tool_end_cb, c);
-        agent_set_safety(c->agent, c->safety);
-    }
+    /* Wire shared read-mostly resources onto the per-connection Agent.
+     * These mirror what main.c sets on the REST-path shared agent. */
+    if (c->sm)
+        agent_set_session_manager(c->agent, c->sm);
+    if (ctx->metrics)
+        agent_set_metrics(c->agent, ctx->metrics);
+
+    /* D2: callbacks now act on the per-connection Agent, not the shared one */
+    agent_set_approval_callback(c->agent, ws_approval_cb, c);
+    agent_set_title_callback(c->agent, ws_title_update_cb, c);
+    agent_set_tool_start_callback(c->agent, ws_tool_start_cb, c);
+    agent_set_tool_end_callback(c->agent, ws_tool_end_cb, c);
+    agent_set_safety(c->agent, c->safety);
+
     registry_set_ask_user_callback(ws_ask_user_cb, c);
 
     if (query && query[0] && c->sm && c->agent)
@@ -1659,6 +1722,53 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
                 {
                     free(c->agent->session_id);
                     c->agent->session_id = str_dup(session_id);
+
+                    /* J5: previously this only emitted a `history` frame to
+                     * the client without populating `agent->messages`, so
+                     * the first `agent_run_streaming` would
+                     * `agent_save_session` against a still-empty in-memory
+                     * state — silently wiping the DB row's existing
+                     * messages on the first turn after reconnect. Now we
+                     * mirror the logic that the in-line session_id_item
+                     * path below (around line 1249) uses: free prior
+                     * agent->messages and copy the loaded session's
+                     * messages in. The history frame to the client is
+                     * still emitted so the UI shows the prior conversation.
+                     * NOTE this does NOT save back — there is nothing to
+                     * add yet; the next `agent_run_streaming`
+                     * (`routes.c:1413`) does `agent_save_session` after
+                     * appending the new user turn, which now correctly
+                     * saves the full prior+new history instead of just
+                     * the new message. */
+                    if (c->agent->messages)
+                    {
+                        message_free_all(c->agent->messages, c->agent->messages_count);
+                        c->agent->messages = NULL;
+                        c->agent->messages_count = 0;
+                    }
+                    if (s->messages_count > 0)
+                    {
+                        c->agent->messages = calloc((size_t)s->messages_count,
+                                                    sizeof(Message));
+                        if (c->agent->messages)
+                        {
+                            int copied = 0;
+                            for (int i = 0; i < s->messages_count; i++)
+                            {
+                                if (message_copy(&c->agent->messages[i],
+                                                 &s->messages[i]) != 0)
+                                {
+                                    message_free_all(c->agent->messages, copied);
+                                    c->agent->messages = NULL;
+                                    c->agent->messages_count = 0;
+                                    break;
+                                }
+                                copied++;
+                            }
+                            if (c->agent->messages)
+                                c->agent->messages_count = s->messages_count;
+                        }
+                    }
 
                     if (s->messages_count > 0)
                     {
