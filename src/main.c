@@ -73,8 +73,10 @@ static AgentConfig *load_agent_config(Conf *conf)
 static SessionManager *init_session_manager(Conf *conf)
 {
     const char *enabled = conf_get(conf, "session.enabled");
-    if (!enabled || strcmp(enabled, "true") != 0)
+    if (!enabled || strcmp(enabled, "false") != 0)
     {
+        log_info("session persistence enabled", NULL);
+    } else {
         log_info("session persistence disabled", NULL);
         return NULL;
     }
@@ -487,7 +489,7 @@ static void run_web(Conf *conf, const char *config_path)
     free(cfg);
 
     const char *session_enabled_str = conf_get(conf, "session.enabled");
-    int session_enabled = session_enabled_str && strcmp(session_enabled_str, "true") == 0;
+    int session_enabled = !session_enabled_str || strcmp(session_enabled_str, "false") != 0;
 
     int port = conf_get_int(conf, "server.port", 8080);
 
