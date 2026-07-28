@@ -108,7 +108,6 @@ require_approval_for = bash, write_file, git, python_execute
 
 [session]
 # Enable encrypted session persistence via SQLite (default: false)
-# Requires ECHO_PASSWORD env var or ~/.config/echo-ai/password file
 enabled = true
 
 [tools]
