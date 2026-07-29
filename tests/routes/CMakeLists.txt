@@ -13,7 +13,7 @@ add_executable(test_routes_session
 )
 target_compile_definitions(test_routes_session PRIVATE ROUTES_SESSION_TEST=1)
 target_include_directories(test_routes_session PRIVATE ../../src)
-target_link_libraries(test_routes_session PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_routes_session PRIVATE PkgConfig::CHECK PkgConfig::CJSON PkgConfig::LIBUV)
 add_test(NAME test_routes_session COMMAND test_routes_session)
 
 add_executable(test_routes_session_handlers
