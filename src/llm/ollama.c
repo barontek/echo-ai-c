@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -84,13 +85,6 @@ static void parse_stream_tool_calls(WriteBuf *buf, cJSON *msg)
         }
     }
 }
-
-#ifdef OLLAMA_TEST
-void ollama_test_parse_stream_tool_calls(WriteBuf *buf, cJSON *msg)
-{
-    parse_stream_tool_calls(buf, msg);
-}
-#endif
 
 static void forward_chunk(WriteBuf *buf, cJSON *msg)
 {
@@ -565,3 +559,114 @@ LLMProvider *ollama_provider_create(const char *base_url, int num_ctx, int keep_
     p->ctx = ctx;
     return p;
 }
+
+#ifdef OLLAMA_TEST
+/* ---- Captured values for testing (set by curl stubs below) ---- */
+char *ollama_test_captured_url = NULL;
+char *ollama_test_captured_body = NULL;
+int ollama_test_curl_init_fails = 0;
+CURLcode ollama_test_curl_result = CURLE_OK;
+
+void ollama_test_parse_stream_tool_calls(WriteBuf *buf, cJSON *msg)
+{
+    parse_stream_tool_calls(buf, msg);
+}
+
+void ollama_test_forward_chunk(WriteBuf *buf, cJSON *msg)
+{
+    forward_chunk(buf, msg);
+}
+
+LLMResponse *ollama_test_parse_response(const char *raw)
+{
+    return ollama_parse_response(raw);
+}
+
+size_t ollama_test_write_cb(const char *data, size_t len, void *userdata)
+{
+    return write_cb((void *)data, 1, len, userdata);
+}
+
+char *ollama_test_build_url(const char *base_url)
+{
+    return build_url(base_url);
+}
+
+/* ---- curl stub implementations ---- */
+#undef curl_easy_setopt
+#undef curl_easy_init
+#undef curl_easy_perform
+#undef curl_easy_cleanup
+#undef curl_easy_strerror
+#undef curl_slist_append
+#undef curl_slist_free_all
+
+CURL *curl_easy_init(void)
+{
+    if (ollama_test_curl_init_fails) return NULL;
+    static int dummy;
+    return (CURL *)&dummy;
+}
+
+CURLcode curl_easy_setopt(CURL *curl, CURLoption option, ...)
+{
+    (void)curl;
+    va_list args;
+    va_start(args, option);
+    if (option == CURLOPT_URL)
+        ollama_test_captured_url = va_arg(args, char *);
+    else if (option == CURLOPT_POSTFIELDS)
+    {
+        free(ollama_test_captured_body);
+        ollama_test_captured_body = str_dup(va_arg(args, char *));
+    }
+    else if (option == CURLOPT_POST)
+        (void)va_arg(args, long);
+    else if (option == CURLOPT_HTTPHEADER)
+        (void)va_arg(args, struct curl_slist *);
+    else if (option == CURLOPT_WRITEFUNCTION)
+        (void)va_arg(args, void *);
+    else if (option == CURLOPT_WRITEDATA)
+        (void)va_arg(args, void *);
+    else if (option == CURLOPT_TIMEOUT)
+        (void)va_arg(args, long);
+    else if (option == CURLOPT_LOW_SPEED_LIMIT)
+        (void)va_arg(args, long);
+    else if (option == CURLOPT_LOW_SPEED_TIME)
+        (void)va_arg(args, long);
+    else
+        (void)va_arg(args, void *);
+    va_end(args);
+    return CURLE_OK;
+}
+
+CURLcode curl_easy_perform(CURL *curl)
+{
+    (void)curl;
+    return ollama_test_curl_result;
+}
+
+void curl_easy_cleanup(CURL *curl)
+{
+    (void)curl;
+}
+
+const char *curl_easy_strerror(CURLcode code)
+{
+    (void)code;
+    return "stub error";
+}
+
+struct curl_slist *curl_slist_append(struct curl_slist *list, const char *data)
+{
+    (void)list;
+    (void)data;
+    static struct curl_slist dummy;
+    return &dummy;
+}
+
+void curl_slist_free_all(struct curl_slist *list)
+{
+    (void)list;
+}
+#endif

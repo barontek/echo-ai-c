@@ -1,0 +1,36 @@
+add_executable(test_config ../../src/config/config.c ../../src/utils/string_utils.c test_config.c)
+target_compile_definitions(test_config PRIVATE CONFIG_TEST=1)
+target_include_directories(test_config PRIVATE ../../src)
+target_link_libraries(test_config PRIVATE PkgConfig::CHECK)
+add_test(NAME test_config COMMAND test_config)
+
+add_executable(test_string ../../src/utils/string_utils.c test_string.c)
+target_include_directories(test_string PRIVATE ../../src)
+target_link_libraries(test_string PRIVATE PkgConfig::CHECK)
+add_test(NAME test_string COMMAND test_string)
+
+add_executable(test_json ../../src/utils/json.c test_json.c)
+target_include_directories(test_json PRIVATE ../../src)
+target_link_libraries(test_json PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_json COMMAND test_json)
+
+add_executable(test_metrics ../../src/utils/metrics.c ../../src/utils/string_utils.c test_metrics.c)
+target_compile_definitions(test_metrics PRIVATE METRICS_TEST=1)
+target_include_directories(test_metrics PRIVATE ../../src)
+target_link_libraries(test_metrics PRIVATE PkgConfig::CHECK)
+add_test(NAME test_metrics COMMAND test_metrics)
+
+add_executable(test_callbacks ../../src/utils/callbacks.c test_callbacks.c)
+target_include_directories(test_callbacks PRIVATE ../../src)
+target_link_libraries(test_callbacks PRIVATE PkgConfig::CHECK)
+add_test(NAME test_callbacks COMMAND test_callbacks)
+
+add_executable(test_circuit_breaker ../../src/utils/circuit_breaker.c test_circuit_breaker.c)
+target_include_directories(test_circuit_breaker PRIVATE ../../src)
+target_link_libraries(test_circuit_breaker PRIVATE PkgConfig::CHECK)
+add_test(NAME test_circuit_breaker COMMAND test_circuit_breaker)
+
+add_executable(test_rate_limiter ../../src/utils/rate_limiter.c ../../src/utils/logging.c test_rate_limiter.c)
+target_include_directories(test_rate_limiter PRIVATE ../../src)
+target_link_libraries(test_rate_limiter PRIVATE PkgConfig::CHECK PkgConfig::SQLITE3)
+add_test(NAME test_rate_limiter COMMAND test_rate_limiter)
