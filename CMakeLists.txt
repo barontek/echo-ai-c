@@ -66,7 +66,12 @@ add_executable(echo-ai
     src/change_tracker/change_tracker.c
     src/server/server.c
     src/server/websocket.c
-    src/server/routes.c
+    src/server/routes/routes.c
+    src/server/routes/routes_auth.c
+    src/server/routes/routes_session.c
+    src/server/routes/routes_chat.c
+    src/server/routes/routes_general.c
+    src/server/routes/routes_ws.c
     src/server/middleware.c
 )
 

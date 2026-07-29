@@ -1,7 +1,8 @@
 #ifndef ECHO_ROUTES_H
 #define ECHO_ROUTES_H
 
-#include "server.h"
+#include <cjson/cJSON.h>
+#include "../server.h"
 
 typedef struct WSClient WSClient;
 
@@ -18,7 +19,7 @@ extern const int routes_count;
 
 int route_match(const char *method, const char *path, const Route *r);
 
-void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query);
+void ws_add_message_to_json(cJSON *m, const Message *msg);
 void server_sse_write(Client *client, const char *data);
 
 #endif

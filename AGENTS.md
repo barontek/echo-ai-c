@@ -56,24 +56,34 @@ Every C target must compile clean under:
 - Fuzz targets (libFuzzer or AFL++) required for any function parsing external input (files, network data, session blobs, tool output).
 - Sanitizer-clean Check runs are a merge requirement, not optional CI noise.
 
-7. Verification discipline
+7. Check framework conventions
+
+- One TCase per module or behavior area — never one flat suite for the whole codebase.
+- Test names state the specific claim being falsified: test_unlock_rejects_wrong_password, not test_unlock.
+- Use ck_assert_* typed macros, never bare assert() — they print expected vs. actual on failure instead of just "condition false."
+- Fixtures via tcase_add_checked_fixture(tc, setup, teardown) for per-test state; never let a test depend on state leaked from another test.
+- tcase_set_timeout(tc, N) on any test touching I/O, locking, or anything that can hang — fork mode catches crashes and signals, not infinite loops.
+- Debugging a failure: set CK_FORK=no before attaching gdb or valgrind, since fork mode hides both from the debugger. Use CK_RUN_SUITE / CK_RUN_CASE / CK_INCLUDE_TAGS to isolate one test instead of commenting code out.
+- Build via CMake + pkg_check_modules(CHECK REQUIRED check), registered with ctest per test binary — Check has no gtest-style auto-discovery, so each suite binary needs its own add_test().
+
+8. Verification discipline
 
 - An agent's claim that something "works" or "is fixed" isn't sufficient — show the actual failing Check test before the fix and the passing one after, and for memory bugs, a clean ASan/UBSan/Valgrind run.
 - `git stash` and rerun the previous behavior when a fix is claimed, to confirm the bug reproduces on old code and is gone on new code.
 - Audit findings — from the agent itself or a second reviewing agent — aren't accepted at face value; verify via actual code path tracing with specific line numbers before marking fixed.
 - No fix is "done" until it's run under sanitizers at least once.
 
-8. What "good C" means here, concretely
+9. What "good C" means here, concretely
 
 - Boring is good — the obvious, explicit version of a function beats a clever one-liner with pointer tricks.
 - Every non-obvious line gets a short comment explaining *why*, not *what*.
 - When in doubt about a memory-safety tradeoff, ask rather than guess.
 
-9. What to do when unsure
+10. What to do when unsure
 
 If a change would require suppressing a sanitizer, disabling a warning, or skipping a test to land — stop and ask, don't route around it. C provides no safety net; the agent's job is to be that net.
 
-10. Fault-injection testing pattern (allocation-failure regression tests)
+11. Fault-injection testing pattern (allocation-failure regression tests)
 
 This project's most common bug shape has been: a function allocates via `str_dup`/`calloc`/`malloc`, doesn't check the result, and increments a count or commits a struct before confirming every allocation succeeded. Fixing this class of bug requires a test that can actually force an allocation to fail — a real OOM isn't reproducible on demand, so we fake it instead.
 

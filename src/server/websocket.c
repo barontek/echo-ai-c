@@ -9,7 +9,8 @@
 
 #include "websocket.h"
 #include "server.h"
-#include "routes.h"
+#include "routes/routes.h"
+#include "routes/routes_ws.h"
 #include "../utils/logging.h"
 
 #define WS_MAGIC "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"

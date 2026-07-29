@@ -7,7 +7,7 @@
 #include <cjson/cJSON.h>
 
 #include "server.h"
-#include "routes.h"
+#include "routes/routes.h"
 #include "websocket.h"
 #include "middleware.h"
 #include "../utils/logging.h"
