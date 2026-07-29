@@ -3,7 +3,7 @@
 #include <string.h>
 #include "utils/string_utils.h"
 
-START_TEST(test_str_trim)
+START_TEST(test_str_trim_removes_leading_and_trailing_whitespace)
 {
     char s1[] = "  hello  ";
     ck_assert_str_eq(str_trim(s1), "hello");
@@ -19,7 +19,7 @@ START_TEST(test_str_trim)
 }
 END_TEST
 
-START_TEST(test_str_starts_ends)
+START_TEST(test_str_starts_with_matches_prefix_and_str_ends_with_matches_suffix)
 {
     ck_assert_int_eq(str_starts_with("hello world", "hello"), 1);
     ck_assert_int_eq(str_starts_with("hello world", "world"), 0);
@@ -30,7 +30,7 @@ START_TEST(test_str_starts_ends)
 }
 END_TEST
 
-START_TEST(test_str_split)
+START_TEST(test_str_split_divides_string_on_delimiter_and_counts_items)
 {
     StrArray arr = str_split("a,b,c", ',');
     ck_assert_int_eq(arr.count, 3);
@@ -50,9 +50,9 @@ Suite *string_suite(void)
 {
     Suite *s = suite_create("StringUtils");
     TCase *tc = tcase_create("Core");
-    tcase_add_test(tc, test_str_trim);
-    tcase_add_test(tc, test_str_starts_ends);
-    tcase_add_test(tc, test_str_split);
+    tcase_add_test(tc, test_str_trim_removes_leading_and_trailing_whitespace);
+    tcase_add_test(tc, test_str_starts_with_matches_prefix_and_str_ends_with_matches_suffix);
+    tcase_add_test(tc, test_str_split_divides_string_on_delimiter_and_counts_items);
     suite_add_tcase(s, tc);
     return s;
 }

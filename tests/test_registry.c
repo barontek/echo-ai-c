@@ -76,13 +76,16 @@ END_TEST
 Suite *registry_suite(void)
 {
     Suite *s = suite_create("Registry");
-    TCase *tc = tcase_create("Core");
 
-    tcase_add_test(tc, test_registry_set_delegate_config_normal);
-    tcase_add_test(tc, test_registry_set_delegate_config_fail_first_alloc);
-    tcase_add_test(tc, test_registry_set_delegate_config_fail_second_alloc);
-    tcase_add_test(tc, test_registry_set_delegate_config_fail_third_alloc);
-    suite_add_tcase(s, tc);
+    TCase *tc_normal = tcase_create("Normal");
+    tcase_add_test(tc_normal, test_registry_set_delegate_config_normal);
+    suite_add_tcase(s, tc_normal);
+
+    TCase *tc_fault = tcase_create("FaultInjection");
+    tcase_add_test(tc_fault, test_registry_set_delegate_config_fail_first_alloc);
+    tcase_add_test(tc_fault, test_registry_set_delegate_config_fail_second_alloc);
+    tcase_add_test(tc_fault, test_registry_set_delegate_config_fail_third_alloc);
+    suite_add_tcase(s, tc_fault);
 
     return s;
 }

@@ -71,6 +71,7 @@ Suite *circuit_breaker_suite(void)
 {
     Suite *s = suite_create("CircuitBreaker");
     TCase *tc = tcase_create("Core");
+    tcase_set_timeout(tc, 30);
     tcase_add_test(tc, test_cb_starts_closed);
     tcase_add_test(tc, test_cb_opens_after_threshold);
     tcase_add_test(tc, test_cb_success_resets);

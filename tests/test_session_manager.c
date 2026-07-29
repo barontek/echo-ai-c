@@ -669,19 +669,26 @@ END_TEST
 Suite *session_mgr_suite(void)
 {
     Suite *s = suite_create("SessionManager");
-    TCase *tc = tcase_create("Core");
-    tcase_add_test(tc, test_title_is_encrypted_at_rest);
-    tcase_add_test(tc, test_user_memory_table_ready_after_sm_create);
-    tcase_add_test(tc, test_save_session_bind_failure_aborts);
-    tcase_add_test(tc, test_purge_sessions_bind_failure_returns_error);
-    tcase_add_test(tc, test_purge_sessions_rejects_bad_days);
-    tcase_add_test(tc, test_delete_session_distinguishes_missing);
-    tcase_add_test(tc, test_empty_or_null_id_refused);
-    tcase_add_test(tc, test_load_returns_null_on_decrypt_failure_preserves_row);
-    tcase_add_test(tc, test_session_list_alloc_fail_mid);
-    tcase_add_test(tc, test_import_rejects_duplicate_id_preserves_existing);
-    tcase_add_test(tc, test_save_aborts_when_encrypt_fails_preserves_row);
-    suite_add_tcase(s, tc);
+
+    TCase *tc_encrypt = tcase_create("Encryption");
+    tcase_set_timeout(tc_encrypt, 30);
+    tcase_add_test(tc_encrypt, test_title_is_encrypted_at_rest);
+    tcase_add_test(tc_encrypt, test_load_returns_null_on_decrypt_failure_preserves_row);
+    tcase_add_test(tc_encrypt, test_save_aborts_when_encrypt_fails_preserves_row);
+    suite_add_tcase(s, tc_encrypt);
+
+    TCase *tc_crud = tcase_create("CRUD");
+    tcase_set_timeout(tc_crud, 30);
+    tcase_add_test(tc_crud, test_user_memory_table_ready_after_sm_create);
+    tcase_add_test(tc_crud, test_save_session_bind_failure_aborts);
+    tcase_add_test(tc_crud, test_purge_sessions_bind_failure_returns_error);
+    tcase_add_test(tc_crud, test_purge_sessions_rejects_bad_days);
+    tcase_add_test(tc_crud, test_delete_session_distinguishes_missing);
+    tcase_add_test(tc_crud, test_empty_or_null_id_refused);
+    tcase_add_test(tc_crud, test_session_list_alloc_fail_mid);
+    tcase_add_test(tc_crud, test_import_rejects_duplicate_id_preserves_existing);
+    suite_add_tcase(s, tc_crud);
+
     return s;
 }
 

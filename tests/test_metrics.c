@@ -15,7 +15,7 @@ START_TEST(test_metrics_empty)
 }
 END_TEST
 
-START_TEST(test_metrics_counter)
+START_TEST(test_metrics_counter_increments_and_renders_prometheus_format)
 {
     Metrics *m = metrics_create();
     metrics_counter_inc(m, "test_total", "Test counter");
@@ -30,7 +30,7 @@ START_TEST(test_metrics_counter)
 }
 END_TEST
 
-START_TEST(test_metrics_histogram)
+START_TEST(test_metrics_histogram_observes_and_renders_buckets_and_sum)
 {
     Metrics *m = metrics_create();
     double buckets[] = {1, 5, 10};
@@ -91,13 +91,18 @@ END_TEST
 Suite *metrics_suite(void)
 {
     Suite *s = suite_create("Metrics");
-    TCase *tc = tcase_create("Core");
-    tcase_add_test(tc, test_metrics_empty);
-    tcase_add_test(tc, test_metrics_counter);
-    tcase_add_test(tc, test_metrics_histogram);
-    tcase_add_test(tc, test_metrics_counter_alloc_fail_mid);
-    tcase_add_test(tc, test_metrics_histogram_alloc_fail_mid);
-    suite_add_tcase(s, tc);
+
+    TCase *tc_render = tcase_create("Rendering");
+    tcase_add_test(tc_render, test_metrics_empty);
+    tcase_add_test(tc_render, test_metrics_counter_increments_and_renders_prometheus_format);
+    tcase_add_test(tc_render, test_metrics_histogram_observes_and_renders_buckets_and_sum);
+    suite_add_tcase(s, tc_render);
+
+    TCase *tc_fault = tcase_create("FaultInjection");
+    tcase_add_test(tc_fault, test_metrics_counter_alloc_fail_mid);
+    tcase_add_test(tc_fault, test_metrics_histogram_alloc_fail_mid);
+    suite_add_tcase(s, tc_fault);
+
     return s;
 }
 

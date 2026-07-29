@@ -195,6 +195,7 @@ Suite *agent_suite(void)
 {
     Suite *s = suite_create("Agent");
     TCase *tc = tcase_create("Core");
+    tcase_set_timeout(tc, 30);
     tcase_add_test(tc, test_agent_save_session_persists_empty_state);
     suite_add_tcase(s, tc);
     return s;

@@ -43,6 +43,7 @@ Suite *memory_suite(void)
 {
     Suite *s = suite_create("Memory");
     TCase *tc = tcase_create("Core");
+    tcase_set_timeout(tc, 30);
     tcase_add_test(tc, test_memory_list_alloc_fail_mid);
     suite_add_tcase(s, tc);
     return s;

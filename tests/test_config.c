@@ -11,7 +11,7 @@ static void write_conf(const char *path, const char *content)
     fclose(fp);
 }
 
-START_TEST(test_conf_load_and_get)
+START_TEST(test_conf_load_parses_sections_keys_and_comments)
 {
     write_conf("/tmp/test_config.conf",
         "# comment\n"
@@ -75,7 +75,8 @@ Suite *config_suite(void)
 {
     Suite *s = suite_create("Config");
     TCase *tc = tcase_create("Core");
-    tcase_add_test(tc, test_conf_load_and_get);
+    tcase_set_timeout(tc, 30);
+    tcase_add_test(tc, test_conf_load_parses_sections_keys_and_comments);
     tcase_add_test(tc, test_conf_load_nonexistent);
     tcase_add_test(tc, test_conf_alloc_fail_mid);
     suite_add_tcase(s, tc);

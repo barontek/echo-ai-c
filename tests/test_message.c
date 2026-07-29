@@ -5,7 +5,7 @@
 #include "utils/string_utils.h"
 #include "session/session.h"
 
-START_TEST(test_message_create_free)
+START_TEST(test_message_create_initializes_role_content_and_timestamp)
 {
     Message *msg = message_create("user", "hello world");
     ck_assert_ptr_nonnull(msg);
@@ -16,7 +16,7 @@ START_TEST(test_message_create_free)
 }
 END_TEST
 
-START_TEST(test_message_tool_calls)
+START_TEST(test_message_set_tool_calls_stores_count_and_name)
 {
     Message *msg = message_create("assistant", "");
     ck_assert_ptr_nonnull(msg);
@@ -36,7 +36,7 @@ START_TEST(test_message_tool_calls)
 }
 END_TEST
 
-START_TEST(test_messages_to_json)
+START_TEST(test_messages_to_json_array_emits_role_and_content_for_each_message)
 {
     Message msgs[2];
     memset(msgs, 0, sizeof(msgs));
@@ -79,7 +79,7 @@ START_TEST(test_messages_to_json)
 }
 END_TEST
 
-START_TEST(test_llm_response)
+START_TEST(test_llm_response_create_initializes_content_and_tool_calls_to_null)
 {
     LLMResponse *resp = llm_response_create();
     ck_assert_ptr_nonnull(resp);
@@ -397,20 +397,28 @@ END_TEST
 Suite *message_suite(void)
 {
     Suite *s = suite_create("Message");
-    TCase *tc = tcase_create("Core");
-    tcase_add_test(tc, test_message_create_free);
-    tcase_add_test(tc, test_message_tool_calls);
-    tcase_add_test(tc, test_messages_to_json);
-    tcase_add_test(tc, test_llm_response);
-    tcase_add_test(tc, test_message_copy_deep);
-    tcase_add_test(tc, test_message_copy_sparse);
-    tcase_add_test(tc, test_message_copy_null_args);
-    tcase_add_test(tc, test_message_timestamp_roundtrip);
-    tcase_add_test(tc, test_message_id_roundtrip);
-    tcase_add_test(tc, test_tool_call_result_roundtrip);
-    tcase_add_test(tc, test_deserialize_replaces_prior_messages);
-    tcase_add_test(tc, test_message_clear_frees_all_fields_incl_tool_calls);
-    suite_add_tcase(s, tc);
+
+    TCase *tc_lifecycle = tcase_create("Lifecycle");
+    tcase_add_test(tc_lifecycle, test_message_create_initializes_role_content_and_timestamp);
+    tcase_add_test(tc_lifecycle, test_message_set_tool_calls_stores_count_and_name);
+    tcase_add_test(tc_lifecycle, test_llm_response_create_initializes_content_and_tool_calls_to_null);
+    tcase_add_test(tc_lifecycle, test_message_clear_frees_all_fields_incl_tool_calls);
+    suite_add_tcase(s, tc_lifecycle);
+
+    TCase *tc_serialization = tcase_create("Serialization");
+    tcase_add_test(tc_serialization, test_messages_to_json_array_emits_role_and_content_for_each_message);
+    tcase_add_test(tc_serialization, test_message_timestamp_roundtrip);
+    tcase_add_test(tc_serialization, test_message_id_roundtrip);
+    tcase_add_test(tc_serialization, test_tool_call_result_roundtrip);
+    tcase_add_test(tc_serialization, test_deserialize_replaces_prior_messages);
+    suite_add_tcase(s, tc_serialization);
+
+    TCase *tc_copy = tcase_create("Copy");
+    tcase_add_test(tc_copy, test_message_copy_deep);
+    tcase_add_test(tc_copy, test_message_copy_sparse);
+    tcase_add_test(tc_copy, test_message_copy_null_args);
+    suite_add_tcase(s, tc_copy);
+
     return s;
 }
 

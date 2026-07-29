@@ -64,7 +64,7 @@ START_TEST(test_sem_exec_uaf)
 }
 END_TEST
 
-START_TEST(test_sem_index_and_search)
+START_TEST(test_sem_index_and_search_returns_results_for_known_terms)
 {
     semantic_search_index_document("machine learning is transforming technology");
     semantic_search_index_document("deep neural networks use gradient descent");
@@ -92,13 +92,18 @@ END_TEST
 Suite *semantic_search_suite(void)
 {
     Suite *s = suite_create("SemanticSearch");
-    TCase *tc = tcase_create("Core");
-    tcase_add_test(tc, test_sem_index_doc_alloc_fail_content_dup);
-    tcase_add_test(tc, test_sem_index_doc_alloc_fail_add_term_first);
-    tcase_add_test(tc, test_sem_term_freqs_oob);
-    tcase_add_test(tc, test_sem_exec_uaf);
-    tcase_add_test(tc, test_sem_index_and_search);
-    suite_add_tcase(s, tc);
+
+    TCase *tc_fault = tcase_create("FaultInjection");
+    tcase_add_test(tc_fault, test_sem_index_doc_alloc_fail_content_dup);
+    tcase_add_test(tc_fault, test_sem_index_doc_alloc_fail_add_term_first);
+    suite_add_tcase(s, tc_fault);
+
+    TCase *tc_integration = tcase_create("Integration");
+    tcase_add_test(tc_integration, test_sem_term_freqs_oob);
+    tcase_add_test(tc_integration, test_sem_exec_uaf);
+    tcase_add_test(tc_integration, test_sem_index_and_search_returns_results_for_known_terms);
+    suite_add_tcase(s, tc_integration);
+
     return s;
 }
 

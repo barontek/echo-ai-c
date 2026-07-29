@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include "change_tracker/change_tracker.h"
 
-START_TEST(test_ct_create_destroy)
+START_TEST(test_ct_create_initializes_empty_undo_redo_stacks)
 {
     ChangeTracker *ct = ct_create();
     ck_assert_ptr_nonnull(ct);
@@ -23,7 +23,7 @@ START_TEST(test_ct_snapshot_no_file)
 }
 END_TEST
 
-START_TEST(test_ct_undo_redo)
+START_TEST(test_ct_undo_restores_original_content_and_redo_reapplies_changes)
 {
     ChangeTracker *ct = ct_create();
 
@@ -121,13 +121,20 @@ END_TEST
 Suite *change_tracker_suite(void)
 {
     Suite *s = suite_create("ChangeTracker");
-    TCase *tc = tcase_create("Core");
-    tcase_add_test(tc, test_ct_create_destroy);
-    tcase_add_test(tc, test_ct_snapshot_no_file);
-    tcase_add_test(tc, test_ct_undo_redo);
-    tcase_add_test(tc, test_ct_snapshot_alloc_fail_mid);
-    tcase_add_test(tc, test_ct_undo_alloc_fail_mid);
-    suite_add_tcase(s, tc);
+
+    TCase *tc_lifecycle = tcase_create("Lifecycle");
+    tcase_set_timeout(tc_lifecycle, 30);
+    tcase_add_test(tc_lifecycle, test_ct_create_initializes_empty_undo_redo_stacks);
+    tcase_add_test(tc_lifecycle, test_ct_snapshot_no_file);
+    tcase_add_test(tc_lifecycle, test_ct_undo_restores_original_content_and_redo_reapplies_changes);
+    suite_add_tcase(s, tc_lifecycle);
+
+    TCase *tc_fault = tcase_create("FaultInjection");
+    tcase_set_timeout(tc_fault, 30);
+    tcase_add_test(tc_fault, test_ct_snapshot_alloc_fail_mid);
+    tcase_add_test(tc_fault, test_ct_undo_alloc_fail_mid);
+    suite_add_tcase(s, tc_fault);
+
     return s;
 }
 

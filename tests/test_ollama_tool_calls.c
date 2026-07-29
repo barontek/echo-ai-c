@@ -116,7 +116,7 @@ static void parse_stream_tool_calls(WriteBuf *buf, cJSON *msg)
 
 /* ---------- Tests ---------- */
 
-START_TEST(test_parse_single_tool_call)
+START_TEST(test_parse_extracts_name_and_arguments_from_single_tool_call)
 {
     strdup_call_count = 0;
     strdup_fail_at = -1;
@@ -144,7 +144,7 @@ START_TEST(test_parse_single_tool_call)
 }
 END_TEST
 
-START_TEST(test_parse_multiple_tool_calls)
+START_TEST(test_parse_extracts_all_tool_calls_from_array)
 {
     strdup_call_count = 0;
     strdup_fail_at = -1;
@@ -173,7 +173,7 @@ START_TEST(test_parse_multiple_tool_calls)
 }
 END_TEST
 
-START_TEST(test_skip_tool_call_no_name)
+START_TEST(test_parse_skips_entry_when_tool_call_name_is_empty)
 {
     strdup_call_count = 0;
     strdup_fail_at = -1;
@@ -198,7 +198,7 @@ START_TEST(test_skip_tool_call_no_name)
 }
 END_TEST
 
-START_TEST(test_no_tool_calls_field)
+START_TEST(test_parse_returns_zero_when_tool_calls_field_is_missing)
 {
     strdup_call_count = 0;
     strdup_fail_at = -1;
@@ -220,7 +220,7 @@ START_TEST(test_no_tool_calls_field)
 }
 END_TEST
 
-START_TEST(test_alloc_fail_name)
+START_TEST(test_parse_cleans_up_partial_entry_on_name_alloc_failure)
 {
     strdup_call_count = 0;
     strdup_fail_at = 1;
@@ -246,7 +246,7 @@ START_TEST(test_alloc_fail_name)
 }
 END_TEST
 
-START_TEST(test_alloc_fail_id)
+START_TEST(test_parse_cleans_up_partial_entry_on_id_alloc_failure)
 {
     strdup_call_count = 0;
     strdup_fail_at = 2;
@@ -271,7 +271,7 @@ START_TEST(test_alloc_fail_id)
 }
 END_TEST
 
-START_TEST(test_alloc_fail_arguments)
+START_TEST(test_parse_cleans_up_partial_entry_on_arguments_alloc_failure)
 {
     strdup_call_count = 0;
     strdup_fail_at = 3;
@@ -298,7 +298,7 @@ START_TEST(test_alloc_fail_arguments)
 }
 END_TEST
 
-START_TEST(test_recovery_after_failure)
+START_TEST(test_parse_accumulates_tool_calls_across_repeated_invocations)
 {
     strdup_call_count = 0;
     strdup_fail_at = -1;
@@ -329,7 +329,7 @@ START_TEST(test_recovery_after_failure)
 }
 END_TEST
 
-START_TEST(test_capacity_growth)
+START_TEST(test_parse_doubles_capacity_when_tool_calls_exceed_initial_allocation)
 {
     strdup_call_count = 0;
     strdup_fail_at = -1;
@@ -367,18 +367,21 @@ END_TEST
 Suite *ollama_tool_calls_suite(void)
 {
     Suite *s = suite_create("ollama_tool_calls");
-    TCase *tc = tcase_create("parsing");
 
-    tcase_add_test(tc, test_parse_single_tool_call);
-    tcase_add_test(tc, test_parse_multiple_tool_calls);
-    tcase_add_test(tc, test_skip_tool_call_no_name);
-    tcase_add_test(tc, test_no_tool_calls_field);
-    tcase_add_test(tc, test_alloc_fail_name);
-    tcase_add_test(tc, test_alloc_fail_id);
-    tcase_add_test(tc, test_alloc_fail_arguments);
-    tcase_add_test(tc, test_recovery_after_failure);
-    tcase_add_test(tc, test_capacity_growth);
-    suite_add_tcase(s, tc);
+    TCase *tc_parse = tcase_create("NormalParsing");
+    tcase_add_test(tc_parse, test_parse_extracts_name_and_arguments_from_single_tool_call);
+    tcase_add_test(tc_parse, test_parse_extracts_all_tool_calls_from_array);
+    tcase_add_test(tc_parse, test_parse_skips_entry_when_tool_call_name_is_empty);
+    tcase_add_test(tc_parse, test_parse_returns_zero_when_tool_calls_field_is_missing);
+    tcase_add_test(tc_parse, test_parse_accumulates_tool_calls_across_repeated_invocations);
+    tcase_add_test(tc_parse, test_parse_doubles_capacity_when_tool_calls_exceed_initial_allocation);
+    suite_add_tcase(s, tc_parse);
+
+    TCase *tc_fault = tcase_create("FaultInjection");
+    tcase_add_test(tc_fault, test_parse_cleans_up_partial_entry_on_name_alloc_failure);
+    tcase_add_test(tc_fault, test_parse_cleans_up_partial_entry_on_id_alloc_failure);
+    tcase_add_test(tc_fault, test_parse_cleans_up_partial_entry_on_arguments_alloc_failure);
+    suite_add_tcase(s, tc_fault);
 
     return s;
 }

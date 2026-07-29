@@ -58,7 +58,7 @@ LLMProvider *td_test_get_provider(const char *name, const char *model,
     return p;
 }
 
-START_TEST(test_delegate_normal)
+START_TEST(test_delegate_execute_returns_content_without_error)
 {
     Tool *t = tool_delegate_create(NULL);
     ck_assert_ptr_nonnull(t);
@@ -149,14 +149,19 @@ END_TEST
 Suite *tool_delegate_suite(void)
 {
     Suite *s = suite_create("ToolDelegate");
-    TCase *tc = tcase_create("Core");
-    tcase_add_test(tc, test_delegate_normal);
-    tcase_add_test(tc, test_delegate_uaf_task_str);
-    tcase_add_test(tc, test_delegate_alloc_fail_task_str);
-    tcase_add_test(tc, test_delegate_alloc_fail_sys_role);
-    tcase_add_test(tc, test_delegate_alloc_fail_sys_content);
-    tcase_add_test(tc, test_delegate_alloc_fail_user_role);
-    suite_add_tcase(s, tc);
+
+    TCase *tc_exec = tcase_create("Execution");
+    tcase_add_test(tc_exec, test_delegate_execute_returns_content_without_error);
+    tcase_add_test(tc_exec, test_delegate_uaf_task_str);
+    suite_add_tcase(s, tc_exec);
+
+    TCase *tc_fault = tcase_create("FaultInjection");
+    tcase_add_test(tc_fault, test_delegate_alloc_fail_task_str);
+    tcase_add_test(tc_fault, test_delegate_alloc_fail_sys_role);
+    tcase_add_test(tc_fault, test_delegate_alloc_fail_sys_content);
+    tcase_add_test(tc_fault, test_delegate_alloc_fail_user_role);
+    suite_add_tcase(s, tc_fault);
+
     return s;
 }
 
