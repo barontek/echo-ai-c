@@ -24,6 +24,7 @@
             cjson
             check
             valgrind
+            gcovr
             nodejs_22
           ];
 

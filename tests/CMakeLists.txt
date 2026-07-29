@@ -117,6 +117,115 @@ target_include_directories(test_ollama_tool_calls PRIVATE ../src)
 target_link_libraries(test_ollama_tool_calls PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
 add_test(NAME test_ollama_tool_calls COMMAND test_ollama_tool_calls)
 
+add_executable(test_json
+    ../src/utils/json.c
+    test_json.c
+)
+target_include_directories(test_json PRIVATE ../src)
+target_link_libraries(test_json PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_json COMMAND test_json)
+
+add_executable(test_callbacks
+    ../src/utils/callbacks.c
+    test_callbacks.c
+)
+target_include_directories(test_callbacks PRIVATE ../src)
+target_link_libraries(test_callbacks PRIVATE PkgConfig::CHECK)
+add_test(NAME test_callbacks COMMAND test_callbacks)
+
+add_executable(test_safety
+    ../src/safety/safety.c
+    ../src/config/config.c
+    ../src/utils/string_utils.c
+    test_safety.c
+)
+target_include_directories(test_safety PRIVATE ../src)
+target_link_libraries(test_safety PRIVATE PkgConfig::CHECK)
+add_test(NAME test_safety COMMAND test_safety)
+
+add_executable(test_context
+    ../src/agent/context.c
+    ../src/utils/string_utils.c
+    test_context.c
+)
+target_include_directories(test_context PRIVATE ../src)
+target_link_libraries(test_context PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_context COMMAND test_context)
+
+add_executable(test_rate_limiter
+    ../src/utils/rate_limiter.c
+    ../src/utils/logging.c
+    test_rate_limiter.c
+)
+target_include_directories(test_rate_limiter PRIVATE ../src)
+target_link_libraries(test_rate_limiter PRIVATE PkgConfig::CHECK PkgConfig::SQLITE3)
+add_test(NAME test_rate_limiter COMMAND test_rate_limiter)
+
+add_executable(test_routes
+    ../src/server/routes/routes.c
+    test_routes.c
+)
+target_compile_definitions(test_routes PRIVATE ROUTES_TEST=1)
+target_include_directories(test_routes PRIVATE ../src)
+target_link_libraries(test_routes PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_routes COMMAND test_routes)
+
+add_executable(test_routes_session
+    ../src/server/routes/routes_session.c
+    test_routes_session.c
+)
+target_compile_definitions(test_routes_session PRIVATE ROUTES_SESSION_TEST=1)
+target_include_directories(test_routes_session PRIVATE ../src)
+target_link_libraries(test_routes_session PRIVATE PkgConfig::CHECK)
+add_test(NAME test_routes_session COMMAND test_routes_session)
+
+add_executable(test_routes_session_handlers
+    ../src/server/routes/routes_session.c
+    ../src/utils/string_utils.c
+    test_routes_session_handlers.c
+)
+target_include_directories(test_routes_session_handlers PRIVATE ../src)
+target_link_libraries(test_routes_session_handlers PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_routes_session_handlers COMMAND test_routes_session_handlers)
+
+add_executable(test_routes_general
+    ../src/server/routes/routes_general.c
+    ../src/utils/string_utils.c
+    test_routes_general.c
+)
+target_include_directories(test_routes_general PRIVATE ../src)
+target_link_libraries(test_routes_general PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_routes_general COMMAND test_routes_general)
+
+add_executable(test_routes_auth
+    ../src/server/routes/routes_auth.c
+    ../src/utils/string_utils.c
+    test_routes_auth.c
+)
+target_include_directories(test_routes_auth PRIVATE ../src)
+target_link_libraries(test_routes_auth PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_routes_auth COMMAND test_routes_auth)
+
+add_executable(test_routes_chat
+    ../src/server/routes/routes_chat.c
+    ../src/utils/string_utils.c
+    test_routes_chat.c
+)
+target_include_directories(test_routes_chat PRIVATE ../src)
+target_link_libraries(test_routes_chat PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_routes_chat COMMAND test_routes_chat)
+
+add_executable(test_routes_ws
+    ../src/server/routes/routes_ws.c
+    ../src/server/routes/routes.c
+    ../src/utils/string_utils.c
+    test_routes_ws.c
+)
+target_include_directories(test_routes_ws PRIVATE ../src)
+target_compile_definitions(test_routes_ws PRIVATE ROUTES_WS_TEST ROUTES_TEST)
+target_link_libraries(test_routes_ws PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+add_test(NAME test_routes_ws COMMAND test_routes_ws)
+
 add_executable(test_agent_save
     ../src/agent/agent.c
     ../src/agent/message.c

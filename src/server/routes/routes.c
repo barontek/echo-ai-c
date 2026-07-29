@@ -2,10 +2,12 @@
 #include <cjson/cJSON.h>
 
 #include "routes.h"
+#ifndef ROUTES_TEST
 #include "routes_auth.h"
 #include "routes_session.h"
 #include "routes_chat.h"
 #include "routes_general.h"
+#endif
 
 void ws_add_message_to_json(cJSON *m, const Message *msg)
 {
@@ -44,6 +46,7 @@ void ws_add_message_to_json(cJSON *m, const Message *msg)
     }
 }
 
+#ifndef ROUTES_TEST
 const Route routes[] = {
     {"GET",  "/api/status",               0, 0, handle_status},
     {"GET",  "/api/health",               0, 0, handle_health},
@@ -71,6 +74,7 @@ const Route routes[] = {
 };
 
 const int routes_count = sizeof(routes) / sizeof(routes[0]);
+#endif
 
 int route_match(const char *method, const char *path, const Route *r)
 {

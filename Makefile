@@ -59,3 +59,16 @@ frontend-test:
 
 frontend-clean:
 	rm -rf $(NPM_DIR)/dist
+
+# --- code coverage ---
+COVERAGE_DIR ?= build-coverage
+
+coverage:
+	$(CMAKE) -B $(COVERAGE_DIR) -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON -DENABLE_SANITIZERS=OFF
+	$(CMAKE) --build $(COVERAGE_DIR)
+	$(CTEST) --test-dir $(COVERAGE_DIR) -V || true
+	gcovr -r . --object-directory=$(COVERAGE_DIR) --print-summary --sort-percentage --decisions
+	gcovr -r . --object-directory=$(COVERAGE_DIR) --html-details coverage.html --html-title "Echo AI Coverage"
+
+coverage-clean:
+	rm -rf $(COVERAGE_DIR) coverage.html coverage.*.html

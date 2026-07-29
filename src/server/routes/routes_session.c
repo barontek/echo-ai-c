@@ -1,14 +1,19 @@
 #include <stdlib.h>
 #include <string.h>
+#ifndef ROUTES_SESSION_TEST
 #include <cjson/cJSON.h>
+#endif
 
 #include "routes.h"
 #include "routes_session.h"
+#ifndef ROUTES_SESSION_TEST
 #include "../middleware.h"
 #include "../../session/session_manager.h"
 #include "../../utils/logging.h"
 #include "../../utils/string_utils.h"
+#endif
 
+#ifndef ROUTES_SESSION_TEST
 void handle_sessions(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
     if (!middleware_check_unlock(req, ctx))
@@ -103,7 +108,13 @@ void handle_create_session(HTTPRequest *req, Client *client, ServerContext *ctx)
     session_free(s);
 }
 
+#endif /* ROUTES_SESSION_TEST */
+
+#ifdef ROUTES_SESSION_TEST
+const char *session_id_from_path(const char *path)
+#else
 static const char *session_id_from_path(const char *path)
+#endif
 {
     const char *prefix = "/api/sessions/";
     size_t plen = strlen(prefix);
@@ -112,14 +123,22 @@ static const char *session_id_from_path(const char *path)
     return NULL;
 }
 
+#ifdef ROUTES_SESSION_TEST
+int is_export_path(const char *sid)
+#else
 static int is_export_path(const char *sid)
+#endif
 {
     size_t slen = strlen(sid);
     return (slen > 7 && strcmp(sid + slen - 7, "/export") == 0)
         || (slen > 13 && strcmp(sid + slen - 13, "/debug-export") == 0);
 }
 
+#ifdef ROUTES_SESSION_TEST
+size_t export_suffix_len(const char *sid)
+#else
 static size_t export_suffix_len(const char *sid)
+#endif
 {
     size_t slen = strlen(sid);
     if (slen > 13 && strcmp(sid + slen - 13, "/debug-export") == 0) return 13;
@@ -127,6 +146,7 @@ static size_t export_suffix_len(const char *sid)
     return 0;
 }
 
+#ifndef ROUTES_SESSION_TEST
 void handle_session_get(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
     if (!ctx->sm)
@@ -385,3 +405,4 @@ void handle_session_import(HTTPRequest *req, Client *client, ServerContext *ctx)
     session_free(s);
 }
 
+#endif /* ROUTES_SESSION_TEST */

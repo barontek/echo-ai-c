@@ -34,7 +34,9 @@ static char *reg_test_strdup(const char *s)
 static Tool *tools[MAX_TOOLS];
 static int tool_count = 0;
 
+#ifndef REGISTRY_TEST
 static SafetyConfig *safety_global = NULL;
+#endif
 static SearchProvider *search_provider_global = NULL;
 static SessionManager *session_manager_global = NULL;
 

@@ -1,5 +1,6 @@
 build/
 build-valgrind/
+coverage/
 CMakeCache.txt
 CMakeFiles/
 CTestTestfile.cmake

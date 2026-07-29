@@ -71,6 +71,33 @@ START_TEST(test_conf_alloc_fail_mid)
 }
 END_TEST
 
+START_TEST(test_conf_load_continuation_line)
+{
+    write_conf("/tmp/test_ctl.conf",
+        "key1 = first line\n"
+        " continuation\n");
+    Conf *conf = conf_load("/tmp/test_ctl.conf");
+    ck_assert_ptr_nonnull(conf);
+    const char *v = conf_get(conf, "key1");
+    ck_assert_ptr_nonnull(v);
+    ck_assert_str_eq(v, "first line\ncontinuation");
+    conf_free(conf);
+    remove("/tmp/test_ctl.conf");
+}
+END_TEST
+
+START_TEST(test_conf_get_int_invalid)
+{
+    write_conf("/tmp/test_ival.conf",
+        "key = notanumber\n");
+    Conf *conf = conf_load("/tmp/test_ival.conf");
+    ck_assert_ptr_nonnull(conf);
+    ck_assert_int_eq(conf_get_int(conf, "key", 99), 99);
+    conf_free(conf);
+    remove("/tmp/test_ival.conf");
+}
+END_TEST
+
 Suite *config_suite(void)
 {
     Suite *s = suite_create("Config");
@@ -79,6 +106,8 @@ Suite *config_suite(void)
     tcase_add_test(tc, test_conf_load_parses_sections_keys_and_comments);
     tcase_add_test(tc, test_conf_load_nonexistent);
     tcase_add_test(tc, test_conf_alloc_fail_mid);
+    tcase_add_test(tc, test_conf_load_continuation_line);
+    tcase_add_test(tc, test_conf_get_int_invalid);
     suite_add_tcase(s, tc);
     return s;
 }

@@ -15,6 +15,12 @@
 #include "../../utils/string_utils.h"
 #include "../../tools/registry.h"
 
+#ifdef ROUTES_WS_TEST
+#define WS_STATIC
+#else
+#define WS_STATIC static
+#endif
+
 typedef struct QueuedMsg {
     char *data;
     struct QueuedMsg *next;
@@ -38,9 +44,9 @@ typedef struct {
     char *ask_user_response;
 } WSChatCtx;
 
-static void ws_title_update_cb(const char *session_id, const char *title, void *userdata);
+WS_STATIC void ws_title_update_cb(const char *session_id, const char *title, void *userdata);
 
-static void ws_chat_on_chunk(const char *chunk, void *userdata)
+WS_STATIC void ws_chat_on_chunk(const char *chunk, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
     if (!c || !c->ws) return;
@@ -56,7 +62,7 @@ static void ws_chat_on_chunk(const char *chunk, void *userdata)
     cJSON_Delete(frame);
 }
 
-static void ws_send_done(WSClient *ws, const char *session_id, const char *title, LLMResponse *resp)
+WS_STATIC void ws_send_done(WSClient *ws, const char *session_id, const char *title, LLMResponse *resp)
 {
     cJSON *done = cJSON_CreateObject();
     cJSON_AddStringToObject(done, "type", "done");
@@ -92,7 +98,7 @@ static void ws_send_done(WSClient *ws, const char *session_id, const char *title
     cJSON_Delete(done);
 }
 
-static void ws_chat_flush_queue(WSChatCtx *c)
+WS_STATIC void ws_chat_flush_queue(WSChatCtx *c)
 {
     if (!c || c->ready) return;
     c->ready = 1;
@@ -142,7 +148,7 @@ static void ws_chat_flush_queue(WSChatCtx *c)
     c->msg_queue_tail = NULL;
 }
 
-static void ws_chat_enqueue(WSChatCtx *c, const char *data)
+WS_STATIC void ws_chat_enqueue(WSChatCtx *c, const char *data)
 {
     QueuedMsg *q = calloc(1, sizeof(QueuedMsg));
     if (!q) return;
@@ -156,7 +162,7 @@ static void ws_chat_enqueue(WSChatCtx *c, const char *data)
     c->msg_queue_tail = q;
 }
 
-static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void *userdata)
+WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void *userdata)
 {
     (void)len;
     WSChatCtx *c = (WSChatCtx *)userdata;
@@ -429,7 +435,7 @@ static void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void 
     }
 }
 
-static void ws_title_update_cb(const char *session_id, const char *title, void *userdata)
+WS_STATIC void ws_title_update_cb(const char *session_id, const char *title, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
     if (!c || !c->ws) return;
@@ -444,7 +450,7 @@ static void ws_title_update_cb(const char *session_id, const char *title, void *
     cJSON_Delete(ev);
 }
 
-static void ws_tool_start_cb(const char *tool_name, const char *arguments, void *userdata)
+WS_STATIC void ws_tool_start_cb(const char *tool_name, const char *arguments, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
     if (!c || !c->ws) return;
@@ -459,7 +465,7 @@ static void ws_tool_start_cb(const char *tool_name, const char *arguments, void 
     cJSON_Delete(ev);
 }
 
-static void ws_tool_end_cb(const char *tool_name, const char *tool_call_id,
+WS_STATIC void ws_tool_end_cb(const char *tool_name, const char *tool_call_id,
                             const char *result_content, const char *result_error,
                             void *userdata)
 {
@@ -478,7 +484,7 @@ static void ws_tool_end_cb(const char *tool_name, const char *tool_call_id,
     cJSON_Delete(ev);
 }
 
-static void ws_chat_on_close(WSClient *ws, void *userdata)
+WS_STATIC void ws_chat_on_close(WSClient *ws, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
     if (c)
@@ -511,7 +517,7 @@ static void ws_chat_on_close(WSClient *ws, void *userdata)
     }
 }
 
-static int ws_approval_cb(const char *tool_name, const char *arguments, void *userdata)
+WS_STATIC int ws_approval_cb(const char *tool_name, const char *arguments, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
     if (!c || !c->ws) return 0;
@@ -554,7 +560,7 @@ static int ws_approval_cb(const char *tool_name, const char *arguments, void *us
     return approved;
 }
 
-static char *ws_ask_user_cb(const char *question, void *userdata)
+WS_STATIC char *ws_ask_user_cb(const char *question, void *userdata)
 {
     WSChatCtx *c = (WSChatCtx *)userdata;
     if (!c || !c->ws) return NULL;
@@ -578,7 +584,7 @@ static char *ws_ask_user_cb(const char *question, void *userdata)
     return answer;
 }
 
-static void ws_chat_emit_session_start(WSChatCtx *c)
+WS_STATIC void ws_chat_emit_session_start(WSChatCtx *c)
 {
     if (!c->agent || !c->agent->session_id) return;
     cJSON *ev = cJSON_CreateObject();

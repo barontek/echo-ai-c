@@ -85,6 +85,12 @@ target_link_libraries(echo-ai PRIVATE
 )
 
 option(ENABLE_SANITIZERS "Build with ASan/UBSan" ON)
+option(ENABLE_COVERAGE "Build with code coverage instrumentation (--coverage)" OFF)
+
+if(ENABLE_COVERAGE)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} --coverage")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --coverage")
+endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(echo-ai PRIVATE -Wall -Wextra -Wpedantic -Werror -g)
