@@ -22,7 +22,7 @@ add_executable(test_routes_session_handlers
     test_routes_session_handlers.c
 )
 target_include_directories(test_routes_session_handlers PRIVATE ../../src)
-target_link_libraries(test_routes_session_handlers PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_routes_session_handlers PRIVATE PkgConfig::CHECK PkgConfig::CJSON PkgConfig::LIBUV)
 add_test(NAME test_routes_session_handlers COMMAND test_routes_session_handlers)
 
 add_executable(test_routes_general
@@ -31,7 +31,7 @@ add_executable(test_routes_general
     test_routes_general.c
 )
 target_include_directories(test_routes_general PRIVATE ../../src)
-target_link_libraries(test_routes_general PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_routes_general PRIVATE PkgConfig::CHECK PkgConfig::CJSON PkgConfig::LIBUV PkgConfig::LIBCURL)
 add_test(NAME test_routes_general COMMAND test_routes_general)
 
 add_executable(test_routes_auth
@@ -40,7 +40,7 @@ add_executable(test_routes_auth
     test_routes_auth.c
 )
 target_include_directories(test_routes_auth PRIVATE ../../src)
-target_link_libraries(test_routes_auth PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_routes_auth PRIVATE PkgConfig::CHECK PkgConfig::CJSON PkgConfig::LIBUV)
 add_test(NAME test_routes_auth COMMAND test_routes_auth)
 
 add_executable(test_routes_chat
@@ -49,7 +49,7 @@ add_executable(test_routes_chat
     test_routes_chat.c
 )
 target_include_directories(test_routes_chat PRIVATE ../../src)
-target_link_libraries(test_routes_chat PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_routes_chat PRIVATE PkgConfig::CHECK PkgConfig::CJSON PkgConfig::LIBUV)
 add_test(NAME test_routes_chat COMMAND test_routes_chat)
 
 add_executable(test_routes_ws
