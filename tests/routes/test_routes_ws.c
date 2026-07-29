@@ -998,7 +998,8 @@ START_TEST(test_on_message_session_id_new)
     ws_chat_on_message((WSClient *)&dummy_ws,
         "{\"type\":\"message\",\"content\":\"hi\",\"session_id\":\"test-session-123\"}", 69, &c);
     ck_assert_str_eq(c.active_session_id, "test-session-123");
-    ck_assert(strstr(captured_ws_json, "\"type\":\"history\""));
+    /* history event is no longer sent during message processing —
+     * the frontend loaded the session via REST before sending the message. */
     ck_assert(strstr(captured_ws_json, "\"type\":\"done\""));
     reset_capture();
     c.active_session_id = NULL;

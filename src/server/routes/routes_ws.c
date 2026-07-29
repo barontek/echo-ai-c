@@ -222,20 +222,14 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                             c->agent->messages_count = s->messages_count;
                     }
 
-                    cJSON *hist = cJSON_CreateObject();
-                    cJSON_AddStringToObject(hist, "type", "history");
-                    cJSON *arr = cJSON_CreateArray();
-                    for (int i = 0; i < s->messages_count; i++)
-                    {
-                        cJSON *m = cJSON_CreateObject();
-                        ws_add_message_to_json(m, &s->messages[i]);
-                        cJSON_AddItemToArray(arr, m);
-                    }
-                    cJSON_AddItemToObject(hist, "messages", arr);
-                    char *hist_str = cJSON_PrintUnformatted(hist);
-                    if (hist_str) ws_send_json(ws, hist_str);
-                    free(hist_str);
-                    cJSON_Delete(hist);
+                    /* D5: do NOT send a `history` event here. The frontend
+                     * already loaded this session's messages via REST
+                     * (selectSession → api.loadSession) before sending the
+                     * first message. Sending history now would overwrite the
+                     * user's just-typed message that was added to the UI in
+                     * sendMessage(). The init path at line ~711 still sends
+                     * history when the WebSocket connects with a
+                     * ?session_id= query param. */
                 }
                 /* J3: was previously `}                session_free(s);`
                  * on one line — semantically OK but the visual elision of

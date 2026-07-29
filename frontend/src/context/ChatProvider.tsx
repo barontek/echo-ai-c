@@ -36,7 +36,11 @@ function combineAssistantMessages(
     if (last && last.role === 'assistant' && msg.role === 'assistant') {
       last.content += (last.content && msg.content) ? '\n' + msg.content : (msg.content || '');
       if (msg.has_tools) last.has_tools = msg.has_tools;
-      if (msg.tool_calls && msg.tool_calls.length > 0) last.tool_calls = msg.tool_calls;
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        last.tool_calls = last.tool_calls
+          ? [...last.tool_calls, ...msg.tool_calls]
+          : msg.tool_calls;
+      }
       if (msg.thinking) last.thinking = msg.thinking;
     } else {
       combined.push(msg);
@@ -303,19 +307,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                     return existing;
                   });
 
+                  /* Only use data.tool_calls to enrich existing tool_calls
+                   * (mergedToolCalls path above). Never add tool_calls
+                   * to a message that didn't already have them — the
+                   * backend may attach stale tool_calls from previous
+                   * turns onto a text-only response. */
                   const finalToolCalls =
                     mergedToolCalls.length > 0
                       ? mergedToolCalls
-                      : data.tool_calls?.map((tc) => ({
-                          name: tc.name || '',
-                          arguments: (typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments)),
-                          result: (tc as unknown as { result_content?: string; result_error?: string }).result_content
-                            ? {
-                                content: (tc as unknown as { result_content?: string }).result_content || '',
-                                error: (tc as unknown as { result_error?: string }).result_error || null,
-                              }
-                            : undefined,
-                        })) || last.tool_calls || [];
+                      : last.tool_calls || [];
 
                   return [
                     ...prev.slice(0, lastAssistantIdx),
@@ -502,7 +502,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     (index: number, newText: string, msgId?: string) => {
       setMessages((prev) => {
         if (index < 0 || index >= prev.length) return prev;
-        return prev.map((m, i) => (i === index ? { ...m, content: newText, error: undefined } : m));
+        /* Truncate all messages after the edited index so stale
+         * assistant responses (and their tool_calls) don't bleed
+         * into the new streaming response. Matches the backend's
+         * session_manager_truncate_history behaviour. */
+        return prev.slice(0, index + 1).map((m, i) =>
+          (i === index ? { ...m, content: newText, error: undefined } : m)
+        );
       });
       setIsStreaming(true);
 

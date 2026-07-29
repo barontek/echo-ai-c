@@ -402,6 +402,9 @@ attach_tool_calls_to_resp(LLMResponse *resp, const Message *msgs, int count)
 
     for (int i = count - 1; i >= 0; i--)
     {
+        /* D6: stop at the current turn's user message so tool_calls
+         * from previous turns are never attached to a later response. */
+        if (msgs[i].role && strcmp(msgs[i].role, "user") == 0) return;
         if (msgs[i].role && strcmp(msgs[i].role, "assistant") != 0) continue;
         if (msgs[i].tool_calls_count == 0) continue;
 
