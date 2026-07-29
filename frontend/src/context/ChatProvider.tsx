@@ -41,7 +41,11 @@ function combineAssistantMessages(
           ? [...last.tool_calls, ...msg.tool_calls]
           : msg.tool_calls;
       }
-      if (msg.thinking) last.thinking = msg.thinking;
+      if (msg.thinking) {
+        last.thinking = last.thinking
+          ? last.thinking + '\n' + msg.thinking
+          : msg.thinking;
+      }
     } else {
       combined.push(msg);
     }
