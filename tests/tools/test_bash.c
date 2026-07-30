@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <check.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
@@ -9,6 +10,27 @@
 #include "safety/safety.h"
 
 Tool *tool_bash_create(SafetyConfig *safety);
+
+static int process_is_running(pid_t pid)
+{
+    if (kill(pid, 0) != 0) return errno != ESRCH;
+#ifdef __linux__
+    char stat_path[64];
+    if (snprintf(stat_path, sizeof(stat_path), "/proc/%ld/stat", (long)pid) < 0)
+        return 1;
+    FILE *stat_file = fopen(stat_path, "r");
+    if (!stat_file) return 1;
+    char stat_line[512];
+    char *line = fgets(stat_line, sizeof(stat_line), stat_file);
+    int close_rc = fclose(stat_file);
+    if (!line || close_rc != 0) return 1;
+    char *command_end = strrchr(stat_line, ')');
+    if (!command_end || command_end[1] != ' ') return 1;
+    return command_end[2] != 'Z';
+#else
+    return 1;
+#endif
+}
 
 START_TEST(test_bash_drains_large_output_without_timeout)
 {
@@ -41,10 +63,9 @@ START_TEST(test_bash_terminates_background_descendants)
     ck_assert_ptr_nonnull(pid_text);
     long child_pid = strtol(pid_text + 1, NULL, 10);
     ck_assert_int_gt(child_pid, 0);
-    for (int i = 0; i < 20 && kill((pid_t)child_pid, 0) == 0; i++)
+    for (int i = 0; i < 20 && process_is_running((pid_t)child_pid); i++)
         usleep(50000);
-    ck_assert_int_eq(kill((pid_t)child_pid, 0), -1);
-    ck_assert_int_eq(errno, ESRCH);
+    ck_assert_int_eq(process_is_running((pid_t)child_pid), 0);
     tool_result_free(result);
     tool->destroy(tool);
     safety_config_free(safety);
