@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <openssl/crypto.h>
 
 #include "middleware.h"
 #include "../utils/logging.h"
@@ -25,7 +26,14 @@ int middleware_has_valid_token(const char *headers, const char *token)
         int idx = (int)(found - headers_lower);
         const char *tok = headers + idx + 15;
         while (*tok == ' ') tok++;
-        if (strncmp(tok, token, strlen(token)) == 0)
+
+        size_t sent_len = 0;
+        while (tok[sent_len] != '\r' && tok[sent_len] != '\n'
+               && tok[sent_len] != '\0')
+            sent_len++;
+
+        size_t token_len = strlen(token);
+        if (sent_len == token_len && CRYPTO_memcmp(tok, token, sent_len) == 0)
             ret = 1;
     }
     free(headers_lower);

@@ -3,6 +3,7 @@ add_subdirectory(agent)
 add_subdirectory(session)
 add_subdirectory(tools)
 add_subdirectory(routes)
+add_subdirectory(server)
 add_subdirectory(llm)
 
 # --- Fuzz targets (libFuzzer) ---
