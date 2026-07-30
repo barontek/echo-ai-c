@@ -15,36 +15,77 @@ int token_equals(const char *a, size_t a_len, const char *b)
     return CRYPTO_memcmp(a, b, a_len) == 0;
 }
 
+static const char *header_value(const char *headers, const char *name,
+                                size_t *value_len)
+{
+    size_t name_len = strlen(name);
+    const char *line = headers;
+
+    while (line && *line)
+    {
+        const char *newline = strchr(line, '\n');
+        const char *line_end = newline ? newline : line + strlen(line);
+        if (line_end > line && line_end[-1] == '\r') line_end--;
+
+        const char *colon = memchr(line, ':', (size_t)(line_end - line));
+        if (colon && (size_t)(colon - line) == name_len &&
+            strncasecmp(line, name, name_len) == 0)
+        {
+            const char *value = colon + 1;
+            while (value < line_end && (*value == ' ' || *value == '\t')) value++;
+            const char *end = line_end;
+            while (end > value && (end[-1] == ' ' || end[-1] == '\t')) end--;
+            *value_len = (size_t)(end - value);
+            return value;
+        }
+
+        if (!newline) break;
+        line = newline + 1;
+    }
+
+    return NULL;
+}
+
 int middleware_has_valid_token(const char *headers, const char *token)
 {
     if (!headers || !token) return 0;
 
-    size_t hlen = strlen(headers);
-    char *headers_lower = malloc(hlen + 1);
-    if (!headers_lower) return 0;
-    for (size_t i = 0; i < hlen; i++)
-        headers_lower[i] = (headers[i] >= 'A' && headers[i] <= 'Z')
-                           ? headers[i] + 32 : headers[i];
-    headers_lower[hlen] = '\0';
+    size_t value_len = 0;
+    const char *value = header_value(headers, "X-Unlock-Token", &value_len);
+    return value && token_equals(value, value_len, token);
+}
 
-    const char *found = strstr(headers_lower, "x-unlock-token:");
-    int ret = 0;
-    if (found)
+int middleware_has_valid_ws_token(const char *headers, const char *token)
+{
+    if (!headers || !token) return 0;
+
+    size_t value_len = 0;
+    const char *value = header_value(headers, "Sec-WebSocket-Protocol", &value_len);
+    if (!value) return 0;
+
+    static const char prefix[] = "echo-ai-token-";
+    const char *end = value + value_len;
+    const char *item = value;
+    while (item < end)
     {
-        int idx = (int)(found - headers_lower);
-        const char *tok = headers + idx + 15;
-        while (*tok == ' ') tok++;
+        while (item < end && (*item == ' ' || *item == '\t' || *item == ',')) item++;
+        const char *item_end = item;
+        while (item_end < end && *item_end != ',') item_end++;
+        const char *trimmed_end = item_end;
+        while (trimmed_end > item &&
+               (trimmed_end[-1] == ' ' || trimmed_end[-1] == '\t')) trimmed_end--;
 
-        size_t sent_len = 0;
-        while (tok[sent_len] != '\r' && tok[sent_len] != '\n'
-               && tok[sent_len] != '\0')
-            sent_len++;
+        size_t item_len = (size_t)(trimmed_end - item);
+        size_t prefix_len = sizeof(prefix) - 1;
+        if (item_len >= prefix_len &&
+            memcmp(item, prefix, sizeof(prefix) - 1) == 0 &&
+            token_equals(item + prefix_len, item_len - prefix_len, token))
+            return 1;
 
-        if (token_equals(tok, sent_len, token))
-            ret = 1;
+        item = item_end;
     }
-    free(headers_lower);
-    return ret;
+
+    return 0;
 }
 
 int middleware_check_unlock(HTTPRequest *req, ServerContext *ctx)

@@ -43,18 +43,17 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
         return tool_result_error("oom", "execution_error");
     }
 
+    if (!safety_check_path(ctx->safety, path))
+    {
+        free(path); free(old_str); free(new_str);
+        return tool_result_error("path rejected by safety check", "policy_denied");
+    }
+
     char *resolved = safety_resolve_path(ctx->safety, path);
     if (!resolved)
     {
         free(path); free(old_str); free(new_str);
         return tool_result_error("path resolution failed", "policy_denied");
-    }
-
-    if (!safety_check_path(ctx->safety, resolved))
-    {
-        free(resolved);
-        free(path); free(old_str); free(new_str);
-        return tool_result_error("path rejected by safety check", "policy_denied");
     }
 
     FILE *f = fopen(resolved, "rb");

@@ -186,6 +186,22 @@ START_TEST(test_token_exact_prefix_but_shorter_returns_invalid)
 }
 END_TEST
 
+START_TEST(test_websocket_protocol_accepts_exact_token)
+{
+    const char *headers =
+        "Sec-WebSocket-Protocol: echo-ai, echo-ai-token-secret\r\n";
+    ck_assert_int_eq(middleware_has_valid_ws_token(headers, "secret"), 1);
+}
+END_TEST
+
+START_TEST(test_websocket_protocol_rejects_token_suffix)
+{
+    const char *headers =
+        "Sec-WebSocket-Protocol: echo-ai, echo-ai-token-secret-extra\r\n";
+    ck_assert_int_eq(middleware_has_valid_ws_token(headers, "secret"), 0);
+}
+END_TEST
+
 START_TEST(test_token_equals_exact)
 {
     ck_assert_int_eq(token_equals("abc", 3, "abc"), 1);
@@ -350,6 +366,8 @@ Suite *middleware_suite(void)
     tcase_add_test(tc, test_token_truncated_shorter_than_stored_returns_invalid);
     tcase_add_test(tc, test_token_with_leading_spaces);
     tcase_add_test(tc, test_token_exact_prefix_but_shorter_returns_invalid);
+    tcase_add_test(tc, test_websocket_protocol_accepts_exact_token);
+    tcase_add_test(tc, test_websocket_protocol_rejects_token_suffix);
 
     suite_add_tcase(s, tc);
 

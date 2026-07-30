@@ -69,4 +69,30 @@ if(HAS_LIBFUZZER)
         -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
     target_link_libraries(fuzz_session_deserialize PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::CJSON)
+
+    add_executable(fuzz_http_parser
+        ../src/server/server.c
+        ../src/utils/string_utils.c
+        fuzz/fuzz_http_parser.c
+    )
+    target_compile_definitions(fuzz_http_parser PRIVATE SERVER_TEST=1)
+    target_include_directories(fuzz_http_parser PRIVATE ../src)
+    target_compile_options(fuzz_http_parser PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+    target_link_libraries(fuzz_http_parser PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::LIBUV PkgConfig::CJSON)
+
+    add_executable(fuzz_lmstudio_stream
+        ../src/llm/lmstudio.c
+        ../src/agent/message.c
+        ../src/utils/string_utils.c
+        ../src/utils/logging.c
+        fuzz/fuzz_lmstudio_stream.c
+    )
+    target_compile_definitions(fuzz_lmstudio_stream PRIVATE LMSTUDIO_TEST=1)
+    target_include_directories(fuzz_lmstudio_stream PRIVATE ../src)
+    target_compile_options(fuzz_lmstudio_stream PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+    target_link_libraries(fuzz_lmstudio_stream PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON)
 endif()

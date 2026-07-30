@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <ctype.h>
 
 #include "tool.h"
 #include "../safety/safety.h"
@@ -30,6 +32,19 @@ static const char *notes_dir_path(NotesCtx *ctx)
         mkdir(path, 0755);
     }
     return ctx->notes_dir ? ctx->notes_dir : "/tmp/echo-notes";
+}
+
+static int valid_note_name(const char *name)
+{
+    if (!name || !name[0] || strlen(name) > 128 ||
+        strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+        return 0;
+    for (const unsigned char *p = (const unsigned char *)name; *p; p++)
+    {
+        if (!isalnum(*p) && *p != ' ' && *p != '_' && *p != '-' && *p != '.')
+            return 0;
+    }
+    return 1;
 }
 
 static ToolResult *notes_execute(Tool *self, const char *args_json)
@@ -90,6 +105,13 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'name' argument", "validation_error");
     }
     name = str_dup(cJSON_GetStringValue(name_json));
+    if (!valid_note_name(name))
+    {
+        cJSON_Delete(args);
+        free(action);
+        free(name);
+        return tool_result_error("invalid note name", "validation_error");
+    }
 
     cJSON *content_json = cJSON_GetObjectItem(args, "content");
     if (content_json && cJSON_IsString(content_json))
@@ -107,16 +129,19 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
             return tool_result_error("oom", "execution_error");
         }
 
+        int fd = open(fpath, O_RDONLY | O_NOFOLLOW);
         struct stat st;
-        if (stat(fpath, &st) != 0)
+        if (fd < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
         {
+            if (fd >= 0) close(fd);
             free(fpath); free(name); free(note_content);
             return tool_result_error("note not found", "file_not_found");
         }
 
-        FILE *f = fopen(fpath, "rb");
+        FILE *f = fdopen(fd, "rb");
         if (!f)
         {
+            close(fd);
             free(fpath); free(name); free(note_content);
             return tool_result_error("cannot read note", "execution_error");
         }
@@ -152,6 +177,11 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
             free(name);
             return tool_result_error("missing 'content' for write action", "validation_error");
         }
+        if (strlen(note_content) > ctx->safety->max_file_size)
+        {
+            free(name); free(note_content);
+            return tool_result_error("note too large", "policy_denied");
+        }
 
         char *fpath = NULL;
         if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
@@ -160,15 +190,23 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
             return tool_result_error("oom", "execution_error");
         }
 
-        FILE *f = fopen(fpath, "w");
+        int fd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+        FILE *f = fd >= 0 ? fdopen(fd, "w") : NULL;
         if (!f)
         {
+            if (fd >= 0) close(fd);
             free(fpath); free(name); free(note_content);
             return tool_result_error("cannot write note", "execution_error");
         }
 
-        fwrite(note_content, 1, strlen(note_content), f);
-        fclose(f);
+        size_t content_len = strlen(note_content);
+        int write_failed = fwrite(note_content, 1, content_len, f) != content_len;
+        int close_failed = fclose(f) != 0;
+        if (write_failed || close_failed)
+        {
+            free(fpath); free(name); free(note_content);
+            return tool_result_error("cannot write note", "execution_error");
+        }
         free(fpath);
         free(name); free(note_content);
 

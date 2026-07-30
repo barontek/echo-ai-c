@@ -100,7 +100,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setConnectionStatus('connecting');
 
       const gen = ++wsGenRef.current;
-      const ws = new WebSocket('/ws/chat');
+      const token = api.unlockTokenValue;
+      const protocols = token ? ['echo-ai', `echo-ai-token-${token}`] : [];
+      const ws = new WebSocket('/ws/chat', protocols);
       wsRef.current = ws;
 
       ws.onopen = () => {

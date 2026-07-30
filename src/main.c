@@ -153,6 +153,7 @@ static void run_chat(Conf *conf)
 
     Agent *agent = agent_create(cfg);
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
+    agent_set_safety(agent, safety);
 
     registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
                                   cfg->num_ctx, cfg->keep_alive_secs,
@@ -240,6 +241,7 @@ static void run_cli(Conf *conf)
 
     Agent *agent = agent_create(cfg);
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
+    agent_set_safety(agent, safety);
 
     registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
                                   cfg->num_ctx, cfg->keep_alive_secs,
@@ -480,6 +482,7 @@ static void run_web(Conf *conf, const char *config_path)
 
     Agent *agent = agent_create(cfg);
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
+    agent_set_safety(agent, safety);
 
     registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
                                   cfg->num_ctx, cfg->keep_alive_secs,

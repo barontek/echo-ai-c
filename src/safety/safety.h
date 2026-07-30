@@ -2,6 +2,7 @@
 #define ECHO_SAFETY_H
 
 #include <stddef.h>
+#include <sys/socket.h>
 
 typedef struct Conf Conf;
 
@@ -54,11 +55,13 @@ int safety_check_path(const SafetyConfig *cfg, const char *path);
 int safety_check_command(const SafetyConfig *cfg, const char *command);
 int safety_check_destructive(const char *command);
 int safety_check_url(const SafetyConfig *cfg, const char *url);
+int safety_check_socket_address(const struct sockaddr *address);
 int safety_check_file_size(const SafetyConfig *cfg, size_t size);
 int safety_needs_approval(const SafetyConfig *cfg, const char *tool_name);
 
 int safety_audit_log(const SafetyConfig *cfg, const char *entry);
 
 char *safety_resolve_path(const SafetyConfig *cfg, const char *path);
+int safety_path_is_within_workspace(const SafetyConfig *cfg, const char *path);
 
 #endif

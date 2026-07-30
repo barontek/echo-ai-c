@@ -29,6 +29,7 @@ typedef void (*tool_start_callback)(const char *tool_name, const char *arguments
 typedef void (*tool_end_callback)(const char *tool_name, const char *tool_call_id,
                                   const char *result_content, const char *result_error,
                                   void *userdata);
+typedef char *(*ask_user_callback)(const char *question, void *userdata);
 
 typedef struct {
     LLMProvider *provider;
@@ -57,6 +58,8 @@ typedef struct {
     void *tool_start_userdata;
     tool_end_callback on_tool_end;
     void *tool_end_userdata;
+    ask_user_callback on_ask_user;
+    void *ask_user_userdata;
     SafetyConfig *safety;
 } Agent;
 
@@ -75,6 +78,7 @@ void agent_set_metrics(Agent *agent, Metrics *metrics);
 void agent_set_title_callback(Agent *agent, title_callback cb, void *userdata);
 void agent_set_tool_start_callback(Agent *agent, tool_start_callback cb, void *userdata);
 void agent_set_tool_end_callback(Agent *agent, tool_end_callback cb, void *userdata);
+void agent_set_ask_user_callback(Agent *agent, ask_user_callback cb, void *userdata);
 void agent_set_safety(Agent *agent, SafetyConfig *safety);
 void agent_set_callback_manager(Agent *agent, CallbackManager *mgr);
 void agent_set_model(Agent *agent, const char *model);

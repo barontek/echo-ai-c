@@ -26,3 +26,15 @@ add_executable(test_factory
 target_include_directories(test_factory PRIVATE ../../src)
 target_link_libraries(test_factory PRIVATE echo_ai_test_deps)
 add_test(NAME test_factory COMMAND test_factory)
+
+add_executable(test_lmstudio
+    ../../src/llm/lmstudio.c
+    ../../src/agent/message.c
+    ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
+    test_lmstudio.c
+)
+target_compile_definitions(test_lmstudio PRIVATE LMSTUDIO_TEST=1)
+target_include_directories(test_lmstudio PRIVATE ../../src)
+target_link_libraries(test_lmstudio PRIVATE echo_ai_test_deps)
+add_test(NAME test_lmstudio COMMAND test_lmstudio)

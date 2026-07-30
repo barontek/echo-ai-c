@@ -42,18 +42,16 @@ static ToolResult *ingest_document_execute(Tool *self, const char *args_json)
     else if (path_json && cJSON_IsString(path_json))
     {
         const char *path = cJSON_GetStringValue(path_json);
+        if (!safety_check_path(ctx->safety, path))
+        {
+            cJSON_Delete(args);
+            return tool_result_error("path rejected by safety check", "policy_denied");
+        }
         char *resolved = safety_resolve_path(ctx->safety, path);
         if (!resolved)
         {
             cJSON_Delete(args);
             return tool_result_error("path resolution failed", "policy_denied");
-        }
-
-        if (!safety_check_path(ctx->safety, resolved))
-        {
-            free(resolved);
-            cJSON_Delete(args);
-            return tool_result_error("path rejected by safety check", "policy_denied");
         }
 
         struct stat st;

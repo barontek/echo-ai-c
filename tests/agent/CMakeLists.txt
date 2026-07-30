@@ -11,7 +11,9 @@ add_test(NAME test_message COMMAND test_message)
 
 add_executable(test_context
     ../../src/agent/context.c
+    ../../src/agent/message.c
     ../../src/utils/string_utils.c
+    ../../src/utils/json.c
     test_context.c
 )
 target_include_directories(test_context PRIVATE ../../src)

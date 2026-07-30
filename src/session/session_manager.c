@@ -20,11 +20,26 @@
 #ifdef SESSION_MANAGER_TEST
 static int sm_alloc_counter = 0;
 static int sm_alloc_fail_at = -1;
+static int sm_realloc_counter = 0;
+static int sm_realloc_fail_at = -1;
 
 void session_manager_test_set_alloc_fail(int nth_allocation)
 {
     sm_alloc_counter = 0;
     sm_alloc_fail_at = nth_allocation;
+}
+
+void session_manager_test_set_realloc_fail(int nth_allocation)
+{
+    sm_realloc_counter = 0;
+    sm_realloc_fail_at = nth_allocation;
+}
+
+static void *sm_test_realloc(void *ptr, size_t size)
+{
+    sm_realloc_counter++;
+    if (sm_realloc_counter == sm_realloc_fail_at) return NULL;
+    return realloc(ptr, size);
 }
 
 static char *sm_test_strdup(const char *s)
@@ -35,6 +50,7 @@ static char *sm_test_strdup(const char *s)
 }
 
 #define str_dup sm_test_strdup
+#define realloc sm_test_realloc
 
 /* Fault-injection knob for B1: lets a test force the Nth
  * sqlite3_bind_* call (across bind_text/bind_int/bind_blob/bind_null in any
@@ -780,28 +796,44 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
         {
             capacity *= 2;
             char **new_ids = realloc(list->ids, sizeof(char *) * capacity);
-            char **new_titles = realloc(list->titles, sizeof(char *) * capacity);
-            char **new_dates = realloc(list->created_ats, sizeof(char *) * capacity);
-            int *new_tgas = realloc(list->title_generation_attempteds, sizeof(int) * capacity);
-            if (!new_ids || !new_titles || !new_dates || !new_tgas)
+            if (!new_ids)
             {
-                /* B6+B7: realloc failure must not silently truncate and must
-                 * not leak whichever halfway reallocs succeeded (those are
-                 * not yet assigned to list->*, so freeing list* via
-                 * session_list_free still owns the originals; only the new
-                 * buffers leak unless we free them here). */
-                free(new_ids);
-                free(new_titles);
-                free(new_dates);
-                free(new_tgas);
                 sqlite3_finalize(stmt);
                 pthread_mutex_unlock(&sm->lock);
                 session_list_free(list);
                 return NULL;
             }
             list->ids = new_ids;
+
+            char **new_titles = realloc(list->titles, sizeof(char *) * capacity);
+            if (!new_titles)
+            {
+                sqlite3_finalize(stmt);
+                pthread_mutex_unlock(&sm->lock);
+                session_list_free(list);
+                return NULL;
+            }
             list->titles = new_titles;
+
+            char **new_dates = realloc(list->created_ats, sizeof(char *) * capacity);
+            if (!new_dates)
+            {
+                sqlite3_finalize(stmt);
+                pthread_mutex_unlock(&sm->lock);
+                session_list_free(list);
+                return NULL;
+            }
             list->created_ats = new_dates;
+
+            int *new_tgas = realloc(list->title_generation_attempteds,
+                                    sizeof(int) * capacity);
+            if (!new_tgas)
+            {
+                sqlite3_finalize(stmt);
+                pthread_mutex_unlock(&sm->lock);
+                session_list_free(list);
+                return NULL;
+            }
             list->title_generation_attempteds = new_tgas;
         }
 

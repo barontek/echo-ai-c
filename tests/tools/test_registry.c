@@ -3,6 +3,41 @@
 #include <string.h>
 
 #include "../src/tools/registry.h"
+#include "../src/utils/string_utils.h"
+
+static void fake_tool_destroy(Tool *tool)
+{
+    free(tool->name);
+    free(tool);
+}
+
+static Tool *fake_tool_create(const char *name)
+{
+    Tool *tool = calloc(1, sizeof(Tool));
+    ck_assert_ptr_nonnull(tool);
+    tool->name = str_dup(name);
+    ck_assert_ptr_nonnull(tool->name);
+    tool->destroy = fake_tool_destroy;
+    return tool;
+}
+
+START_TEST(test_registry_rejects_disabled_tool_lookup)
+{
+    registry_register(fake_tool_create("disabled"));
+    ck_assert_ptr_null(registry_get("disabled"));
+    ck_assert_ptr_null(registry_get(NULL));
+    registry_destroy();
+}
+END_TEST
+
+START_TEST(test_registry_returns_enabled_tool)
+{
+    registry_register(fake_tool_create("enabled"));
+    registry_set_enabled("enabled");
+    ck_assert_ptr_nonnull(registry_get("enabled"));
+    registry_destroy();
+}
+END_TEST
 
 START_TEST(test_registry_set_delegate_config_normal)
 {
@@ -78,6 +113,8 @@ Suite *registry_suite(void)
     Suite *s = suite_create("Registry");
 
     TCase *tc_normal = tcase_create("Normal");
+    tcase_add_test(tc_normal, test_registry_rejects_disabled_tool_lookup);
+    tcase_add_test(tc_normal, test_registry_returns_enabled_tool);
     tcase_add_test(tc_normal, test_registry_set_delegate_config_normal);
     suite_add_tcase(s, tc_normal);
 

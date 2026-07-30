@@ -40,7 +40,8 @@ static void search_file(const char *path, const char *pattern,
 }
 
 static void search_dir(const char *dir_path, const char *pattern,
-                       char *buffer, size_t cap, size_t *pos, int max_files)
+                        char *buffer, size_t cap, size_t *pos, int max_files,
+                        const SafetyConfig *safety)
 {
     DIR *d = opendir(dir_path);
     if (!d) return;
@@ -57,11 +58,13 @@ static void search_dir(const char *dir_path, const char *pattern,
         snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
 
         struct stat st;
-        if (stat(full_path, &st) != 0) continue;
+        if (lstat(full_path, &st) != 0 || S_ISLNK(st.st_mode) ||
+            !safety_path_is_within_workspace(safety, full_path)) continue;
 
         if (S_ISDIR(st.st_mode))
         {
-            search_dir(full_path, pattern, buffer, cap, pos, max_files - files_scanned);
+            search_dir(full_path, pattern, buffer, cap, pos,
+                       max_files - files_scanned, safety);
         }
         else if (S_ISREG(st.st_mode))
         {
@@ -88,8 +91,6 @@ static void search_dir(const char *dir_path, const char *pattern,
 
 static ToolResult *grep_execute(Tool *self, const char *args_json)
 {
-    (void)self;
-
     cJSON *args = cJSON_Parse(args_json);
     if (!args) return tool_result_error("invalid arguments JSON", "validation_error");
 
@@ -115,12 +116,21 @@ static ToolResult *grep_execute(Tool *self, const char *args_json)
         return tool_result_error("path rejected by safety check", "validation_error");
     }
 
+    char *resolved = safety_resolve_path(gctx->safety, search_path);
+    free(search_path);
+    if (!resolved)
+    {
+        free(pattern);
+        return tool_result_error("path resolution failed", "validation_error");
+    }
+
     char buffer[32768] = {0};
     size_t pos = 0;
 
-    search_dir(search_path, pattern, buffer, sizeof(buffer), &pos, 100);
+    search_dir(resolved, pattern, buffer, sizeof(buffer), &pos, 100,
+               gctx->safety);
     free(pattern);
-    free(search_path);
+    free(resolved);
 
     ToolResult *tr = tool_result_create(buffer[0] ? buffer : "(no matches)");
     return tr;

@@ -98,7 +98,6 @@ static int agent_append_message(Agent *agent, Message *msg)
 void agent_save_session(Agent *agent);
 static void agent_generate_title(Agent *agent);
 static void agent_perform_summarization(Agent *agent, int original_count);
-static int count_dropped_messages(Agent *agent, int *original);
 
 static double time_sec(void)
 {
@@ -134,10 +133,12 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
             continue;
         }
 
-        if (agent->on_approval && agent->safety
-            && safety_needs_approval(agent->safety, calls[i].name))
+        if (agent->safety && safety_needs_approval(agent->safety, calls[i].name))
         {
-            int ok = agent->on_approval(calls[i].name, args_str, agent->approval_userdata);
+            int ok = agent->on_approval
+                         ? agent->on_approval(calls[i].name, args_str,
+                                              agent->approval_userdata)
+                         : 0;
             if (!ok)
             {
                 Message *err_msg = message_create("tool", "tool call denied");
@@ -153,7 +154,10 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
         if (agent->on_tool_start)
             agent->on_tool_start(tname, args_str, agent->tool_start_userdata);
 
+        registry_set_ask_user_callback(agent->on_ask_user,
+                                       agent->ask_user_userdata);
         ToolResult *result = tool->execute(tool, args_str);
+        registry_set_ask_user_callback(NULL, NULL);
         if (!result)
             result = tool_result_error("tool returned no result", "execution_error");
 
@@ -314,12 +318,6 @@ static void inject_system_with_summary(Agent *agent)
     }
 }
 
-static int count_dropped_messages(Agent *agent, int *original)
-{
-    (void)agent;
-    return *original - agent->messages_count;
-}
-
 static LLMResponse *agent_llm_call(Agent *agent)
 {
     if (agent->cb && !cb_is_available(agent->cb))
@@ -342,7 +340,7 @@ static LLMResponse *agent_llm_call(Agent *agent)
                                              agent->max_context_chars);
     if (ctx_msgs != agent->messages)
     {
-        int dropped = count_dropped_messages(agent, &original_count);
+        int dropped = original_count - current_messages;
         if (dropped > 0) agent_perform_summarization(agent, dropped);
 
         for (int i = 0; i < agent->messages_count; i++)
@@ -919,6 +917,13 @@ void agent_set_tool_end_callback(Agent *agent, tool_end_callback cb, void *userd
 {
     agent->on_tool_end = cb;
     agent->tool_end_userdata = userdata;
+}
+
+void agent_set_ask_user_callback(Agent *agent, ask_user_callback cb, void *userdata)
+{
+    if (!agent) return;
+    agent->on_ask_user = cb;
+    agent->ask_user_userdata = userdata;
 }
 
 void agent_set_safety(Agent *agent, SafetyConfig *safety)

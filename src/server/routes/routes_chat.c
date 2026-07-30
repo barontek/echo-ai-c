@@ -91,9 +91,19 @@ static void sse_on_chunk(const char *chunk, void *userdata)
 {
     SSECtx *c = (SSECtx *)userdata;
     if (!c || !c->client) return;
+
+    cJSON *event = cJSON_CreateObject();
+    if (!event) return;
+    cJSON_AddStringToObject(event, "type", "content");
+    cJSON_AddStringToObject(event, "content", chunk ? chunk : "");
+    char *json = cJSON_PrintUnformatted(event);
+    cJSON_Delete(event);
+    if (!json) return;
+
     char *sse = NULL;
-    if (asprintf(&sse, "data: {\"type\":\"content\",\"content\":%s}\n\n",
-                 chunk ? chunk : "") < 0) return;
+    if (asprintf(&sse, "data: %s\n\n", json) < 0) sse = NULL;
+    free(json);
+    if (!sse) return;
     server_sse_write(c->client, sse);
     free(sse);
 }
@@ -146,4 +156,3 @@ void handle_sse_stream(HTTPRequest *req, Client *client, ServerContext *ctx)
 
     client_close(client);
 }
-

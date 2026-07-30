@@ -26,6 +26,7 @@ int registry_get_delegate_config(const char **provider_name, const char **base_u
                                   double *temperature, int *timeout, int *max_iterations);
 void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *userdata);
 char *registry_invoke_ask_user(const char *question);
+int registry_has_ask_user_callback(void);
 void registry_destroy(void);
 
 #ifdef REGISTRY_TEST

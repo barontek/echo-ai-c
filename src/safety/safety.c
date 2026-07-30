@@ -5,6 +5,10 @@
 #include <unistd.h>
 #include <limits.h>
 #include <time.h>
+#include <stdint.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #include "safety.h"
 #include "../config/config.h"
@@ -133,6 +137,7 @@ int safety_check_path(const SafetyConfig *cfg, const char *path)
 {
     if (!path) return 0;
 
+    if (path[0] == '/') return 0;
     if (strstr(path, "..") != NULL) return 0;
 
     if (cfg->allowed_extensions_count > 0)
@@ -309,18 +314,117 @@ int safety_check_destructive(const char *command)
 
 int safety_check_url(const SafetyConfig *cfg, const char *url)
 {
-    if (!cfg->allow_network) return 0;
+    if (!cfg || !cfg->allow_network || !url) return 0;
+
+    const char *authority = NULL;
+    if (strncasecmp(url, "https://", 8) == 0)
+        authority = url + 8;
+    else if (strncasecmp(url, "http://", 7) == 0)
+        authority = url + 7;
+    else
+        return 0;
+
+    const char *authority_end = authority + strcspn(authority, "/?#");
+    if (authority == authority_end ||
+        memchr(authority, '@', (size_t)(authority_end - authority))) return 0;
+
+    char host[256];
+    const char *host_start = authority;
+    const char *host_end = authority_end;
+    if (*host_start == '[')
+    {
+        const char *close = memchr(host_start, ']', (size_t)(host_end - host_start));
+        if (!close) return 0;
+        host_start++;
+        host_end = close;
+    }
+    else
+    {
+        const char *colon = memchr(host_start, ':', (size_t)(host_end - host_start));
+        if (colon) host_end = colon;
+    }
+    size_t host_len = (size_t)(host_end - host_start);
+    if (host_len == 0 || host_len >= sizeof(host)) return 0;
+    memcpy(host, host_start, host_len);
+    host[host_len] = '\0';
+
+    if (strcasecmp(host, "localhost") == 0 ||
+        (host_len > 10 && strcasecmp(host + host_len - 10, ".localhost") == 0) ||
+        strcasecmp(host, "::1") == 0 || strcasecmp(host, "0:0:0:0:0:0:0:1") == 0 ||
+        strncasecmp(host, "fc", 2) == 0 || strncasecmp(host, "fd", 2) == 0 ||
+        strncasecmp(host, "fe80:", 5) == 0)
+        return 0;
+
+    unsigned int a = 0, b = 0, c = 0, d = 0;
+    char trailing = '\0';
+    if (sscanf(host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &trailing) == 4 &&
+        a <= 255 && b <= 255 && c <= 255 && d <= 255)
+    {
+        if (a == 10 || a == 127 || a == 0 ||
+            (a == 169 && b == 254) || (a == 192 && b == 168) ||
+            (a == 172 && b >= 16 && b <= 31))
+            return 0;
+    }
 
     if (cfg->allowed_domains_count > 0)
     {
         for (int i = 0; i < cfg->allowed_domains_count; i++)
         {
-            if (strstr(url, cfg->allowed_domains[i]) != NULL) return 1;
+            const char *allowed = cfg->allowed_domains[i];
+            size_t allowed_len = strlen(allowed);
+            if (allowed_len == 0) continue;
+            if (strcasecmp(host, allowed) == 0 ||
+                (host_len > allowed_len && host[host_len - allowed_len - 1] == '.' &&
+                 strcasecmp(host + host_len - allowed_len, allowed) == 0))
+                return 1;
         }
         return 0;
     }
 
     return 1;
+}
+
+static int ipv4_is_public(uint32_t network_address)
+{
+    uint32_t address = ntohl(network_address);
+    unsigned int a = (address >> 24) & 0xFFU;
+    unsigned int b = (address >> 16) & 0xFFU;
+    if (a == 0 || a == 10 || a == 127 || a >= 224 ||
+        (a == 100 && b >= 64 && b <= 127) ||
+        (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) ||
+        (a == 192 && (b == 0 || b == 168)) ||
+        (a == 198 && (b == 18 || b == 19)))
+        return 0;
+    return 1;
+}
+
+int safety_check_socket_address(const struct sockaddr *address)
+{
+    if (!address) return 0;
+    if (address->sa_family == AF_INET)
+    {
+        const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)address;
+        return ipv4_is_public(ipv4->sin_addr.s_addr);
+    }
+    if (address->sa_family == AF_INET6)
+    {
+        const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)address;
+        const unsigned char *bytes = ipv6->sin6_addr.s6_addr;
+        if (IN6_IS_ADDR_UNSPECIFIED(&ipv6->sin6_addr) ||
+            IN6_IS_ADDR_LOOPBACK(&ipv6->sin6_addr) ||
+            IN6_IS_ADDR_LINKLOCAL(&ipv6->sin6_addr) ||
+            IN6_IS_ADDR_MULTICAST(&ipv6->sin6_addr) ||
+            (bytes[0] & 0xFEU) == 0xFCU)
+            return 0;
+        if (IN6_IS_ADDR_V4MAPPED(&ipv6->sin6_addr))
+        {
+            uint32_t mapped = 0;
+            memcpy(&mapped, bytes + 12, sizeof(mapped));
+            return ipv4_is_public(mapped);
+        }
+        return 1;
+    }
+    return 0;
 }
 
 int safety_check_file_size(const SafetyConfig *cfg, size_t size)
@@ -357,81 +461,49 @@ int safety_audit_log(const SafetyConfig *cfg, const char *entry)
 
 char *safety_resolve_path(const SafetyConfig *cfg, const char *path)
 {
-    if (!cfg->workspace || !path) return NULL;
+    if (!cfg || !cfg->workspace || !path || strstr(path, "..") != NULL)
+        return NULL;
 
-    char canonical_workspace[PATH_MAX];
-    if (realpath(cfg->workspace, canonical_workspace) == NULL)
-    {
-        size_t ws_len = strlen(cfg->workspace);
-        if (ws_len >= PATH_MAX) return NULL;
-        memcpy(canonical_workspace, cfg->workspace, ws_len + 1);
-    }
+    char root[PATH_MAX];
+    if (!realpath(cfg->workspace, root)) return NULL;
 
     char candidate[PATH_MAX];
-    if (path[0] == '/')
-    {
-        size_t plen = strlen(path);
-        if (plen >= PATH_MAX) return NULL;
-        memcpy(candidate, path, plen + 1);
-    }
-    else
-    {
-        int written = snprintf(candidate, PATH_MAX, "%s/%s", cfg->workspace, path);
-        if (written < 0 || (size_t)written >= PATH_MAX)
-            return NULL;
-    }
+    int written = path[0] == '/'
+                      ? snprintf(candidate, sizeof(candidate), "%s", path)
+                      : snprintf(candidate, sizeof(candidate), "%s/%s", root, path);
+    if (written < 0 || (size_t)written >= sizeof(candidate)) return NULL;
 
-    char resolved[PATH_MAX];
-    if (realpath(candidate, resolved) != NULL)
-    {
-        size_t ws_len = strlen(canonical_workspace);
-        if (strncmp(resolved, canonical_workspace, ws_len) != 0)
-            return NULL;
-        if (resolved[ws_len] != '\0' && resolved[ws_len] != '/')
-            return NULL;
-        return str_dup(resolved);
-    }
+    char canonical[PATH_MAX];
+    if (realpath(candidate, canonical))
+        return safety_path_is_within_workspace(cfg, canonical)
+                   ? str_dup(canonical) : NULL;
+    if (errno != ENOENT) return NULL;
 
-    char candidate_copy[PATH_MAX];
-    {
-        size_t cp_len = strlen(candidate);
-        if (cp_len >= PATH_MAX) return NULL;
-        memcpy(candidate_copy, candidate, cp_len + 1);
-    }
+    char parent_buf[PATH_MAX];
+    memcpy(parent_buf, candidate, (size_t)written + 1);
+    char *slash = strrchr(parent_buf, '/');
+    if (!slash || slash[1] == '\0') return NULL;
+    const char *basename = slash + 1;
+    *slash = '\0';
 
-    char *last_slash = strrchr(candidate_copy, '/');
-    if (!last_slash)
-        return NULL;
+    char parent[PATH_MAX];
+    if (!realpath(parent_buf, parent) ||
+        !safety_path_is_within_workspace(cfg, parent)) return NULL;
 
-    char *filename = last_slash + 1;
-    *last_slash = '\0';
-    char *parent = candidate_copy;
-    if (*parent == '\0')
-        parent = (char *)"/";
+    char *resolved = NULL;
+    if (asprintf(&resolved, "%s/%s", parent, basename) < 0) return NULL;
+    return resolved;
+}
 
-    char parent_resolved[PATH_MAX];
-    if (realpath(parent, parent_resolved) == NULL)
-        return NULL;
+int safety_path_is_within_workspace(const SafetyConfig *cfg, const char *path)
+{
+    if (!cfg || !cfg->workspace || !path) return 0;
 
-    char full_resolved[PATH_MAX];
-    if (*filename == '\0')
-    {
-        size_t pr_len = strlen(parent_resolved);
-        if (pr_len >= PATH_MAX) return NULL;
-        memcpy(full_resolved, parent_resolved, pr_len + 1);
-    }
-    else
-    {
-        int written = snprintf(full_resolved, PATH_MAX, "%s/%s", parent_resolved, filename);
-        if (written < 0 || (size_t)written >= PATH_MAX)
-            return NULL;
-    }
+    char root[PATH_MAX];
+    char canonical[PATH_MAX];
+    if (!realpath(cfg->workspace, root) || !realpath(path, canonical)) return 0;
 
-    size_t ws_len = strlen(canonical_workspace);
-    if (strncmp(full_resolved, canonical_workspace, ws_len) != 0)
-        return NULL;
-    if (full_resolved[ws_len] != '\0' && full_resolved[ws_len] != '/')
-        return NULL;
-
-    return str_dup(full_resolved);
+    size_t root_len = strlen(root);
+    return strncmp(canonical, root, root_len) == 0 &&
+           (canonical[root_len] == '\0' || canonical[root_len] == '/');
 }

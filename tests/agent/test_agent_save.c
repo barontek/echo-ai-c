@@ -35,6 +35,8 @@ void registry_set_delegate_config(const char *a, const char *b, const char *c,
     (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h;
 }
 void registry_set_session_manager(SessionManager *sm) { (void)sm; }
+void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *u)
+{ (void)cb; (void)u; }
 
 typedef struct {
     LLMProvider provider;

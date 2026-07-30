@@ -141,54 +141,50 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
             break;
         }
 
+        int has_tool_calls = sub_tool_calls_remaining(resp->tool_calls,
+                                                       resp->tool_calls_count);
+
         if (resp->content)
         {
             free(final_content);
             final_content = str_dup(resp->content);
+        }
 
+        if (resp->content || has_tool_calls)
+        {
             Message *assistant_msg = calloc(1, sizeof(Message));
             if (assistant_msg)
             {
-                char *role = str_dup("assistant");
-                char *content = str_dup(resp->content ? resp->content : "");
-                if (!role || !content)
+                Message source = {0};
+                source.role = "assistant";
+                source.content = resp->content ? resp->content : "";
+                source.tool_calls = resp->tool_calls;
+                source.tool_calls_count = resp->tool_calls_count;
+                if (message_copy(assistant_msg, &source) != 0)
                 {
-                    free(role); free(content); free(assistant_msg->tool_calls); free(assistant_msg);
+                    free(assistant_msg);
                 }
                 else
                 {
-                    assistant_msg->role = role;
-                    assistant_msg->content = content;
-                    if (resp->tool_calls_count > 0)
-                    {
-                        assistant_msg->tool_calls = malloc(sizeof(ToolCall) * resp->tool_calls_count);
-                        if (assistant_msg->tool_calls)
-                        {
-                            assistant_msg->tool_calls_count = resp->tool_calls_count;
-                            for (int j = 0; j < resp->tool_calls_count; j++)
-                            {
-                                assistant_msg->tool_calls[j] = resp->tool_calls[j];
-                                resp->tool_calls[j].name = NULL;
-                                resp->tool_calls[j].arguments = NULL;
-                                resp->tool_calls[j].id = NULL;
-                            }
-                        }
-                    }
-
                     if (msgs_count >= msgs_cap)
                     {
-                        msgs_cap *= 2;
-                        Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
-                        if (!new_msgs) { free(role); free(content); free(assistant_msg->tool_calls); free(assistant_msg); break; }
+                        int new_cap = msgs_cap * 2;
+                        Message *new_msgs = realloc(msgs, sizeof(Message) * new_cap);
+                        if (!new_msgs)
+                        {
+                            message_clear(assistant_msg);
+                            free(assistant_msg);
+                            llm_response_free(resp);
+                            break;
+                        }
                         msgs = new_msgs;
+                        msgs_cap = new_cap;
                     }
                     msgs[msgs_count++] = *assistant_msg;
                     free(assistant_msg);
                 }
             }
         }
-
-        int has_tool_calls = sub_tool_calls_remaining(resp->tool_calls, resp->tool_calls_count);
 
         if (!has_tool_calls)
         {

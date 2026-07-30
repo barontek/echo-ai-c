@@ -56,6 +56,17 @@ static DelegateConfig delegate_config = {0};
 static char *(*ask_user_cb)(const char *, void *) = NULL;
 static void *ask_user_cb_data = NULL;
 
+static Tool *registry_find_registered(const char *name)
+{
+    if (!name) return NULL;
+    for (int i = 0; i < tool_count; i++)
+    {
+        if (strcmp(tools[i]->name, name) == 0)
+            return tools[i];
+    }
+    return NULL;
+}
+
 Tool *tool_bash_create(SafetyConfig *safety);
 Tool *tool_read_file_create(SafetyConfig *safety);
 Tool *tool_write_file_create(SafetyConfig *safety);
@@ -131,7 +142,7 @@ void registry_set_enabled(const char *names)
     while (tok)
     {
         while (*tok == ' ') tok++;
-        Tool *t = registry_get(tok);
+        Tool *t = registry_find_registered(tok);
         if (t)
         {
             t->enabled = 1;
@@ -144,12 +155,8 @@ void registry_set_enabled(const char *names)
 
 Tool *registry_get(const char *name)
 {
-    for (int i = 0; i < tool_count; i++)
-    {
-        if (strcmp(tools[i]->name, name) == 0)
-            return tools[i];
-    }
-    return NULL;
+    Tool *tool = registry_find_registered(name);
+    return tool && tool->enabled ? tool : NULL;
 }
 
 char *registry_schemas_json(void)
@@ -268,6 +275,11 @@ char *registry_invoke_ask_user(const char *question)
 {
     if (ask_user_cb) return ask_user_cb(question, ask_user_cb_data);
     return NULL;
+}
+
+int registry_has_ask_user_callback(void)
+{
+    return ask_user_cb != NULL;
 }
 
 void registry_destroy(void)

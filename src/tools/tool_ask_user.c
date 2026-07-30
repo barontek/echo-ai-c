@@ -30,8 +30,17 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
     char *q = str_dup(cJSON_GetStringValue(question));
     cJSON_Delete(args);
 
-    char *answer = registry_invoke_ask_user(q);
-    if (!answer)
+    char *answer = NULL;
+    if (registry_has_ask_user_callback())
+    {
+        answer = registry_invoke_ask_user(q);
+        if (!answer)
+        {
+            free(q);
+            return tool_result_error("question cancelled", "cancelled");
+        }
+    }
+    else
     {
         fprintf(stderr, "\n[Ask User] %s\n> ", q);
         fflush(stderr);

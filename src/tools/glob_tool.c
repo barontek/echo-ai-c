@@ -14,8 +14,6 @@ typedef struct {
 
 static ToolResult *glob_execute(Tool *self, const char *args_json)
 {
-    (void)self;
-
     cJSON *args = cJSON_Parse(args_json);
     if (!args) return tool_result_error("invalid arguments JSON", "validation_error");
 
@@ -36,9 +34,16 @@ static ToolResult *glob_execute(Tool *self, const char *args_json)
         return tool_result_error("pattern rejected by safety check", "validation_error");
     }
 
-    glob_t globbuf;
-    int ret = glob(pattern, GLOB_NOSORT | GLOB_NOCHECK, NULL, &globbuf);
+    char *workspace_pattern = NULL;
+    if (asprintf(&workspace_pattern, "%s/%s", gctx->safety->workspace, pattern) < 0)
+        workspace_pattern = NULL;
     free(pattern);
+    if (!workspace_pattern)
+        return tool_result_error("pattern resolution failed", "execution_error");
+
+    glob_t globbuf;
+    int ret = glob(workspace_pattern, GLOB_NOSORT, NULL, &globbuf);
+    free(workspace_pattern);
 
     if (ret != 0 && ret != GLOB_NOMATCH)
     {
@@ -50,6 +55,8 @@ static ToolResult *glob_execute(Tool *self, const char *args_json)
 
     for (size_t i = 0; i < globbuf.gl_pathc; i++)
     {
+        if (!safety_path_is_within_workspace(gctx->safety, globbuf.gl_pathv[i]))
+            continue;
         pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s\n", globbuf.gl_pathv[i]);
         if (pos >= sizeof(buffer) - 1) break;
     }

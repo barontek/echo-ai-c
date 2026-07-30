@@ -23,6 +23,8 @@ typedef struct {
     int approval_result; int ready; QueuedMsg *msg_queue;
     QueuedMsg *msg_queue_tail; char *active_session_id;
     int session_start_emitted; int ask_user_done; char *ask_user_response;
+    int active_runs; int closing;
+    ServerContext *server_ctx; unsigned long auth_generation;
 } WSChatCtx;
 
 extern void ws_chat_on_chunk(const char *, void *);
@@ -45,6 +47,8 @@ static int stub_agent_run_streaming_count = 0;
 static LLMResponse *stub_agent_run_streaming_resp = NULL;
 static int stub_streaming_chunk_count = 0;
 static const char *stub_streaming_chunks[4] = {NULL};
+static WSClient *stub_close_ws = NULL;
+static WSChatCtx *stub_close_ctx = NULL;
 
 static int stub_agent_create_succeeds = 1;
 static Session *stub_session_load_result = NULL;
@@ -67,6 +71,8 @@ static void setup(void)
     stub_agent_run_streaming_count = 0;
     stub_agent_run_streaming_resp = NULL;
     stub_streaming_chunk_count = 0;
+    stub_close_ws = NULL;
+    stub_close_ctx = NULL;
     for (int i = 0; i < 4; i++) stub_streaming_chunks[i] = NULL;
     stub_agent_create_succeeds = 1;
     stub_session_load_result = NULL;
@@ -154,6 +160,14 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *input,
 {
     (void)agent; (void)input;
     stub_agent_run_streaming_count++;
+    if (stub_close_ws && stub_close_ctx)
+    {
+        WSClient *close_ws = stub_close_ws;
+        WSChatCtx *close_ctx = stub_close_ctx;
+        stub_close_ws = NULL;
+        stub_close_ctx = NULL;
+        ws_chat_on_close(close_ws, close_ctx);
+    }
     for (int i = 0; i < stub_streaming_chunk_count; i++)
         if (on_chunk) on_chunk(stub_streaming_chunks[i], userdata);
     return stub_agent_run_streaming_resp;
@@ -181,6 +195,8 @@ void agent_set_approval_callback(Agent *a, int (*cb)(const char *, const char *,
 void agent_set_title_callback(Agent *a, title_callback cb, void *u) { (void)a; (void)cb; (void)u; }
 void agent_set_tool_start_callback(Agent *a, tool_start_callback cb, void *u) { (void)a; (void)cb; (void)u; }
 void agent_set_tool_end_callback(Agent *a, tool_end_callback cb, void *u) { (void)a; (void)cb; (void)u; }
+void agent_set_ask_user_callback(Agent *a, ask_user_callback cb, void *u)
+{ (void)a; (void)cb; (void)u; }
 void agent_set_safety(Agent *a, SafetyConfig *s) { (void)a; (void)s; }
 void agent_set_metrics(Agent *a, Metrics *m) { (void)a; (void)m; }
 void agent_set_model(Agent *a, const char *m) { (void)a; (void)m; }
@@ -225,6 +241,30 @@ START_TEST(test_on_chunk_basic)
     ck_assert(strstr(captured_ws_json, "\"type\":\"content\""));
     ck_assert(strstr(captured_ws_json, "\"content\":\"hello\""));
     reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_edit_disconnect_during_run_is_safe)
+{
+    WSClient ws = {0};
+    WSChatCtx *c = calloc(1, sizeof(WSChatCtx));
+    Agent *agent = calloc(1, sizeof(Agent));
+    ck_assert_ptr_nonnull(c);
+    ck_assert_ptr_nonnull(agent);
+    agent->session_id = str_dup("edit-close");
+    c->agent = agent;
+    c->sm = (SessionManager *)c;
+    c->ws = &ws;
+    ws.on_close = ws_chat_on_close;
+    ws.userdata = c;
+    stub_close_ws = &ws;
+    stub_close_ctx = c;
+
+    ws_chat_on_message(&ws,
+        "{\"type\":\"edit\",\"index\":0,\"content\":\"replacement\"}",
+        56, c);
+    ck_assert_int_eq(stub_agent_run_streaming_count, 1);
+    ck_assert_ptr_null(ws.userdata);
 }
 END_TEST
 
@@ -930,6 +970,24 @@ START_TEST(test_on_message_message_simple)
 }
 END_TEST
 
+START_TEST(test_on_message_rejects_expired_auth_generation)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    ServerContext server_ctx = {0};
+    server_ctx.state = STATE_LOCKED;
+    server_ctx.auth_generation = 2;
+    c.agent = &agent;
+    c.server_ctx = &server_ctx;
+    c.auth_generation = 1;
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"type\":\"message\",\"content\":\"hi\"}", 33, &c);
+    ck_assert_int_eq(stub_agent_run_streaming_count, 0);
+    ck_assert_ptr_nonnull(strstr(captured_ws_json, "authentication expired"));
+}
+END_TEST
+
 START_TEST(test_on_message_message_null_resp)
 {
     WSChatCtx c = {0};
@@ -1310,6 +1368,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_ask_user_empty_answer);
     tcase_add_test(tc, test_on_message_provider_config);
     tcase_add_test(tc, test_on_message_message_simple);
+    tcase_add_test(tc, test_on_message_rejects_expired_auth_generation);
     tcase_add_test(tc, test_on_message_message_null_resp);
     tcase_add_test(tc, test_on_message_message_enqueued_when_not_ready);
     tcase_add_test(tc, test_on_message_missing_content);
@@ -1320,6 +1379,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_message_agent_gets_session_id);
     tcase_add_test(tc, test_on_message_edit_truncate);
     tcase_add_test(tc, test_on_message_edit_truncate_clears);
+    tcase_add_test(tc, test_on_message_edit_disconnect_during_run_is_safe);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("routes_ws_chat_init");

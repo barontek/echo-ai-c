@@ -6,6 +6,9 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <time.h>
 
 #include "tool.h"
 #include "../safety/safety.h"
@@ -18,7 +21,7 @@ typedef struct {
 
 static int run_with_timeout(const char *command, int timeout_secs, char **output)
 {
-    int pipefd[2];
+    int pipefd[2] = {-1, -1};
     if (pipe(pipefd) < 0) return -1;
 
     pid_t pid = fork();
@@ -26,9 +29,11 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
 
     if (pid == 0)
     {
+        if (setpgid(0, 0) != 0) _exit(126);
         close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        dup2(pipefd[1], STDERR_FILENO);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0 ||
+            dup2(pipefd[1], STDERR_FILENO) < 0)
+            _exit(126);
         close(pipefd[1]);
 
         execl("/bin/sh", "sh", "-c", command, (char *)NULL);
@@ -36,37 +41,133 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
     }
 
     close(pipefd[1]);
+    pipefd[1] = -1;
+    if (setpgid(pid, pid) != 0 && errno != EACCES && errno != ESRCH)
+    {
+        (void)kill(pid, SIGKILL);
+        (void)waitpid(pid, NULL, 0);
+        close(pipefd[0]);
+        return -1;
+    }
+    int flags = fcntl(pipefd[0], F_GETFL, 0);
+    if (flags < 0 || fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK) != 0)
+    {
+        (void)kill(-pid, SIGKILL);
+        (void)waitpid(pid, NULL, 0);
+        close(pipefd[0]);
+        return -1;
+    }
 
     int max_wait = timeout_secs > 0 ? timeout_secs : 30;
-    int slept = 0;
     int status = 0;
-
-    while (slept < max_wait)
-    {
-        pid_t ret = waitpid(pid, &status, WNOHANG);
-        if (ret == pid) break;
-        sleep(1);
-        slept++;
-    }
-
-    if (slept >= max_wait)
-    {
-        kill(pid, SIGKILL);
-        waitpid(pid, &status, 0);
-        close(pipefd[0]);
-        return -2;
-    }
-
-    char buf[65536];
+    int child_done = 0;
+    int pipe_open = 1;
+    int descendants_signaled = 0;
+    char result_buf[65536];
     size_t total = 0;
-    ssize_t n;
-    while ((n = read(pipefd[0], buf + total, sizeof(buf) - total - 1)) > 0)
-        total += n;
-    buf[total] = '\0';
-    close(pipefd[0]);
+    struct timespec start = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0)
+    {
+        (void)kill(-pid, SIGKILL);
+        (void)waitpid(pid, NULL, 0);
+        close(pipefd[0]);
+        return -1;
+    }
 
-    *output = str_dup(buf);
-    return WEXITSTATUS(status);
+    while (!child_done || pipe_open)
+    {
+        char chunk[4096];
+        while (pipe_open)
+        {
+            ssize_t n = read(pipefd[0], chunk, sizeof(chunk));
+            if (n > 0)
+            {
+                size_t available = sizeof(result_buf) - 1 - total;
+                size_t copy_len = (size_t)n < available ? (size_t)n : available;
+                if (copy_len > 0)
+                {
+                    memcpy(result_buf + total, chunk, copy_len);
+                    total += copy_len;
+                }
+                continue;
+            }
+            if (n == 0)
+            {
+                close(pipefd[0]);
+                pipe_open = 0;
+            }
+            else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            {
+                close(pipefd[0]);
+                pipe_open = 0;
+            }
+            break;
+        }
+
+        if (!child_done)
+        {
+            pid_t ret = waitpid(pid, &status, WNOHANG);
+            if (ret == pid)
+                child_done = 1;
+            else if (ret < 0 && errno != EINTR)
+            {
+                if (pipe_open) close(pipefd[0]);
+                return -1;
+            }
+        }
+
+        if (child_done && !descendants_signaled)
+        {
+            (void)kill(-pid, SIGTERM);
+            descendants_signaled = 1;
+        }
+
+        struct timespec now = {0};
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        {
+            (void)kill(-pid, SIGKILL);
+            if (!child_done) (void)waitpid(pid, &status, 0);
+            if (pipe_open) close(pipefd[0]);
+            return -1;
+        }
+        double elapsed = (double)(now.tv_sec - start.tv_sec) +
+                         (double)(now.tv_nsec - start.tv_nsec) / 1e9;
+        if (elapsed >= (double)max_wait)
+        {
+            (void)kill(-pid, SIGKILL);
+            if (!child_done) (void)waitpid(pid, &status, 0);
+            if (pipe_open) close(pipefd[0]);
+            return -2;
+        }
+
+        if (!child_done || pipe_open)
+        {
+            struct pollfd pfd = {.fd = pipe_open ? pipefd[0] : -1,
+                                 .events = POLLIN | POLLHUP};
+            int poll_rc = poll(&pfd, 1, 50);
+            if (poll_rc < 0 && errno != EINTR)
+            {
+                (void)kill(-pid, SIGKILL);
+                if (!child_done) (void)waitpid(pid, &status, 0);
+                if (pipe_open) close(pipefd[0]);
+                return -1;
+            }
+        }
+    }
+
+    if (descendants_signaled)
+    {
+        struct timespec grace = {.tv_sec = 0, .tv_nsec = 100000000L};
+        while (nanosleep(&grace, &grace) != 0 && errno == EINTR) {}
+        if (kill(-pid, 0) == 0) (void)kill(-pid, SIGKILL);
+    }
+
+    result_buf[total] = '\0';
+    *output = str_dup(result_buf);
+    if (!*output) return -1;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return -1;
 }
 
 static ToolResult *bash_execute(Tool *self, const char *args_json)

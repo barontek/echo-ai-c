@@ -63,9 +63,13 @@ int message_copy(Message *dst, const Message *src)
             dst->tool_calls[i].id = str_dup(src->tool_calls[i].id);
             dst->tool_calls[i].name = str_dup(src->tool_calls[i].name);
             dst->tool_calls[i].arguments = str_dup(src->tool_calls[i].arguments);
+            dst->tool_calls[i].result_content = str_dup(src->tool_calls[i].result_content);
+            dst->tool_calls[i].result_error = str_dup(src->tool_calls[i].result_error);
             if ((src->tool_calls[i].id && !dst->tool_calls[i].id) ||
                 (src->tool_calls[i].name && !dst->tool_calls[i].name) ||
-                (src->tool_calls[i].arguments && !dst->tool_calls[i].arguments))
+                (src->tool_calls[i].arguments && !dst->tool_calls[i].arguments) ||
+                (src->tool_calls[i].result_content && !dst->tool_calls[i].result_content) ||
+                (src->tool_calls[i].result_error && !dst->tool_calls[i].result_error))
                 goto cleanup;
         }
     }

@@ -85,6 +85,16 @@ static Message make_msg(const char *role, const char *content)
     return m;
 }
 
+static Message make_owned_msg(const char *role, const char *content)
+{
+    Message m = {0};
+    m.role = str_dup(role);
+    m.content = str_dup(content);
+    ck_assert_ptr_nonnull(m.role);
+    ck_assert_ptr_nonnull(m.content);
+    return m;
+}
+
 START_TEST(test_smart_select_count_less_than_keep)
 {
     Message msgs[2] = {
@@ -95,7 +105,7 @@ START_TEST(test_smart_select_count_less_than_keep)
     ck_assert_ptr_nonnull(selected);
     ck_assert_str_eq(selected[0].role, "system");
     ck_assert_str_eq(selected[1].role, "user");
-    free(selected);
+    message_free_all(selected, 2);
 }
 END_TEST
 
@@ -110,7 +120,7 @@ START_TEST(test_smart_select_keeps_system_messages)
     Message *selected = smart_select(msgs, 4, 2);
     ck_assert_ptr_nonnull(selected);
     ck_assert_str_eq(selected[0].role, "system");
-    free(selected);
+    message_free_all(selected, 2);
 }
 END_TEST
 
@@ -124,7 +134,7 @@ START_TEST(test_smart_select_keeps_tool_and_assistant_pair)
     };
     Message *selected = smart_select(msgs, 4, 2);
     ck_assert_ptr_nonnull(selected);
-    free(selected);
+    message_free_all(selected, 2);
 }
 END_TEST
 
@@ -141,44 +151,44 @@ END_TEST
 START_TEST(test_trim_messages_by_tokens_under_budget)
 {
     Message *msgs = calloc(2, sizeof(Message));
-    msgs[0] = make_msg("system", "prompt");
-    msgs[1] = make_msg("user", "hello");
+    msgs[0] = make_owned_msg("system", "prompt");
+    msgs[1] = make_owned_msg("user", "hello");
     int count = 2;
     Message *result = trim_messages_by_tokens(msgs, &count, 1000);
     ck_assert_ptr_nonnull(result);
     ck_assert_int_eq(count, 2);
-    free(result);
+    message_free_all(result, count);
 }
 END_TEST
 
 START_TEST(test_trim_messages_by_tokens_over_budget_drops_oldest)
 {
     Message *msgs = calloc(3, sizeof(Message));
-    msgs[0] = make_msg("system", "You are a helpful assistant.");
-    msgs[1] = make_msg("user", "What is the capital of France?");
-    msgs[2] = make_msg("assistant", "Paris");
+    msgs[0] = make_owned_msg("system", "You are a helpful assistant.");
+    msgs[1] = make_owned_msg("user", "What is the capital of France?");
+    msgs[2] = make_owned_msg("assistant", "Paris");
     int count = 3;
     Message *result = trim_messages_by_tokens(msgs, &count, 5);
     ck_assert_ptr_nonnull(result);
     ck_assert(count >= 1);
     ck_assert_str_eq(result[0].role, "system");
-    free(result);
+    message_free_all(result, count);
 }
 END_TEST
 
 START_TEST(test_trim_messages_by_tokens_keeps_system)
 {
     Message *msgs = calloc(4, sizeof(Message));
-    msgs[0] = make_msg("system", "prompt");
-    msgs[1] = make_msg("user", "A very long user message that should be dropped");
-    msgs[2] = make_msg("assistant", "Another very long assistant response that should also be dropped");
-    msgs[3] = make_msg("user", "Short");
+    msgs[0] = make_owned_msg("system", "prompt");
+    msgs[1] = make_owned_msg("user", "A very long user message that should be dropped");
+    msgs[2] = make_owned_msg("assistant", "Another very long assistant response that should also be dropped");
+    msgs[3] = make_owned_msg("user", "Short");
     int count = 4;
     Message *result = trim_messages_by_tokens(msgs, &count, 3);
     ck_assert_ptr_nonnull(result);
     ck_assert(count >= 1);
     ck_assert_str_eq(result[0].role, "system");
-    free(result);
+    message_free_all(result, count);
 }
 END_TEST
 
@@ -206,14 +216,14 @@ END_TEST
 START_TEST(test_trim_messages_by_tokens_orphan_tool_preserved)
 {
     Message *msgs = calloc(4, sizeof(Message));
-    msgs[0] = make_msg("system", "prompt");
-    msgs[1] = make_msg("user", "run ls");
-    msgs[2] = make_msg("assistant", "I'll run ls for you");
-    msgs[3] = make_msg("tool", "file1 file2");
+    msgs[0] = make_owned_msg("system", "prompt");
+    msgs[1] = make_owned_msg("user", "run ls");
+    msgs[2] = make_owned_msg("assistant", "I'll run ls for you");
+    msgs[3] = make_owned_msg("tool", "file1 file2");
     int count = 4;
     Message *result = trim_messages_by_tokens(msgs, &count, 2);
     ck_assert_ptr_nonnull(result);
-    free(result);
+    message_free_all(result, count);
 }
 END_TEST
 
@@ -235,30 +245,32 @@ END_TEST
 START_TEST(test_apply_context_window_over_message_limit)
 {
     Message *msgs = calloc(5, sizeof(Message));
-    msgs[0] = make_msg("system", "prompt");
-    msgs[1] = make_msg("user", "q1");
-    msgs[2] = make_msg("assistant", "a1");
-    msgs[3] = make_msg("user", "q2");
-    msgs[4] = make_msg("assistant", "a2");
+    msgs[0] = make_owned_msg("system", "prompt");
+    msgs[1] = make_owned_msg("user", "q1");
+    msgs[2] = make_owned_msg("assistant", "a1");
+    msgs[3] = make_owned_msg("user", "q2");
+    msgs[4] = make_owned_msg("assistant", "a2");
     int count = 5;
     Message *result = apply_context_window(msgs, &count, 2, 10000);
     ck_assert_ptr_nonnull(result);
     ck_assert(count <= 5);
-    free(result);
-    if (result != msgs) free(msgs);
+    message_free_all(msgs, 5);
+    ck_assert_str_eq(result[0].role, "system");
+    message_free_all(result, count);
 }
 END_TEST
 
 START_TEST(test_apply_context_window_over_char_limit)
 {
     Message *msgs = calloc(2, sizeof(Message));
-    msgs[0] = make_msg("system", "A very long system prompt that should exceed char budget");
-    msgs[1] = make_msg("user", "A very long user message that also exceeds the budget");
+    msgs[0] = make_owned_msg("system", "A very long system prompt that should exceed char budget");
+    msgs[1] = make_owned_msg("user", "A very long user message that also exceeds the budget");
     int count = 2;
     Message *result = apply_context_window(msgs, &count, 100, 5);
     ck_assert_ptr_nonnull(result);
-    free(result);
-    if (result != msgs) free(msgs);
+    message_free_all(msgs, 2);
+    ck_assert_ptr_nonnull(result[0].role);
+    message_free_all(result, count);
 }
 END_TEST
 

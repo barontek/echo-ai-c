@@ -6,6 +6,7 @@
 
 int token_equals(const char *a, size_t a_len, const char *b);
 int middleware_has_valid_token(const char *headers, const char *token);
+int middleware_has_valid_ws_token(const char *headers, const char *token);
 int middleware_check_unlock(HTTPRequest *req, ServerContext *ctx);
 int middleware_check_unlock_query(HTTPRequest *req, ServerContext *ctx);
 int middleware_check_rate_limit(HTTPRequest *req, ServerContext *ctx);

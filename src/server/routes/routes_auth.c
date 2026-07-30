@@ -2,9 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <sys/stat.h>
 #include <cjson/cJSON.h>
+#include <openssl/rand.h>
 
 #include "routes.h"
 #include "routes_auth.h"
@@ -17,6 +17,19 @@
 #include "../../utils/string_utils.h"
 #include "../../utils/rate_limiter.h"
 #include "../../tools/registry.h"
+
+static char *generate_unlock_token(void)
+{
+    unsigned char random_bytes[32];
+    if (RAND_bytes(random_bytes, sizeof(random_bytes)) != 1) return NULL;
+
+    char *token = malloc(4 + sizeof(random_bytes) * 2 + 1);
+    if (!token) return NULL;
+    memcpy(token, "tok_", 4);
+    for (size_t i = 0; i < sizeof(random_bytes); i++)
+        snprintf(token + 4 + i * 2, 3, "%02x", random_bytes[i]);
+    return token;
+}
 
 void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
@@ -72,17 +85,23 @@ void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
 
+    char *token = generate_unlock_token();
+    if (!token)
+    {
+        session_manager_free(sm);
+        server_response_error(client, 500, "failed to generate unlock token");
+        return;
+    }
     ctx->sm = sm;
     registry_set_session_manager(sm);
     if (ctx->agent) agent_set_session_manager(ctx->agent, sm);
-
-    char token[64];
-    snprintf(token, sizeof(token), "tok_%ld_%d", (long)time(NULL), rand() % 100000);
-    ctx->unlock_token = str_dup(token);
+    free(ctx->unlock_token);
+    ctx->unlock_token = token;
+    ctx->auth_generation++;
     ctx->state = STATE_UNLOCKED;
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "token", token);
+    cJSON_AddStringToObject(resp, "token", ctx->unlock_token);
     cJSON_AddStringToObject(resp, "message", "echo-ai configured and unlocked");
     char *str = cJSON_PrintUnformatted(resp);
     server_response_json(client, 200, str);
@@ -197,13 +216,19 @@ void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
 
     free(password);
 
-    char token[64];
-    snprintf(token, sizeof(token), "tok_%ld_%d", (long)time(NULL), rand() % 100000);
-    ctx->unlock_token = str_dup(token);
+    char *token = generate_unlock_token();
+    if (!token)
+    {
+        server_response_error(client, 500, "failed to generate unlock token");
+        return;
+    }
+    free(ctx->unlock_token);
+    ctx->unlock_token = token;
+    ctx->auth_generation++;
     ctx->state = STATE_UNLOCKED;
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "token", token);
+    cJSON_AddStringToObject(resp, "token", ctx->unlock_token);
     char *str = cJSON_PrintUnformatted(resp);
     server_response_json(client, 200, str);
     free(str);
@@ -223,6 +248,7 @@ void handle_logout(HTTPRequest *req, Client *client, ServerContext *ctx)
 
     free(ctx->unlock_token);
     ctx->unlock_token = NULL;
+    ctx->auth_generation++;
     ctx->state = STATE_LOCKED;
     server_response_json(client, 200, "{\"message\":\"logged out\"}");
     log_info("logout", NULL);

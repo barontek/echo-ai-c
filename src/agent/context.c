@@ -72,7 +72,14 @@ Message *smart_select(Message *msgs, int count, int keep_count)
     {
         Message *copy = calloc(count, sizeof(Message));
         if (!copy) return NULL;
-        memcpy(copy, msgs, count * sizeof(Message));
+        for (int i = 0; i < count; i++)
+        {
+            if (message_copy(&copy[i], &msgs[i]) != 0)
+            {
+                message_free_all(copy, count);
+                return NULL;
+            }
+        }
         return copy;
     }
 
@@ -185,7 +192,16 @@ Message *smart_select(Message *msgs, int count, int keep_count)
     for (int i = 0; i < count && out < result_count; i++)
     {
         if (selected_flags[i])
-            selected[out++] = msgs[i];
+        {
+            if (message_copy(&selected[out], &msgs[i]) != 0)
+            {
+                message_free_all(selected, result_count);
+                free(selected_flags);
+                free(scores);
+                return NULL;
+            }
+            out++;
+        }
     }
 
     free(selected_flags);
@@ -269,11 +285,14 @@ Message *trim_messages_by_tokens(Message *msgs, int *count, int max_tokens)
     for (int i = 0; i < *count; i++)
     {
         if (keep[i])
+        {
             trimmed[out++] = msgs[i];
+            memset(&msgs[i], 0, sizeof(msgs[i]));
+        }
     }
 
     free(keep);
-    free(msgs);
+    message_free_all(msgs, *count);
     *count = new_count;
     return trimmed;
 }

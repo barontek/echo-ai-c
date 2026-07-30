@@ -31,6 +31,7 @@ typedef struct {
     char *config_path;
     Conf *conf;
     char *unlock_token;
+    unsigned long auth_generation;
     uv_loop_t *loop;
     int port;
     RateLimiter *rate_limiter;

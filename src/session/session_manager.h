@@ -62,6 +62,7 @@ int session_manager_save_session_nolock(SessionManager *sm, Session *session);
 
 #ifdef SESSION_MANAGER_TEST
 void session_manager_test_set_alloc_fail(int nth_allocation);
+void session_manager_test_set_realloc_fail(int nth_allocation);
 void session_manager_test_set_bind_fail(int nth_bind);
 void session_manager_test_set_encrypt_fail(int nth_encrypt);
 #endif

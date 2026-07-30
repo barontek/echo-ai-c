@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 
@@ -36,6 +37,150 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
     buf->data[buf->len] = '\0';
     return total;
 }
+
+static int append_text(char **dst, const char *text)
+{
+    if (!text) return 0;
+    size_t old_len = *dst ? strlen(*dst) : 0;
+    size_t add_len = strlen(text);
+    if (add_len > SIZE_MAX - old_len - 1) return -1;
+    char *new_value = realloc(*dst, old_len + add_len + 1);
+    if (!new_value) return -1;
+    memcpy(new_value + old_len, text, add_len + 1);
+    *dst = new_value;
+    return 0;
+}
+
+static int ensure_tool_call(LLMResponse *resp, int index)
+{
+    if (index < 0) return -1;
+    if (index < resp->tool_calls_count) return 0;
+    size_t new_count = (size_t)index + 1;
+    if (new_count > SIZE_MAX / sizeof(ToolCall)) return -1;
+    ToolCall *new_calls = realloc(resp->tool_calls, new_count * sizeof(ToolCall));
+    if (!new_calls) return -1;
+    memset(new_calls + resp->tool_calls_count, 0,
+           (new_count - (size_t)resp->tool_calls_count) * sizeof(ToolCall));
+    resp->tool_calls = new_calls;
+    resp->tool_calls_count = index + 1;
+    return 0;
+}
+
+static int parse_stream_event(LLMResponse *resp, const char *json_text,
+                              void (*on_chunk)(const char *, void *),
+                              void *userdata)
+{
+    cJSON *json = cJSON_Parse(json_text);
+    if (!json) return -1;
+    cJSON *choices = cJSON_GetObjectItem(json, "choices");
+    cJSON *choice = choices && cJSON_IsArray(choices)
+                        ? cJSON_GetArrayItem(choices, 0) : NULL;
+    cJSON *delta = choice ? cJSON_GetObjectItem(choice, "delta") : NULL;
+    if (!delta)
+    {
+        cJSON_Delete(json);
+        return 0;
+    }
+
+    cJSON *content = cJSON_GetObjectItem(delta, "content");
+    if (content && cJSON_IsString(content))
+    {
+        const char *chunk = cJSON_GetStringValue(content);
+        if (append_text(&resp->content, chunk) != 0)
+        {
+            cJSON_Delete(json);
+            return -1;
+        }
+        if (on_chunk) on_chunk(chunk, userdata);
+    }
+
+    cJSON *tool_calls = cJSON_GetObjectItem(delta, "tool_calls");
+    if (tool_calls && cJSON_IsArray(tool_calls))
+    {
+        cJSON *item = NULL;
+        cJSON_ArrayForEach(item, tool_calls)
+        {
+            cJSON *index_json = cJSON_GetObjectItem(item, "index");
+            int index = index_json && cJSON_IsNumber(index_json)
+                            ? index_json->valueint : 0;
+            if (ensure_tool_call(resp, index) != 0)
+            {
+                cJSON_Delete(json);
+                return -1;
+            }
+            ToolCall *call = &resp->tool_calls[index];
+            cJSON *id = cJSON_GetObjectItem(item, "id");
+            cJSON *function = cJSON_GetObjectItem(item, "function");
+            cJSON *name = function ? cJSON_GetObjectItem(function, "name") : NULL;
+            cJSON *arguments = function ? cJSON_GetObjectItem(function, "arguments") : NULL;
+            if ((id && cJSON_IsString(id) &&
+                 append_text(&call->id, cJSON_GetStringValue(id)) != 0) ||
+                (name && cJSON_IsString(name) &&
+                 append_text(&call->name, cJSON_GetStringValue(name)) != 0) ||
+                (arguments && cJSON_IsString(arguments) &&
+                 append_text(&call->arguments, cJSON_GetStringValue(arguments)) != 0))
+            {
+                cJSON_Delete(json);
+                return -1;
+            }
+        }
+    }
+
+    cJSON_Delete(json);
+    return 0;
+}
+
+static int parse_stream_response(char *raw, LLMResponse *resp,
+                                 void (*on_chunk)(const char *, void *),
+                                 void *userdata)
+{
+    if (!raw) return -1;
+    char *save = NULL;
+    char *line = strtok_r(raw, "\n", &save);
+    while (line)
+    {
+        size_t line_len = strlen(line);
+        if (line_len > 0 && line[line_len - 1] == '\r') line[--line_len] = '\0';
+        if (strncmp(line, "data: ", 6) == 0)
+        {
+            const char *data = line + 6;
+            if (strcmp(data, "[DONE]") != 0 &&
+                parse_stream_event(resp, data, on_chunk, userdata) != 0)
+                return -1;
+        }
+        line = strtok_r(NULL, "\n", &save);
+    }
+    if (!resp->content)
+    {
+        resp->content = str_dup("");
+        if (!resp->content) return -1;
+    }
+    return 0;
+}
+
+#ifdef LMSTUDIO_TEST
+LLMResponse *lmstudio_test_parse_stream(
+    const char *input, void (*on_chunk)(const char *, void *), void *userdata)
+{
+    if (!input) return NULL;
+    char *raw = str_dup(input);
+    LLMResponse *resp = llm_response_create();
+    if (!raw || !resp)
+    {
+        free(raw);
+        llm_response_free(resp);
+        return NULL;
+    }
+    if (parse_stream_response(raw, resp, on_chunk, userdata) != 0)
+    {
+        free(raw);
+        llm_response_free(resp);
+        return NULL;
+    }
+    free(raw);
+    return resp;
+}
+#endif
 
 static char *build_url(const char *base_url)
 {
@@ -214,46 +359,9 @@ static char *lmstudio_chat_request(const char *base_url, const char *json_body,
         return NULL;
     }
 
-    if (stream && on_chunk)
-    {
-        char *p = buf.data;
-        char *line_start = p;
-        while (*p)
-        {
-            if (*p == '\n')
-            {
-                *p = '\0';
-                if (strncmp(line_start, "data: ", 6) == 0)
-                {
-                    char *json_str = line_start + 6;
-                    if (strcmp(json_str, "[DONE]") != 0)
-                    {
-                        cJSON *json = cJSON_Parse(json_str);
-                        if (json)
-                        {
-                            cJSON *choices = cJSON_GetObjectItem(json, "choices");
-                            if (choices && cJSON_IsArray(choices) && cJSON_GetArraySize(choices) > 0)
-                            {
-                                cJSON *choice = cJSON_GetArrayItem(choices, 0);
-                                cJSON *delta = cJSON_GetObjectItem(choice, "delta");
-                                if (delta)
-                                {
-                                    cJSON *content = cJSON_GetObjectItem(delta, "content");
-                                    if (content && cJSON_IsString(content))
-                                        on_chunk(cJSON_GetStringValue(content), userdata);
-                                }
-                            }
-                            cJSON_Delete(json);
-                        }
-                    }
-                }
-                line_start = p + 1;
-            }
-            p++;
-        }
-        free(buf.data);
-        return str_dup("");
-    }
+    (void)stream;
+    (void)on_chunk;
+    (void)userdata;
 
     return buf.data;
 }
@@ -308,9 +416,6 @@ static LLMResponse *lmstudio_chat_streaming(LLMProvider *self, Message *messages
                                              void *userdata,
                                              const char *tools_json)
 {
-    (void)on_chunk;
-    (void)userdata;
-
     LMStudioCtx *ctx = self->ctx;
 
     char *msgs_json = build_messages_json(messages, count, NULL, model);
@@ -352,6 +457,12 @@ static LLMResponse *lmstudio_chat_streaming(LLMProvider *self, Message *messages
         return NULL;
     }
 
+    if (parse_stream_response(raw, resp, on_chunk, userdata) != 0)
+    {
+        free(raw);
+        llm_response_free(resp);
+        return NULL;
+    }
     free(raw);
     return resp;
 }

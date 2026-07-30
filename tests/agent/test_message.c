@@ -108,6 +108,8 @@ START_TEST(test_message_copy_deep)
     src.tool_calls[0].id = str_dup("call-1");
     src.tool_calls[0].name = str_dup("bash");
     src.tool_calls[0].arguments = str_dup("{\"command\":\"ls\"}");
+    src.tool_calls[0].result_content = str_dup("output");
+    src.tool_calls[0].result_error = str_dup("warning");
 
     Message *dst = calloc(1, sizeof(Message));
     ck_assert_ptr_nonnull(dst);
@@ -134,6 +136,12 @@ START_TEST(test_message_copy_deep)
     ck_assert_str_eq(dst->tool_calls[0].name, src.tool_calls[0].name);
     ck_assert_str_eq(dst->tool_calls[0].arguments, src.tool_calls[0].arguments);
     ck_assert_ptr_ne(dst->tool_calls[0].arguments, src.tool_calls[0].arguments);
+    ck_assert_str_eq(dst->tool_calls[0].result_content,
+                     src.tool_calls[0].result_content);
+    ck_assert_ptr_ne(dst->tool_calls[0].result_content,
+                     src.tool_calls[0].result_content);
+    ck_assert_str_eq(dst->tool_calls[0].result_error,
+                     src.tool_calls[0].result_error);
 
     /* regression: source must be left untouched (agent_save_session used
      * to hollow it out, which corrupted later saves and the live context) */

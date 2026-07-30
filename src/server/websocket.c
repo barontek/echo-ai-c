@@ -13,7 +13,49 @@
 #include "routes/routes_ws.h"
 #include "../utils/logging.h"
 
+#ifdef WEBSOCKET_TEST
+int websocket_test_uv_write(uv_write_t *req, uv_stream_t *handle,
+                            const uv_buf_t bufs[], unsigned int nbufs,
+                            uv_write_cb cb);
+#define uv_write websocket_test_uv_write
+#endif
+
 #define WS_MAGIC "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+static int ws_protocol_offered(const char *headers, const char *protocol)
+{
+    const char *line = headers;
+    size_t protocol_len = strlen(protocol);
+    while (line && *line)
+    {
+        const char *line_end = strstr(line, "\r\n");
+        if (!line_end) line_end = line + strlen(line);
+        static const char name[] = "Sec-WebSocket-Protocol:";
+        if ((size_t)(line_end - line) >= sizeof(name) - 1 &&
+            strncasecmp(line, name, sizeof(name) - 1) == 0)
+        {
+            const char *item = line + sizeof(name) - 1;
+            while (item < line_end)
+            {
+                while (item < line_end && (*item == ' ' || *item == '\t' || *item == ','))
+                    item++;
+                const char *end = item;
+                while (end < line_end && *end != ',') end++;
+                const char *trimmed = end;
+                while (trimmed > item && (trimmed[-1] == ' ' || trimmed[-1] == '\t'))
+                    trimmed--;
+                if ((size_t)(trimmed - item) == protocol_len &&
+                    memcmp(item, protocol, protocol_len) == 0)
+                    return 1;
+                item = end;
+            }
+            return 0;
+        }
+        if (*line_end == '\0') break;
+        line = line_end + 2;
+    }
+    return 0;
+}
 
 static void ws_write_done(uv_write_t *req, int status)
 {
@@ -22,21 +64,54 @@ static void ws_write_done(uv_write_t *req, int status)
     free(req);
 }
 
-static void ws_ping_write_done(uv_write_t *req, int status)
+static int ws_send_control(WSClient *ws, unsigned char opcode,
+                           const unsigned char *payload, size_t payload_len)
 {
-    (void)status;
-    free(req);
+    if (!ws || !ws->handle || payload_len > 125) return -1;
+
+    unsigned char *frame = malloc(payload_len + 2);
+    if (!frame) return -1;
+    frame[0] = (unsigned char)(0x80U | opcode);
+    frame[1] = (unsigned char)payload_len;
+    if (payload_len > 0) memcpy(frame + 2, payload, payload_len);
+
+    uv_write_t *req = malloc(sizeof(uv_write_t));
+    if (!req)
+    {
+        free(frame);
+        return -1;
+    }
+    req->data = frame;
+    uv_buf_t buf = {.base = (char *)frame, .len = payload_len + 2};
+    int rc = uv_write(req, (uv_stream_t *)ws->handle, &buf, 1, ws_write_done);
+    if (rc != 0)
+    {
+        free(frame);
+        free(req);
+        return -1;
+    }
+    return 0;
 }
+
+#ifdef WEBSOCKET_TEST
+int websocket_test_send_control(WSClient *ws, unsigned char opcode,
+                                const unsigned char *payload, size_t payload_len)
+{
+    return ws_send_control(ws, opcode, payload, payload_len);
+}
+
+int websocket_test_protocol_offered(const char *headers, const char *protocol)
+{
+    return ws_protocol_offered(headers, protocol);
+}
+#endif
 
 static void ws_ping_timer_cb(uv_timer_t *timer)
 {
     WSClient *ws = (WSClient *)timer->data;
     if (!ws || !ws->handle) return;
 
-    unsigned char ping[2] = {0x89, 0x00};
-    uv_buf_t ping_buf = {.base = (char *)ping, .len = 2};
-    uv_write_t *req = malloc(sizeof(uv_write_t));
-    if (req) uv_write(req, (uv_stream_t *)ws->handle, &ping_buf, 1, ws_ping_write_done);
+    (void)ws_send_control(ws, 0x9, NULL, 0);
 }
 
 void ws_start_ping_timer(WSClient *ws)
@@ -135,10 +210,8 @@ static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 
         if (opcode == 0x9)
         {
-            unsigned char pong[2] = {0x8A, 0x00};
-            uv_buf_t pong_buf = {.base = (char *)pong, .len = 2};
-            uv_write_t *req = malloc(sizeof(uv_write_t));
-            if (req) uv_write(req, stream, &pong_buf, 1, ws_ping_write_done);
+            const unsigned char *payload = data + pos;
+            (void)ws_send_control(ws, 0xA, payload, (size_t)payload_len);
             free(buf->base);
             return;
         }
@@ -211,12 +284,15 @@ int ws_do_handshake(HTTPRequest *req, Client *client, ServerContext *ctx)
         b64[--b64_len] = '\0';
 
     char *resp = NULL;
+    const char *protocol_header = ws_protocol_offered(req->headers, "echo-ai")
+                                      ? "Sec-WebSocket-Protocol: echo-ai\r\n" : "";
     if (asprintf(&resp,
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
+        "%s"
         "Sec-WebSocket-Accept: %s\r\n"
-        "\r\n", b64) < 0)
+        "\r\n", protocol_header, b64) < 0)
     { return -1; }
 
     size_t resp_len = strlen(resp);
@@ -224,7 +300,14 @@ int ws_do_handshake(HTTPRequest *req, Client *client, ServerContext *ctx)
     uv_write_t *wreq = malloc(sizeof(uv_write_t));
     if (!wreq) { free(resp); return -1; }
     wreq->data = resp;
-    uv_write(wreq, (uv_stream_t *)req->client, &uvresp, 1, ws_write_done);
+    int write_rc = uv_write(wreq, (uv_stream_t *)req->client, &uvresp, 1,
+                            ws_write_done);
+    if (write_rc != 0)
+    {
+        free(resp);
+        free(wreq);
+        return -1;
+    }
 
     WSClient *ws = calloc(1, sizeof(WSClient));
     if (!ws) return 0;
@@ -251,6 +334,7 @@ int ws_send(WSClient *ws, const char *data, size_t len)
     size_t header_size = 2;
     if (len > 125) header_size += 2;
     if (len > 65535) header_size += 8;
+    if (len > SIZE_MAX - header_size) return -1;
 
     unsigned char *frame = malloc(header_size + len);
     if (!frame) return -1;
@@ -283,7 +367,13 @@ int ws_send(WSClient *ws, const char *data, size_t len)
     if (!req) { free(frame); return -1; }
 
     req->data = frame;
-    uv_write(req, (uv_stream_t *)ws->handle, &buf, 1, ws_write_done);
+    int rc = uv_write(req, (uv_stream_t *)ws->handle, &buf, 1, ws_write_done);
+    if (rc != 0)
+    {
+        free(frame);
+        free(req);
+        return -1;
+    }
     return 0;
 }
 
@@ -294,13 +384,11 @@ int ws_send_json(WSClient *ws, const char *json)
 
 int ws_send_close(WSClient *ws, uint16_t code)
 {
-    (void)code;
-    unsigned char frame[4] = {0x88, 0x02, 0x03, 0xE8};
-    uv_buf_t buf = {.base = (char *)frame, .len = 4};
-    uv_write_t *req = malloc(sizeof(uv_write_t));
-    if (!req) return -1;
-    uv_write(req, (uv_stream_t *)ws->handle, &buf, 1, NULL);
-    return 0;
+    unsigned char payload[2] = {
+        (unsigned char)(code >> 8),
+        (unsigned char)(code & 0xFFU),
+    };
+    return ws_send_control(ws, 0x8, payload, sizeof(payload));
 }
 
 int ws_start_read(WSClient *ws)

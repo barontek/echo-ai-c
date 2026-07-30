@@ -80,6 +80,44 @@ START_TEST(test_title_is_encrypted_at_rest)
 }
 END_TEST
 
+START_TEST(test_session_list_realloc_failures_are_safe)
+{
+    char tmpdir[] = "/tmp/test_sm_realloc_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "test_password");
+    ck_assert_ptr_nonnull(sm);
+
+    for (int i = 0; i < 17; i++)
+    {
+        char title[32];
+        ck_assert_int_lt(snprintf(title, sizeof(title), "session %d", i),
+                         (int)sizeof(title));
+        Session *session = session_manager_create_session(sm, title);
+        ck_assert_ptr_nonnull(session);
+        session_free(session);
+    }
+
+    for (int fail_at = 1; fail_at <= 4; fail_at++)
+    {
+        session_manager_test_set_realloc_fail(fail_at);
+        SessionList *list = session_manager_list_sessions(sm);
+        ck_assert_ptr_null(list);
+    }
+
+    session_manager_test_set_realloc_fail(-1);
+    SessionList *list = session_manager_list_sessions(sm);
+    ck_assert_ptr_nonnull(list);
+    ck_assert_int_eq(list->count, 17);
+    session_list_free(list);
+    session_manager_free(sm);
+
+    char rm[4096];
+    ck_assert_int_lt(snprintf(rm, sizeof(rm), "rm -rf %s", tmpdir),
+                     (int)sizeof(rm));
+    (void)system(rm);
+}
+END_TEST
+
 /* Regression test for A7: user_memory table used to be created by ad-hoc
  * memory_table_init calls scattered across main.c and routes.c. build_system_prompt
  * (via memory_list_all) had no guarantee the table existed. After the fix,
@@ -686,6 +724,7 @@ Suite *session_mgr_suite(void)
     tcase_add_test(tc_crud, test_delete_session_distinguishes_missing);
     tcase_add_test(tc_crud, test_empty_or_null_id_refused);
     tcase_add_test(tc_crud, test_session_list_alloc_fail_mid);
+    tcase_add_test(tc_crud, test_session_list_realloc_failures_are_safe);
     tcase_add_test(tc_crud, test_import_rejects_duplicate_id_preserves_existing);
     suite_add_tcase(s, tc_crud);
 

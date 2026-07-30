@@ -141,6 +141,8 @@ SessionManager *session_manager_create(const char *dir, const char *pw)
     return stub_sm_create_result;
 }
 
+void session_manager_free(SessionManager *sm) { (void)sm; }
+
 int migration_change_password(SessionManager *sm, const char *new_pw)
 {
     (void)sm; (void)new_pw;
@@ -260,6 +262,8 @@ START_TEST(test_handle_setup_success)
     ck_assert(captured_body && strstr(captured_body, "\"token\":"));
     ck_assert(ctx.state == STATE_UNLOCKED);
     ck_assert_ptr_nonnull(ctx.unlock_token);
+    ck_assert_uint_eq(strlen(ctx.unlock_token), 68);
+    ck_assert_int_eq(strncmp(ctx.unlock_token, "tok_", 4), 0);
 
     free(ctx.unlock_token);
     ctx.unlock_token = NULL;
@@ -415,6 +419,8 @@ START_TEST(test_handle_unlock_success)
     ck_assert(captured_body && strstr(captured_body, "\"token\":"));
     ck_assert(ctx.state == STATE_UNLOCKED);
     ck_assert_ptr_nonnull(ctx.unlock_token);
+    ck_assert_uint_eq(strlen(ctx.unlock_token), 68);
+    ck_assert_int_eq(strncmp(ctx.unlock_token, "tok_", 4), 0);
 
     free(ctx.unlock_token);
     ctx.unlock_token = NULL;

@@ -42,9 +42,31 @@ typedef struct {
     int session_start_emitted;
     int ask_user_done;
     char *ask_user_response;
+    int active_runs;
+    int closing;
+    ServerContext *server_ctx;
+    unsigned long auth_generation;
 } WSChatCtx;
 
 WS_STATIC void ws_title_update_cb(const char *session_id, const char *title, void *userdata);
+
+static void ws_chat_ctx_destroy(WSChatCtx *c)
+{
+    if (!c) return;
+    if (c->agent) agent_destroy(c->agent);
+    free(c->pending_request_id);
+    free(c->active_session_id);
+    free(c->ask_user_response);
+    QueuedMsg *q = c->msg_queue;
+    while (q)
+    {
+        QueuedMsg *next = q->next;
+        free(q->data);
+        free(q);
+        q = next;
+    }
+    free(c);
+}
 
 WS_STATIC void ws_chat_on_chunk(const char *chunk, void *userdata)
 {
@@ -167,6 +189,13 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
     (void)len;
     WSChatCtx *c = (WSChatCtx *)userdata;
     if (!c || !c->agent) return;
+    if (c->server_ctx &&
+        (c->server_ctx->state != STATE_UNLOCKED ||
+         c->server_ctx->auth_generation != c->auth_generation))
+    {
+        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"authentication expired\"}");
+        return;
+    }
 
     cJSON *json = cJSON_Parse(data);
     if (!json)
@@ -342,8 +371,17 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                     c->agent->messages_count = keep;
                 }
 
+                c->active_runs++;
                 LLMResponse *resp = agent_run_streaming(c->agent, content_item->valuestring,
-                                                        ws_chat_on_chunk, c);
+                                                         ws_chat_on_chunk, c);
+                c->active_runs--;
+                if (c->closing)
+                {
+                    llm_response_free(resp);
+                    cJSON_Delete(json);
+                    ws_chat_ctx_destroy(c);
+                    return;
+                }
                 if (!c->active_session_id && c->agent && c->agent->session_id)
                 {
                     free(c->active_session_id);
@@ -401,9 +439,18 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
         return;
     }
 
+    c->active_runs++;
     LLMResponse *resp = agent_run_streaming(c->agent, msg->valuestring,
-                                            ws_chat_on_chunk, c);
+                                             ws_chat_on_chunk, c);
+    c->active_runs--;
     cJSON_Delete(json);
+
+    if (c->closing)
+    {
+        llm_response_free(resp);
+        ws_chat_ctx_destroy(c);
+        return;
+    }
 
     /* agent may have created a session during the run — capture it */
     if (!c->active_session_id && c->agent && c->agent->session_id)
@@ -485,29 +532,13 @@ WS_STATIC void ws_chat_on_close(WSClient *ws, void *userdata)
     {
         ws->on_close = NULL;
         ws->userdata = NULL;
+        c->closing = 1;
+        c->ws = NULL;
         c->approval_done = 1;
         c->approval_result = 0;
-        /* D2: per-connection Agent — cancel any in-flight streaming, then
-         * tear down the owned Agent (and its LLMProvider). This replaces
-         * the old code that cancelled the shared ctx->agent (a cross-client
-         * bug). */
-        if (c->agent)
-        {
-            agent_cancel(c->agent);
-            agent_destroy(c->agent);
-            c->agent = NULL;
-        }
-        free(c->pending_request_id);
-        free(c->active_session_id);
-        QueuedMsg *q = c->msg_queue;
-        while (q)
-        {
-            QueuedMsg *next = q->next;
-            free(q->data);
-            free(q);
-            q = next;
-        }
-        free(c);
+        c->ask_user_done = 1;
+        if (c->agent) agent_cancel(c->agent);
+        if (c->active_runs == 0) ws_chat_ctx_destroy(c);
     }
 }
 
@@ -609,6 +640,8 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     c->safety = ctx->safety;
     c->ws = ws;
     c->loop = ctx->loop;
+    c->server_ctx = ctx;
+    c->auth_generation = ctx->auth_generation;
 
     ws->on_message = ws_chat_on_message;
     ws->on_close = ws_chat_on_close;
@@ -628,7 +661,7 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     agent_set_tool_end_callback(c->agent, ws_tool_end_cb, c);
     agent_set_safety(c->agent, c->safety);
 
-    registry_set_ask_user_callback(ws_ask_user_cb, c);
+    agent_set_ask_user_callback(c->agent, ws_ask_user_cb, c);
 
     if (query && query[0] && c->sm && c->agent)
     {

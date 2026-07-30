@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <limits.h>
+#include <arpa/inet.h>
 #include "safety/safety.h"
 #include "config/config.h"
 #include "utils/string_utils.h"
@@ -52,7 +53,7 @@ END_TEST
 START_TEST(test_path_allowed_when_no_extension_filter)
 {
     SafetyConfig *cfg = safety_config_create();
-    ck_assert_int_eq(safety_check_path(cfg, "/tmp/file.txt"), 1);
+    ck_assert_int_eq(safety_check_path(cfg, "tmp/file.txt"), 1);
     safety_config_free(cfg);
 }
 END_TEST
@@ -117,7 +118,7 @@ START_TEST(test_path_clean_passes)
 {
     SafetyConfig *cfg = safety_config_create();
     ck_assert_int_eq(safety_check_path(cfg, "src/main.c"), 1);
-    ck_assert_int_eq(safety_check_path(cfg, "/tmp/test.txt"), 1);
+    ck_assert_int_eq(safety_check_path(cfg, "tmp/test.txt"), 1);
     ck_assert_int_eq(safety_check_path(cfg, "README.md"), 1);
     safety_config_free(cfg);
 }
@@ -311,6 +312,63 @@ START_TEST(test_url_unlisted_domain_rejected)
     cfg->allowed_domains[0] = str_dup("example.com");
     cfg->allowed_domains_count = 1;
     ck_assert_int_eq(safety_check_url(cfg, "https://other.com"), 0);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_url_rejects_allowlist_substring_bypass)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->allowed_domains = malloc(sizeof(char *));
+    cfg->allowed_domains[0] = str_dup("example.com");
+    cfg->allowed_domains_count = 1;
+    ck_assert_int_eq(safety_check_url(cfg, "https://example.com.evil.test/"), 0);
+    ck_assert_int_eq(safety_check_url(cfg, "https://example.com@evil.test/"), 0);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_url_rejects_non_http_and_local_hosts)
+{
+    SafetyConfig *cfg = safety_config_create();
+    ck_assert_int_eq(safety_check_url(cfg, "file:///etc/passwd"), 0);
+    ck_assert_int_eq(safety_check_url(cfg, "http://127.0.0.1/"), 0);
+    ck_assert_int_eq(safety_check_url(cfg, "http://localhost/"), 0);
+    ck_assert_int_eq(safety_check_url(cfg, "http://192.168.1.1/"), 0);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_socket_address_rejects_private_dns_destinations)
+{
+    struct sockaddr_in private_addr = {0};
+    private_addr.sin_family = AF_INET;
+    ck_assert_int_eq(inet_pton(AF_INET, "10.2.3.4", &private_addr.sin_addr), 1);
+    ck_assert_int_eq(safety_check_socket_address(
+                         (const struct sockaddr *)&private_addr), 0);
+
+    struct sockaddr_in public_addr = {0};
+    public_addr.sin_family = AF_INET;
+    ck_assert_int_eq(inet_pton(AF_INET, "8.8.8.8", &public_addr.sin_addr), 1);
+    ck_assert_int_eq(safety_check_socket_address(
+                         (const struct sockaddr *)&public_addr), 1);
+
+    struct sockaddr_in carrier_grade_nat = {0};
+    carrier_grade_nat.sin_family = AF_INET;
+    ck_assert_int_eq(inet_pton(AF_INET, "100.100.100.200",
+                               &carrier_grade_nat.sin_addr), 1);
+    ck_assert_int_eq(safety_check_socket_address(
+                         (const struct sockaddr *)&carrier_grade_nat), 0);
+}
+END_TEST
+
+START_TEST(test_url_empty_allowlist_entry_does_not_allow_host)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->allowed_domains = calloc(1, sizeof(char *));
+    cfg->allowed_domains[0] = str_dup("");
+    cfg->allowed_domains_count = 1;
+    ck_assert_int_eq(safety_check_url(cfg, "https://evil.test./"), 0);
     safety_config_free(cfg);
 }
 END_TEST
@@ -681,6 +739,10 @@ Suite *safety_suite(void)
     tcase_add_test(tc_url, test_url_no_domain_filter);
     tcase_add_test(tc_url, test_url_allowed_domain_passes);
     tcase_add_test(tc_url, test_url_unlisted_domain_rejected);
+    tcase_add_test(tc_url, test_url_rejects_allowlist_substring_bypass);
+    tcase_add_test(tc_url, test_url_rejects_non_http_and_local_hosts);
+    tcase_add_test(tc_url, test_socket_address_rejects_private_dns_destinations);
+    tcase_add_test(tc_url, test_url_empty_allowlist_entry_does_not_allow_host);
     suite_add_tcase(s, tc_url);
 
     TCase *tc_fs = tcase_create("FileSize");

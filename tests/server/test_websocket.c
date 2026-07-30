@@ -1,0 +1,127 @@
+#include <check.h>
+#include <stdlib.h>
+#include <string.h>
+#include "server/websocket.h"
+#include "utils/logging.h"
+
+int websocket_test_send_control(WSClient *ws, unsigned char opcode,
+                                const unsigned char *payload, size_t payload_len);
+int websocket_test_protocol_offered(const char *headers, const char *protocol);
+
+static uv_write_t *captured_req = NULL;
+static uv_write_cb captured_cb = NULL;
+static char *captured_base = NULL;
+static size_t captured_len = 0;
+static int submit_result = 0;
+
+int websocket_test_uv_write(uv_write_t *req, uv_stream_t *handle,
+                            const uv_buf_t bufs[], unsigned int nbufs,
+                            uv_write_cb cb)
+{
+    (void)handle;
+    ck_assert_uint_eq(nbufs, 1);
+    captured_req = req;
+    captured_cb = cb;
+    captured_base = bufs[0].base;
+    captured_len = bufs[0].len;
+    return submit_result;
+}
+
+void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
+{
+    (void)ws;
+    (void)ctx;
+    (void)query;
+}
+
+void client_close(Client *client) { (void)client; }
+void client_set_ws_private(Client *client, void *priv)
+{
+    (void)client;
+    (void)priv;
+}
+
+void log_msg(LogLevel level, const char *file, int line, const char *message, ...)
+{
+    (void)level;
+    (void)file;
+    (void)line;
+    (void)message;
+}
+
+static void reset_capture(void)
+{
+    captured_req = NULL;
+    captured_cb = NULL;
+    captured_base = NULL;
+    captured_len = 0;
+    submit_result = 0;
+}
+
+START_TEST(test_control_frame_buffer_survives_until_completion)
+{
+    reset_capture();
+    WSClient ws = {.handle = (uv_tcp_t *)1};
+    const unsigned char payload[] = {'o', 'k'};
+    ck_assert_int_eq(websocket_test_send_control(&ws, 0xA, payload,
+                                                 sizeof(payload)), 0);
+    ck_assert_ptr_nonnull(captured_req);
+    ck_assert(captured_cb != NULL);
+    ck_assert_uint_eq(captured_len, 4);
+    ck_assert_uint_eq((unsigned char)captured_base[0], 0x8A);
+    ck_assert_uint_eq((unsigned char)captured_base[1], 2);
+    ck_assert_mem_eq(captured_base + 2, payload, sizeof(payload));
+    captured_cb(captured_req, 0);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_close_frame_encodes_requested_code)
+{
+    reset_capture();
+    WSClient ws = {.handle = (uv_tcp_t *)1};
+    ck_assert_int_eq(ws_send_close(&ws, 1001), 0);
+    ck_assert_uint_eq(captured_len, 4);
+    ck_assert_uint_eq((unsigned char)captured_base[0], 0x88);
+    ck_assert_uint_eq((unsigned char)captured_base[2], 0x03);
+    ck_assert_uint_eq((unsigned char)captured_base[3], 0xE9);
+    captured_cb(captured_req, 0);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_control_frame_submission_failure_is_reported)
+{
+    reset_capture();
+    submit_result = UV_EPIPE;
+    WSClient ws = {.handle = (uv_tcp_t *)1};
+    ck_assert_int_eq(websocket_test_send_control(&ws, 0x9, NULL, 0), -1);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_protocol_is_selected_only_when_offered)
+{
+    ck_assert_int_eq(websocket_test_protocol_offered(
+        "Sec-WebSocket-Protocol: echo-ai, echo-ai-token-secret\r\n",
+        "echo-ai"), 1);
+    ck_assert_int_eq(websocket_test_protocol_offered(
+        "Host: localhost\r\n", "echo-ai"), 0);
+}
+END_TEST
+
+int main(void)
+{
+    Suite *suite = suite_create("WebSocket");
+    TCase *tc = tcase_create("Writes");
+    tcase_add_test(tc, test_control_frame_buffer_survives_until_completion);
+    tcase_add_test(tc, test_close_frame_encodes_requested_code);
+    tcase_add_test(tc, test_control_frame_submission_failure_is_reported);
+    tcase_add_test(tc, test_protocol_is_selected_only_when_offered);
+    suite_add_tcase(suite, tc);
+    SRunner *runner = srunner_create(suite);
+    srunner_run_all(runner, CK_NORMAL);
+    int failed = srunner_ntests_failed(runner);
+    srunner_free(runner);
+    return failed ? 1 : 0;
+}

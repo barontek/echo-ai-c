@@ -511,13 +511,15 @@ START_TEST(test_sse_success)
     ctx.agent = (Agent *)&ctx;
     stub_agent_run_streaming_resp = &fake_resp_basic;
     stub_streaming_chunk_count = 2;
-    stub_streaming_chunks[0] = "\"Hello\"";
-    stub_streaming_chunks[1] = "\" World\"";
+    stub_streaming_chunks[0] = "Hello";
+    stub_streaming_chunks[1] = " World\nwith \"quotes\"";
     handle_sse_stream(&req, (Client *)&ctx, &ctx);
     ck_assert_int_eq(captured_close_count, 1);
     ck_assert_int_eq(captured_sse_count, 4);
     ck_assert(strstr(captured_sse_buf, "\"type\":\"done\"") != NULL);
     ck_assert(strstr(captured_sse_buf, "\"type\":\"content\"") != NULL);
+    ck_assert(strstr(captured_sse_buf, "\"content\":\"Hello\"") != NULL);
+    ck_assert(strstr(captured_sse_buf, "World\\nwith \\\"quotes\\\"") != NULL);
 }
 END_TEST
 
