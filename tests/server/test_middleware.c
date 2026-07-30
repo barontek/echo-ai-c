@@ -1,5 +1,6 @@
 #include <check.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "server/middleware.h"
 
@@ -18,6 +19,13 @@ void server_response(Client *client, int status, const char *content_type,
     (void)content_type;
     (void)body;
 }
+
+void log_error(const char *fmt, ...) { (void)fmt; }
+void log_init(void) {}
+void log_cleanup(void) {}
+void log_set_level(int l) { (void)l; }
+void log_msg(int l, const char *f, int line, const char *fmt, ...)
+{ (void)l; (void)f; (void)line; (void)fmt; }
 
 START_TEST(test_token_exact_match_returns_valid)
 {
@@ -178,6 +186,148 @@ START_TEST(test_token_exact_prefix_but_shorter_returns_invalid)
 }
 END_TEST
 
+START_TEST(test_token_equals_exact)
+{
+    ck_assert_int_eq(token_equals("abc", 3, "abc"), 1);
+}
+END_TEST
+
+START_TEST(test_token_equals_wrong_length)
+{
+    ck_assert_int_eq(token_equals("ab", 2, "abc"), 0);
+}
+END_TEST
+
+START_TEST(test_token_equals_wrong_content)
+{
+    ck_assert_int_eq(token_equals("abd", 3, "abc"), 0);
+}
+END_TEST
+
+START_TEST(test_token_equals_null_a)
+{
+    ck_assert_int_eq(token_equals(NULL, 3, "abc"), 0);
+}
+END_TEST
+
+START_TEST(test_token_equals_null_b)
+{
+    ck_assert_int_eq(token_equals("abc", 3, NULL), 0);
+}
+END_TEST
+
+START_TEST(test_token_equals_both_null)
+{
+    ck_assert_int_eq(token_equals(NULL, 0, NULL), 0);
+}
+END_TEST
+
+START_TEST(test_token_equals_empty)
+{
+    ck_assert_int_eq(token_equals("", 0, ""), 1);
+}
+END_TEST
+
+START_TEST(test_token_equals_empty_vs_nonempty)
+{
+    ck_assert_int_eq(token_equals("", 0, "a"), 0);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_no_token_param)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "secret";
+    memcpy(req.query, "foo=bar", 8);
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 0);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_empty_query)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "secret";
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 0);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_correct_token)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "s3cret";
+    memcpy(req.query, "token=s3cret", 13);
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 1);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_wrong_token)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "correct";
+    memcpy(req.query, "token=wrong", 12);
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 0);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_token_with_ampersand)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "tok";
+    memcpy(req.query, "token=tok&next=val", 19);
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 1);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_empty_token_value)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "secret";
+    memcpy(req.query, "token=", 7);
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 0);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_locked_state)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_LOCKED;
+    ctx.unlock_token = "secret";
+    memcpy(req.query, "token=secret", 13);
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 0);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_null_unlock_token)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = NULL;
+    memcpy(req.query, "token=x", 8);
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 0);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_null_req)
+{
+    ServerContext ctx = {0};
+    ck_assert_int_eq(middleware_check_unlock_query(NULL, &ctx), 0);
+}
+END_TEST
+
 Suite *middleware_suite(void)
 {
     Suite *s = suite_create("middleware");
@@ -202,6 +352,30 @@ Suite *middleware_suite(void)
     tcase_add_test(tc, test_token_exact_prefix_but_shorter_returns_invalid);
 
     suite_add_tcase(s, tc);
+
+    TCase *tc_te = tcase_create("token_equals");
+    tcase_add_test(tc_te, test_token_equals_exact);
+    tcase_add_test(tc_te, test_token_equals_wrong_length);
+    tcase_add_test(tc_te, test_token_equals_wrong_content);
+    tcase_add_test(tc_te, test_token_equals_null_a);
+    tcase_add_test(tc_te, test_token_equals_null_b);
+    tcase_add_test(tc_te, test_token_equals_both_null);
+    tcase_add_test(tc_te, test_token_equals_empty);
+    tcase_add_test(tc_te, test_token_equals_empty_vs_nonempty);
+    suite_add_tcase(s, tc_te);
+
+    TCase *tc_uq = tcase_create("check_unlock_query");
+    tcase_add_test(tc_uq, test_check_unlock_query_no_token_param);
+    tcase_add_test(tc_uq, test_check_unlock_query_empty_query);
+    tcase_add_test(tc_uq, test_check_unlock_query_correct_token);
+    tcase_add_test(tc_uq, test_check_unlock_query_wrong_token);
+    tcase_add_test(tc_uq, test_check_unlock_query_token_with_ampersand);
+    tcase_add_test(tc_uq, test_check_unlock_query_empty_token_value);
+    tcase_add_test(tc_uq, test_check_unlock_query_locked_state);
+    tcase_add_test(tc_uq, test_check_unlock_query_null_unlock_token);
+    tcase_add_test(tc_uq, test_check_unlock_query_null_req);
+    suite_add_tcase(s, tc_uq);
+
     return s;
 }
 

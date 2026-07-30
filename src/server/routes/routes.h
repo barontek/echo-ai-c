@@ -11,6 +11,7 @@ typedef struct {
     const char *path;
     int is_prefix;
     int needs_unlock;
+    int unlock_via_query;
     route_handler handler;
 } Route;
 

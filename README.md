@@ -96,11 +96,13 @@ nested_key = value
 | DELETE | /api/sessions/:id | Token | Delete session |
 | PUT | /api/sessions/:id | Token | Update session title |
 | POST | /api/chat | Token | Send message (REST) |
-| GET | /api/stream | No | SSE streaming |
+| GET | /api/stream | Token¹ | SSE streaming |
 | GET | /api/metrics | No | Prometheus metrics |
 | POST | /api/undo | Token | Undo last file write |
 | POST | /api/redo | Token | Redo last undone file write |
-| GET /ws/chat | WebSocket | No | Real-time chat |
+| GET /ws/chat | WebSocket | Token | Real-time chat |
+
+¹ Token passed as query parameter `?token=...` because EventSource cannot set custom headers.
 
 ## Environment Variables
 

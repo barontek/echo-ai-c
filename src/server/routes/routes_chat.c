@@ -100,7 +100,18 @@ static void sse_on_chunk(const char *chunk, void *userdata)
 
 void handle_sse_stream(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
-    (void)req;
+    /* EventSource cannot set X-Unlock-Token header; the dispatch path
+     * already checks the query-param token via the route-table flag.
+     * This in-handler check catches header-based tokens as a fallback
+     * for non-browser clients that can set the header but bypassed the
+     * route table (if ever called directly without the dispatch check). */
+    if (!middleware_check_unlock(req, ctx) &&
+        !middleware_check_unlock_query(req, ctx))
+    {
+        server_response_error(client, 401, "unauthorized");
+        return;
+    }
+
     if (!ctx->agent) { server_response_error(client, 500, "no agent"); return; }
 
     char *headers = NULL;

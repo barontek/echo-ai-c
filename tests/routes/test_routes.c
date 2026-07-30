@@ -13,49 +13,49 @@
 
 START_TEST(test_route_match_method_mismatch)
 {
-    Route r = {"POST", "/api/status", 0, 0, NULL};
+    Route r = {"POST", "/api/status", 0, 0, 0, NULL};
     ck_assert_int_eq(route_match("GET", "/api/status", &r), 0);
 }
 END_TEST
 
 START_TEST(test_route_match_exact_match)
 {
-    Route r = {"GET", "/api/status", 0, 0, NULL};
+    Route r = {"GET", "/api/status", 0, 0, 0, NULL};
     ck_assert_int_eq(route_match("GET", "/api/status", &r), 1);
 }
 END_TEST
 
 START_TEST(test_route_match_prefix_match)
 {
-    Route r = {"GET", "/api/sessions/", 1, 1, NULL};
+    Route r = {"GET", "/api/sessions/", 1, 1, 0, NULL};
     ck_assert_int_eq(route_match("GET", "/api/sessions/abc-def", &r), 1);
 }
 END_TEST
 
 START_TEST(test_route_match_prefix_exact_treated_as_prefix)
 {
-    Route r = {"GET", "/api/sessions/", 1, 1, NULL};
+    Route r = {"GET", "/api/sessions/", 1, 1, 0, NULL};
     ck_assert_int_eq(route_match("GET", "/api/sessions/", &r), 1);
 }
 END_TEST
 
 START_TEST(test_route_match_prefix_no_match)
 {
-    Route r = {"GET", "/api/sessions/", 1, 1, NULL};
+    Route r = {"GET", "/api/sessions/", 1, 1, 0, NULL};
     ck_assert_int_eq(route_match("GET", "/api/other", &r), 0);
 }
 END_TEST
 
 START_TEST(test_route_match_non_prefix_no_match_different_path)
 {
-    Route r = {"GET", "/api/status", 0, 0, NULL};
+    Route r = {"GET", "/api/status", 0, 0, 0, NULL};
     ck_assert_int_eq(route_match("GET", "/api/health", &r), 0);
 }
 END_TEST
 
 START_TEST(test_route_match_method_correct_path_wrong)
 {
-    Route r = {"DELETE", "/api/sessions/", 1, 1, NULL};
+    Route r = {"DELETE", "/api/sessions/", 1, 1, 0, NULL};
     ck_assert_int_eq(route_match("PUT", "/api/sessions/abc", &r), 0);
 }
 END_TEST
@@ -65,7 +65,7 @@ START_TEST(test_route_match_prefix_truncation)
     /* When is_prefix=1, strncmp(path, r->path, strlen(r->path)) compares
      * only up to the stored prefix length, so "/api/prefix" does match
      * "/api/prefixed" (first 11 chars are identical). */
-    Route r = {"GET", "/api/prefix", 1, 0, NULL};
+    Route r = {"GET", "/api/prefix", 1, 0, 0, NULL};
     ck_assert_int_eq(route_match("GET", "/api/prefix-more", &r), 1);
     ck_assert_int_eq(route_match("GET", "/api/prefix", &r), 1);
     ck_assert_int_eq(route_match("GET", "/api/other", &r), 0);

@@ -275,6 +275,14 @@ static void handle_request(Client *client)
         req.client = client;
         memcpy(req.req_id, client->req_id, sizeof(req.req_id));
 
+        /* WebSocket upgrade requests can carry the X-Unlock-Token header
+         * (browsers send custom headers during the HTTP upgrade handshake). */
+        if (!middleware_check_unlock(&req, client->ctx))
+        {
+            server_response_error(client, 401, "unauthorized");
+            return;
+        }
+
         int rc = ws_do_handshake(&req, client, client->ctx);
         if (rc != 0)
             server_response_error(client, 400, "websocket upgrade failed");
@@ -298,10 +306,18 @@ static void handle_request(Client *client)
             req.client = client;
             memcpy(req.req_id, client->req_id, sizeof(req.req_id));
 
-            if (routes[i].needs_unlock && !middleware_check_unlock(&req, client->ctx))
+            if (routes[i].needs_unlock)
             {
-                server_response_error(client, 401, "unauthorized");
-                return;
+                int authorized;
+                if (routes[i].unlock_via_query)
+                    authorized = middleware_check_unlock_query(&req, client->ctx);
+                else
+                    authorized = middleware_check_unlock(&req, client->ctx);
+                if (!authorized)
+                {
+                    server_response_error(client, 401, "unauthorized");
+                    return;
+                }
             }
 
             routes[i].handler(&req, client, client->ctx);

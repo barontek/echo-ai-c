@@ -11,6 +11,7 @@
 #include "../src/utils/string_utils.h"
 
 static int stub_unlock = 1;
+static const char *stub_query_token_match = NULL;
 static LLMResponse *stub_agent_run_resp = NULL;
 static LLMResponse *stub_agent_run_streaming_resp = NULL;
 static int stub_streaming_chunk_count = 0;
@@ -32,6 +33,7 @@ static ToolCall fake_tool_calls_nulls[1] = {0};
 static void reset_stubs(void)
 {
     stub_unlock = 1;
+    stub_query_token_match = NULL;
     stub_agent_run_resp = NULL;
     stub_agent_run_streaming_resp = NULL;
     stub_streaming_chunk_count = 0;
@@ -98,6 +100,27 @@ int middleware_check_unlock(HTTPRequest *req, ServerContext *ctx)
 {
     (void)req; (void)ctx;
     return stub_unlock;
+}
+
+int middleware_check_unlock_query(HTTPRequest *req, ServerContext *ctx)
+{
+    (void)ctx;
+    if (stub_unlock) return 1;
+    if (!req->query || !req->query[0]) return 0;
+    if (stub_query_token_match)
+    {
+        const char *p = strstr(req->query, "token=");
+        if (p)
+        {
+            p += 6;
+            size_t len = 0;
+            while (p[len] != '&' && p[len] != '\0') len++;
+            if (len == strlen(stub_query_token_match) &&
+                memcmp(p, stub_query_token_match, len) == 0)
+                return 1;
+        }
+    }
+    return 0;
 }
 
 void client_close(Client *client) { (void)client; captured_close_count++; }
@@ -374,6 +397,85 @@ START_TEST(test_chat_success_tool_call_nulls)
 END_TEST
 
 /* ---------------------------------------------------------------------------
+ * handle_sse_stream auth tests
+ * --------------------------------------------------------------------------- */
+
+START_TEST(test_sse_no_token_returns_401)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.agent = (Agent *)&ctx;
+    stub_unlock = 0;
+    stub_query_token_match = NULL;
+    handle_sse_stream(&req, (Client *)&ctx, &ctx);
+    ck_assert_int_eq(captured_status, 401);
+    ck_assert_str_eq(captured_body, "unauthorized");
+}
+END_TEST
+
+START_TEST(test_sse_wrong_token_returns_401)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.agent = (Agent *)&ctx;
+    stub_unlock = 0;
+    strncpy(req.query, "token=wrong", sizeof(req.query) - 1);
+    stub_query_token_match = NULL;
+    handle_sse_stream(&req, (Client *)&ctx, &ctx);
+    ck_assert_int_eq(captured_status, 401);
+    ck_assert_str_eq(captured_body, "unauthorized");
+}
+END_TEST
+
+START_TEST(test_sse_correct_token_query_opens_stream)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.agent = (Agent *)&ctx;
+    stub_unlock = 0;
+    strncpy(req.query, "token=secret", sizeof(req.query) - 1);
+    stub_query_token_match = "secret";
+    stub_agent_run_streaming_resp = &fake_resp_basic;
+    stub_streaming_chunk_count = 1;
+    stub_streaming_chunks[0] = "\"hello\"";
+    handle_sse_stream(&req, (Client *)&ctx, &ctx);
+    ck_assert_int_eq(captured_close_count, 1);
+    ck_assert(captured_sse_count >= 2);
+    ck_assert(strstr(captured_sse_buf, "\"type\":\"content\"") != NULL);
+}
+END_TEST
+
+START_TEST(test_sse_token_with_trailing_ampersand)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.agent = (Agent *)&ctx;
+    stub_unlock = 0;
+    strncpy(req.query, "token=abc&foo=bar", sizeof(req.query) - 1);
+    stub_query_token_match = "abc";
+    stub_agent_run_streaming_resp = &fake_resp_basic;
+    stub_streaming_chunk_count = 0;
+    handle_sse_stream(&req, (Client *)&ctx, &ctx);
+    ck_assert_int_eq(captured_close_count, 1);
+    ck_assert(strstr(captured_sse_buf, "\"type\":\"done\"") != NULL);
+}
+END_TEST
+
+START_TEST(test_sse_empty_token_returns_401)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.agent = (Agent *)&ctx;
+    stub_unlock = 0;
+    strncpy(req.query, "token=", sizeof(req.query) - 1);
+    stub_query_token_match = NULL;
+    handle_sse_stream(&req, (Client *)&ctx, &ctx);
+    ck_assert_int_eq(captured_status, 401);
+    ck_assert_str_eq(captured_body, "unauthorized");
+}
+END_TEST
+
+/* ---------------------------------------------------------------------------
  * handle_sse_stream tests
  * --------------------------------------------------------------------------- */
 
@@ -482,6 +584,11 @@ Suite *routes_chat_suite(void)
 
     TCase *tc_sse = tcase_create("handle_sse_stream");
     tcase_add_checked_fixture(tc_sse, setup, teardown);
+    tcase_add_test(tc_sse, test_sse_no_token_returns_401);
+    tcase_add_test(tc_sse, test_sse_wrong_token_returns_401);
+    tcase_add_test(tc_sse, test_sse_correct_token_query_opens_stream);
+    tcase_add_test(tc_sse, test_sse_token_with_trailing_ampersand);
+    tcase_add_test(tc_sse, test_sse_empty_token_returns_401);
     tcase_add_test(tc_sse, test_sse_no_agent);
     tcase_add_test(tc_sse, test_sse_null_response);
     tcase_add_test(tc_sse, test_sse_success);
