@@ -1,9 +1,11 @@
+#define _GNU_SOURCE
 #include <check.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <limits.h>
 #include "safety/safety.h"
 #include "config/config.h"
 #include "utils/string_utils.h"
@@ -364,6 +366,8 @@ END_TEST
 
 /* --- safety_resolve_path --- */
 
+static char resolved_ws_base[PATH_MAX];
+
 static void setup_workspace(void)
 {
     mkdir("/tmp/echo_test_ws", 0755);
@@ -372,6 +376,8 @@ static void setup_workspace(void)
     if (f) fclose(f);
     f = fopen("/tmp/echo_test_ws/subdir/existing.txt", "w");
     if (f) fclose(f);
+    if (realpath("/tmp/echo_test_ws", resolved_ws_base) == NULL)
+        strcpy(resolved_ws_base, "/tmp/echo_test_ws");
 }
 
 static void teardown_workspace(void)
@@ -403,10 +409,13 @@ END_TEST
 START_TEST(test_resolve_existing_file_inside_workspace)
 {
     SafetyConfig *cfg = safety_config_create();
-    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    cfg->workspace = str_dup(resolved_ws_base);
+    char *expected = NULL;
+    ck_assert_int_ne(asprintf(&expected, "%s/existing.txt", resolved_ws_base), -1);
     char *resolved = safety_resolve_path(cfg, "existing.txt");
     ck_assert_ptr_nonnull(resolved);
-    ck_assert_str_eq(resolved, "/tmp/echo_test_ws/existing.txt");
+    ck_assert_str_eq(resolved, expected);
+    free(expected);
     free(resolved);
     safety_config_free(cfg);
 }
@@ -415,10 +424,13 @@ END_TEST
 START_TEST(test_resolve_existing_nested_file_inside_workspace)
 {
     SafetyConfig *cfg = safety_config_create();
-    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    cfg->workspace = str_dup(resolved_ws_base);
+    char *expected = NULL;
+    ck_assert_int_ne(asprintf(&expected, "%s/subdir/existing.txt", resolved_ws_base), -1);
     char *resolved = safety_resolve_path(cfg, "subdir/existing.txt");
     ck_assert_ptr_nonnull(resolved);
-    ck_assert_str_eq(resolved, "/tmp/echo_test_ws/subdir/existing.txt");
+    ck_assert_str_eq(resolved, expected);
+    free(expected);
     free(resolved);
     safety_config_free(cfg);
 }
@@ -463,10 +475,13 @@ END_TEST
 START_TEST(test_resolve_nonexistent_file_inside_workspace)
 {
     SafetyConfig *cfg = safety_config_create();
-    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    cfg->workspace = str_dup(resolved_ws_base);
+    char *expected = NULL;
+    ck_assert_int_ne(asprintf(&expected, "%s/newfile.txt", resolved_ws_base), -1);
     char *resolved = safety_resolve_path(cfg, "newfile.txt");
     ck_assert_ptr_nonnull(resolved);
-    ck_assert_str_eq(resolved, "/tmp/echo_test_ws/newfile.txt");
+    ck_assert_str_eq(resolved, expected);
+    free(expected);
     free(resolved);
     safety_config_free(cfg);
 }
@@ -485,10 +500,16 @@ END_TEST
 START_TEST(test_resolve_absolute_inside_workspace_resolves)
 {
     SafetyConfig *cfg = safety_config_create();
-    cfg->workspace = str_dup("/tmp/echo_test_ws");
-    char *resolved = safety_resolve_path(cfg, "/tmp/echo_test_ws/existing.txt");
+    cfg->workspace = str_dup(resolved_ws_base);
+    char *abspath = NULL;
+    char *expected = NULL;
+    ck_assert_int_ne(asprintf(&abspath, "%s/existing.txt", resolved_ws_base), -1);
+    ck_assert_int_ne(asprintf(&expected, "%s/existing.txt", resolved_ws_base), -1);
+    char *resolved = safety_resolve_path(cfg, abspath);
     ck_assert_ptr_nonnull(resolved);
-    ck_assert_str_eq(resolved, "/tmp/echo_test_ws/existing.txt");
+    ck_assert_str_eq(resolved, expected);
+    free(abspath);
+    free(expected);
     free(resolved);
     safety_config_free(cfg);
 }
