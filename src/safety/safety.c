@@ -178,6 +178,29 @@ int safety_check_path(const SafetyConfig *cfg, const char *path)
     return 1;
 }
 
+/*
+ * dangerous_patterns[] is a best-effort blocklist, NOT a security boundary.
+ *
+ * It catches obvious destructive commands so the human approver sees a
+ * warning before execution.  It cannot — and does not attempt to — catch
+ * every destructive command expressible in a shell.  Known unresolvable
+ * gaps include:
+ *
+ *   - Command substitution        $()  and backticks
+ *   - Variable expansion          ${...}
+ *   - Encoding / obfuscation      base64 -d | sh, hex escapes, etc.
+ *   - Obscure or niche binaries   busybox-powered payloads, custom scripts
+ *   - Scripting-language payloads python_execute, perl -e, ruby -e, etc.
+ *     (these are NOT filtered by this function at all)
+ *   - Aliased coreutils           alias rm='command-not-blocked'
+ *
+ * The real safety boundary is safety_needs_approval(), which by default
+ * requires human approval for bash, write_file, replace_in_file, git,
+ * python_execute, and delegate.  This function's job is to catch the
+ * *obvious* cases so the approver sees a prompt — it does not, and
+ * structurally cannot, guarantee that every destructive command is
+ * blocked.
+ */
 static const char *dangerous_patterns[] = {
     "rm -rf /", "rm -rf /*",
     ":(){ :|:& };:", "fork()",
@@ -192,59 +215,80 @@ static const char *dangerous_patterns[] = {
     "parted", "fdisk", "cfdisk", "sfdisk",
     "chmod 777", "chmod -R 777",
     "sudo rm", "sudo rm -rf",
+    "\\rm", "/bin/rm", "/usr/bin/rm",
+    "unlink(", "unlink ",
+    "shutil.rmtree", "os.remove", "os.unlink",
     NULL
 };
+
+static int check_segment(const char *segment)
+{
+    StrArray pipes = str_split(segment, '|');
+    for (int j = 0; j < pipes.count; j++)
+    {
+        char *st = str_trim(pipes.items[j]);
+        if (!st || st[0] == '\0') continue;
+
+        for (int k = 0; dangerous_patterns[k]; k++)
+        {
+            if (strstr(st, dangerous_patterns[k]) != NULL)
+            {
+                str_array_free(&pipes);
+                return 0;
+            }
+        }
+    }
+    str_array_free(&pipes);
+
+    StrArray amps = str_split(segment, '&');
+    for (int j = 0; j < amps.count; j++)
+    {
+        if (amps.items[j][0] == '&') continue;
+        char *st = str_trim(amps.items[j]);
+        if (!st || st[0] == '\0') continue;
+
+        for (int k = 0; dangerous_patterns[k]; k++)
+        {
+            if (strstr(st, dangerous_patterns[k]) != NULL)
+            {
+                str_array_free(&amps);
+                return 0;
+            }
+        }
+    }
+    str_array_free(&amps);
+
+    return 1;
+}
 
 int safety_check_command(const SafetyConfig *cfg, const char *command)
 {
     (void)cfg;
     if (!command) return 1;
 
-    StrArray parts = str_split(command, ';');
-    for (int i = 0; i < parts.count; i++)
+    StrArray semicolons = str_split(command, ';');
+    for (int i = 0; i < semicolons.count; i++)
     {
-        char *trimmed = str_trim(parts.items[i]);
-        if (!trimmed || trimmed[0] == '\0') continue;
+        char *sem = str_trim(semicolons.items[i]);
+        if (!sem || sem[0] == '\0') continue;
 
-        StrArray sub = str_split(trimmed, '|');
-        for (int j = 0; j < sub.count; j++)
+        StrArray newlines = str_split(sem, '\n');
+        for (int n = 0; n < newlines.count; n++)
         {
-            char *st = str_trim(sub.items[j]);
-            if (!st || st[0] == '\0') continue;
+            char *nl = str_trim(newlines.items[n]);
+            if (!nl || nl[0] == '\0') continue;
 
-            for (int k = 0; dangerous_patterns[k]; k++)
+            if (!check_segment(nl))
             {
-                if (strstr(st, dangerous_patterns[k]) != NULL)
-                {
-                    str_array_free(&sub);
-                    str_array_free(&parts);
-                    return 0;
-                }
+                str_array_free(&newlines);
+                str_array_free(&semicolons);
+                return 0;
             }
         }
-        str_array_free(&sub);
-
-        StrArray and_sub = str_split(trimmed, '&');
-        for (int j = 0; j < and_sub.count; j++)
-        {
-            if (and_sub.items[j][0] == '&') continue;
-            char *st = str_trim(and_sub.items[j]);
-            if (!st || st[0] == '\0') continue;
-
-            for (int k = 0; dangerous_patterns[k]; k++)
-            {
-                if (strstr(st, dangerous_patterns[k]) != NULL)
-                {
-                    str_array_free(&and_sub);
-                    str_array_free(&parts);
-                    return 0;
-                }
-            }
-        }
-        str_array_free(&and_sub);
+        str_array_free(&newlines);
     }
 
-    str_array_free(&parts);
+    str_array_free(&semicolons);
     return 1;
 }
 

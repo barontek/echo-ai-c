@@ -34,6 +34,23 @@ void safety_config_free(SafetyConfig *cfg);
 void safety_load_from_conf(SafetyConfig *cfg, const Conf *conf);
 
 int safety_check_path(const SafetyConfig *cfg, const char *path);
+/*
+ * Best-effort blocklist against obviously destructive commands.  Returns 0
+ * (blocked) when the command matches a known dangerous pattern after
+ * splitting on ';', '\n', '|', and '&'.  Returns 1 (allowed) for safe
+ * commands.
+ *
+ * This is NOT a security boundary.  It cannot catch command substitution
+ * ($(...)), variable expansion, encoded payloads, or scripting-language
+ * invocations.  The real safety boundary is safety_needs_approval(), which
+ * requires human approval for bash, write_file, replace_in_file, git,
+ * python_execute, and delegate by default.  This function exists only to
+ * catch the *obvious* destructive cases so the approver sees a prompt — it
+ * offers no guarantee that every dangerous command is blocked.
+ *
+ * Caller must provide a non-NULL cfg (the command check ignores it, but
+ * the signature is kept consistent with the rest of the safety API).
+ */
 int safety_check_command(const SafetyConfig *cfg, const char *command);
 int safety_check_destructive(const char *command);
 int safety_check_url(const SafetyConfig *cfg, const char *url);

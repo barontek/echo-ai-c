@@ -199,6 +199,48 @@ START_TEST(test_command_pipe_chain_safe)
 }
 END_TEST
 
+START_TEST(test_command_newline_chain_dangerous)
+{
+    SafetyConfig *cfg = safety_config_create();
+    ck_assert_int_eq(safety_check_command(cfg, "echo hi\nrm -rf /"), 0);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_command_evasion_patterns_caught)
+{
+    SafetyConfig *cfg = safety_config_create();
+    ck_assert_int_eq(safety_check_command(cfg, "\\rm -rf /home/user"), 0);
+    ck_assert_int_eq(safety_check_command(cfg, "/bin/rm important.txt"), 0);
+    ck_assert_int_eq(safety_check_command(cfg, "/usr/bin/rm important.txt"), 0);
+    ck_assert_int_eq(safety_check_command(cfg, "unlink(file)"), 0);
+    ck_assert_int_eq(safety_check_command(cfg, "shutil.rmtree('/tmp/dir')"), 0);
+    ck_assert_int_eq(safety_check_command(cfg, "os.remove('/path')"), 0);
+    ck_assert_int_eq(safety_check_command(cfg, "os.unlink('/path')"), 0);
+    safety_config_free(cfg);
+}
+END_TEST
+
+/*
+ * This test explicitly documents a KNOWN BYPASS that this blocklist cannot
+ * catch: command substitution can construct dangerous patterns at runtime
+ * by splitting them across expansions, e.g. "$(echo r)$(echo m) -rf /"
+ * never contains the literal string "rm" (it's split by ")$("), so
+ * strstr() cannot match it against the "rm -rf /" pattern.
+ *
+ * This is NOT a bug in the split/strstr approach — it is a structural
+ * limitation of any blocklist operating on raw command strings.  The
+ * safety boundary for these cases is the human-approval gate in
+ * safety_needs_approval(), not this function.
+ */
+START_TEST(test_command_substitution_bypass_documented)
+{
+    SafetyConfig *cfg = safety_config_create();
+    ck_assert_int_eq(safety_check_command(cfg, "$(echo r)$(echo m) -rf /"), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
 /* --- safety_check_destructive --- */
 
 START_TEST(test_destructive_null_returns_zero)
@@ -600,6 +642,9 @@ Suite *safety_suite(void)
     tcase_add_test(tc_cmd, test_command_ampersand_chain_dangerous);
     tcase_add_test(tc_cmd, test_command_semicolon_chain_safe);
     tcase_add_test(tc_cmd, test_command_pipe_chain_safe);
+    tcase_add_test(tc_cmd, test_command_newline_chain_dangerous);
+    tcase_add_test(tc_cmd, test_command_evasion_patterns_caught);
+    tcase_add_test(tc_cmd, test_command_substitution_bypass_documented);
     suite_add_tcase(s, tc_cmd);
 
     TCase *tc_dest = tcase_create("Destructive");
