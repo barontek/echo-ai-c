@@ -622,7 +622,7 @@ START_TEST(test_on_close_cleanup)
     ws.on_close = (ws_close_handler)0x1;
     ws.userdata = (void *)0x1;
     ws_chat_on_close(&ws, c);
-    ck_assert_ptr_null(ws.on_close);
+    ck_assert(ws.on_close == NULL);
     ck_assert_ptr_null(ws.userdata);
     reset_capture();
 }
@@ -1128,7 +1128,7 @@ START_TEST(test_ws_init_agent_create_fails)
     ctx.agent_cfg.model = "llama3";
     stub_agent_create_succeeds = 0;
     routes_ws_chat_init(&ws, &ctx, NULL);
-    ck_assert_ptr_null(ws.on_message);
+    ck_assert(ws.on_message == NULL);
     stub_agent_create_succeeds = 1;
     reset_capture();
 }
@@ -1141,7 +1141,7 @@ START_TEST(test_ws_init_basic)
     ctx.agent_cfg.provider = "ollama";
     ctx.agent_cfg.model = "llama3";
     routes_ws_chat_init(&ws, &ctx, NULL);
-    ck_assert_ptr_nonnull(ws.on_message);
+    ck_assert(ws.on_message != NULL);
     ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
     ws_chat_on_close(&ws, ws.userdata);
     reset_capture();

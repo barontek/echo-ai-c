@@ -1,6 +1,6 @@
 add_executable(test_ollama_tool_calls test_ollama_tool_calls.c)
 target_include_directories(test_ollama_tool_calls PRIVATE ../../src)
-target_link_libraries(test_ollama_tool_calls PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_ollama_tool_calls PRIVATE echo_ai_test_deps)
 add_test(NAME test_ollama_tool_calls COMMAND test_ollama_tool_calls)
 
 add_executable(test_ollama
@@ -12,7 +12,7 @@ add_executable(test_ollama
 )
 target_compile_definitions(test_ollama PRIVATE OLLAMA_TEST=1)
 target_include_directories(test_ollama PRIVATE ../../src)
-target_link_libraries(test_ollama PRIVATE PkgConfig::CHECK PkgConfig::CJSON PkgConfig::LIBCURL)
+target_link_libraries(test_ollama PRIVATE echo_ai_test_deps)
 add_test(NAME test_ollama COMMAND test_ollama)
 
 add_executable(test_factory
@@ -24,5 +24,5 @@ add_executable(test_factory
     test_factory.c
 )
 target_include_directories(test_factory PRIVATE ../../src)
-target_link_libraries(test_factory PRIVATE PkgConfig::CHECK PkgConfig::CJSON PkgConfig::LIBCURL)
+target_link_libraries(test_factory PRIVATE echo_ai_test_deps)
 add_test(NAME test_factory COMMAND test_factory)

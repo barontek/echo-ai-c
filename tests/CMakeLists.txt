@@ -1,3 +1,20 @@
+add_compile_options(-Wall -Wextra -Wpedantic -Werror -g)
+if(ENABLE_SANITIZERS)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
+add_library(echo_ai_test_deps INTERFACE)
+target_link_libraries(echo_ai_test_deps INTERFACE
+    PkgConfig::CHECK
+    PkgConfig::LIBUV
+    PkgConfig::LIBCURL
+    PkgConfig::SQLITE3
+    PkgConfig::OPENSSL
+    PkgConfig::CJSON
+    m
+)
+
 add_subdirectory(utils)
 add_subdirectory(agent)
 add_subdirectory(session)

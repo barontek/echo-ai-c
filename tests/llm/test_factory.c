@@ -19,10 +19,10 @@ START_TEST(test_get_provider_ollama_returns_valid_provider)
 {
     LLMProvider *p = get_provider("ollama", "model", "http://localhost:11434", 4096, 120);
     ck_assert_ptr_ne(p, NULL);
-    ck_assert_ptr_ne(p->chat, NULL);
-    ck_assert_ptr_ne(p->chat_streaming, NULL);
-    ck_assert_ptr_ne(p->extract_structured, NULL);
-    ck_assert_ptr_ne(p->destroy, NULL);
+    ck_assert(p->chat != NULL);
+    ck_assert(p->chat_streaming != NULL);
+    ck_assert(p->extract_structured != NULL);
+    ck_assert(p->destroy != NULL);
     p->destroy(p);
 }
 END_TEST

@@ -6,7 +6,7 @@ add_executable(test_semantic_search
 )
 target_compile_definitions(test_semantic_search PRIVATE SEMANTIC_SEARCH_TEST=1)
 target_include_directories(test_semantic_search PRIVATE ../../src)
-target_link_libraries(test_semantic_search PRIVATE PkgConfig::CHECK PkgConfig::CJSON m)
+target_link_libraries(test_semantic_search PRIVATE echo_ai_test_deps)
 add_test(NAME test_semantic_search COMMAND test_semantic_search)
 
 add_executable(test_tool_delegate
@@ -19,7 +19,7 @@ add_executable(test_tool_delegate
 )
 target_compile_definitions(test_tool_delegate PRIVATE TOOL_DELEGATE_TEST=1)
 target_include_directories(test_tool_delegate PRIVATE ../../src)
-target_link_libraries(test_tool_delegate PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_tool_delegate PRIVATE echo_ai_test_deps)
 add_test(NAME test_tool_delegate COMMAND test_tool_delegate)
 
 add_executable(test_registry
@@ -30,5 +30,5 @@ add_executable(test_registry
 )
 target_compile_definitions(test_registry PRIVATE REGISTRY_TEST=1)
 target_include_directories(test_registry PRIVATE ../../src)
-target_link_libraries(test_registry PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_registry PRIVATE echo_ai_test_deps)
 add_test(NAME test_registry COMMAND test_registry)

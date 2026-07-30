@@ -6,7 +6,7 @@ add_executable(test_memory
 )
 target_compile_definitions(test_memory PRIVATE MEMORY_TEST=1)
 target_include_directories(test_memory PRIVATE ../../src)
-target_link_libraries(test_memory PRIVATE PkgConfig::CHECK PkgConfig::SQLITE3)
+target_link_libraries(test_memory PRIVATE echo_ai_test_deps)
 add_test(NAME test_memory COMMAND test_memory)
 
 add_executable(test_session_manager
@@ -23,8 +23,7 @@ add_executable(test_session_manager
 )
 target_compile_definitions(test_session_manager PRIVATE SESSION_MANAGER_TEST=1)
 target_include_directories(test_session_manager PRIVATE ../../src)
-target_link_libraries(test_session_manager PRIVATE
-    PkgConfig::CHECK PkgConfig::SQLITE3 PkgConfig::OPENSSL PkgConfig::CJSON)
+target_link_libraries(test_session_manager PRIVATE echo_ai_test_deps)
 add_test(NAME test_session_manager COMMAND test_session_manager)
 
 add_executable(test_change_tracker
@@ -34,5 +33,5 @@ add_executable(test_change_tracker
 )
 target_compile_definitions(test_change_tracker PRIVATE CHANGE_TRACKER_TEST=1)
 target_include_directories(test_change_tracker PRIVATE ../../src)
-target_link_libraries(test_change_tracker PRIVATE PkgConfig::CHECK)
+target_link_libraries(test_change_tracker PRIVATE echo_ai_test_deps)
 add_test(NAME test_change_tracker COMMAND test_change_tracker)

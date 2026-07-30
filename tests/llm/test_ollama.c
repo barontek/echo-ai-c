@@ -107,10 +107,10 @@ START_TEST(test_provider_create_stores_default_values)
 {
     LLMProvider *p = ollama_provider_create(NULL, 0, 0);
     ck_assert_ptr_ne(p, NULL);
-    ck_assert_ptr_ne(p->chat, NULL);
-    ck_assert_ptr_ne(p->chat_streaming, NULL);
-    ck_assert_ptr_ne(p->extract_structured, NULL);
-    ck_assert_ptr_ne(p->destroy, NULL);
+    ck_assert(p->chat != NULL);
+    ck_assert(p->chat_streaming != NULL);
+    ck_assert(p->extract_structured != NULL);
+    ck_assert(p->destroy != NULL);
     ck_assert_ptr_ne(p->ctx, NULL);
     p->destroy(p);
 }

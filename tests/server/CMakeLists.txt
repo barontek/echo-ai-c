@@ -3,5 +3,5 @@ add_executable(test_middleware
     test_middleware.c
 )
 target_include_directories(test_middleware PRIVATE ../../src)
-target_link_libraries(test_middleware PRIVATE PkgConfig::CHECK PkgConfig::LIBUV PkgConfig::CJSON PkgConfig::OPENSSL)
+target_link_libraries(test_middleware PRIVATE echo_ai_test_deps)
 add_test(NAME test_middleware COMMAND test_middleware)

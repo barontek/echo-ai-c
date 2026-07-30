@@ -106,7 +106,7 @@ int middleware_check_unlock_query(HTTPRequest *req, ServerContext *ctx)
 {
     (void)ctx;
     if (stub_unlock) return 1;
-    if (!req->query || !req->query[0]) return 0;
+    if (!req->query[0]) return 0;
     if (stub_query_token_match)
     {
         const char *p = strstr(req->query, "token=");

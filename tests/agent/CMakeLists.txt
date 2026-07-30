@@ -6,7 +6,7 @@ add_executable(test_message
     test_message.c
 )
 target_include_directories(test_message PRIVATE ../../src)
-target_link_libraries(test_message PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_message PRIVATE echo_ai_test_deps)
 add_test(NAME test_message COMMAND test_message)
 
 add_executable(test_context
@@ -15,7 +15,7 @@ add_executable(test_context
     test_context.c
 )
 target_include_directories(test_context PRIVATE ../../src)
-target_link_libraries(test_context PRIVATE PkgConfig::CHECK PkgConfig::CJSON)
+target_link_libraries(test_context PRIVATE echo_ai_test_deps)
 add_test(NAME test_context COMMAND test_context)
 
 add_executable(test_safety
@@ -25,7 +25,7 @@ add_executable(test_safety
     test_safety.c
 )
 target_include_directories(test_safety PRIVATE ../../src)
-target_link_libraries(test_safety PRIVATE PkgConfig::CHECK)
+target_link_libraries(test_safety PRIVATE echo_ai_test_deps)
 add_test(NAME test_safety COMMAND test_safety)
 
 add_executable(test_agent_save
@@ -43,6 +43,5 @@ add_executable(test_agent_save
 )
 target_compile_definitions(test_agent_save PRIVATE AGENT_TEST=1)
 target_include_directories(test_agent_save PRIVATE ../../src)
-target_link_libraries(test_agent_save PRIVATE
-    PkgConfig::CHECK PkgConfig::SQLITE3 PkgConfig::OPENSSL PkgConfig::CJSON)
+target_link_libraries(test_agent_save PRIVATE echo_ai_test_deps)
 add_test(NAME test_agent_save COMMAND test_agent_save)
