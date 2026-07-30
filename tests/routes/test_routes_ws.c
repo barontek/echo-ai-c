@@ -161,7 +161,12 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *input,
 
 void llm_response_free(LLMResponse *resp) { (void)resp; }
 void agent_cancel(Agent *a) { (void)a; }
-void agent_destroy(Agent *a) { if (a) free(a); }
+void agent_destroy(Agent *a) {
+    if (!a) return;
+    free(a->session_id);
+    free(a->messages);
+    free(a);
+}
 
 Agent *agent_create(const AgentConfig *cfg)
 {
@@ -603,6 +608,7 @@ START_TEST(test_flush_queue_agent_gets_session_id)
     ws_chat_flush_queue(&c);
     ck_assert_str_eq(c.active_session_id, "new-sess");
     reset_capture();
+    free(c.active_session_id);
     c.active_session_id = NULL;
 }
 END_TEST
@@ -675,6 +681,7 @@ START_TEST(test_approval_cb_approved)
     ck_assert(strstr(captured_ws_json, "\"type\":\"approval_request\""));
     ck_assert(strstr(captured_ws_json, "\"type\":\"approval_response\""));
     ck_assert(strstr(captured_ws_json, "\"approved\":true"));
+    free(c.pending_request_id);
     reset_capture();
 }
 END_TEST
@@ -691,6 +698,7 @@ START_TEST(test_approval_cb_rejected)
     g_loop_ctx = NULL;
     ck_assert_int_eq(r, 0);
     ck_assert(strstr(captured_ws_json, "\"approved\":false"));
+    free(c.pending_request_id);
     reset_capture();
 }
 END_TEST
@@ -733,6 +741,7 @@ START_TEST(test_ask_user_cb_with_answer)
     ck_assert(strstr(captured_ws_json, "\"type\":\"ask_user\""));
     ck_assert(strstr(captured_ws_json, "\"question\":\"Proceed?\""));
     free(r);
+    free(c.ask_user_response);
     reset_capture();
 }
 END_TEST
@@ -751,6 +760,7 @@ START_TEST(test_ask_user_cb_null_question)
     ck_assert_ptr_nonnull(r);
     ck_assert(strstr(captured_ws_json, "\"question\":\"\""));
     free(r);
+    free(c.ask_user_response);
     reset_capture();
 }
 END_TEST
@@ -1002,7 +1012,13 @@ START_TEST(test_on_message_session_id_new)
      * the frontend loaded the session via REST before sending the message. */
     ck_assert(strstr(captured_ws_json, "\"type\":\"done\""));
     reset_capture();
+    free(c.active_session_id);
     c.active_session_id = NULL;
+    free(c.agent->session_id);
+    c.agent->session_id = NULL;
+    free(c.agent->messages);
+    c.agent->messages = NULL;
+    c.agent->messages_count = 0;
 }
 END_TEST
 
@@ -1051,6 +1067,7 @@ START_TEST(test_on_message_message_agent_gets_session_id)
         "{\"type\":\"message\",\"content\":\"hi\"}", 33, &c);
     ck_assert_str_eq(c.active_session_id, "from-agent");
     reset_capture();
+    free(c.active_session_id);
     c.active_session_id = NULL;
 }
 END_TEST
@@ -1080,6 +1097,7 @@ START_TEST(test_on_message_edit_truncate)
     ck_assert(strstr(captured_ws_json, "\"type\":\"done\""));
     /* truncation: index=1, system_prefix=1, keep=2, so no clearing needed */
     reset_capture();
+    free(c.active_session_id);
     c.active_session_id = NULL;
 }
 END_TEST
@@ -1112,6 +1130,7 @@ START_TEST(test_on_message_edit_truncate_clears)
     /* null resp → error frame sent */
     ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
     reset_capture();
+    free(c.active_session_id);
     c.active_session_id = NULL;
 }
 END_TEST

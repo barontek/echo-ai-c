@@ -409,7 +409,8 @@ START_TEST(test_write_cb_parses_json_lines_and_calls_forward_chunk)
     buf.userdata = &cc;
 
     ollama_test_write_cb(
-        "{\"message\":{\"content\":\"Hello\"}}\n", 35, &buf);
+        "{\"message\":{\"content\":\"Hello\"}}\n",
+        strlen("{\"message\":{\"content\":\"Hello\"}}\n"), &buf);
 
     ck_assert_str_eq(cc.collected, "Hello");
 
@@ -425,10 +426,10 @@ START_TEST(test_write_cb_handles_multiple_json_lines)
     buf.on_chunk = collect_chunk;
     buf.userdata = &cc;
 
-    ollama_test_write_cb(
+    const char *two_lines =
         "{\"message\":{\"content\":\"A\"}}\n"
-        "{\"message\":{\"content\":\"B\"}}\n",
-        68, &buf);
+        "{\"message\":{\"content\":\"B\"}}\n";
+    ollama_test_write_cb(two_lines, strlen(two_lines), &buf);
 
     ck_assert_str_eq(cc.collected, "AB");
 
@@ -445,12 +446,13 @@ START_TEST(test_write_cb_buffers_partial_line_across_calls)
     buf.userdata = &cc;
 
     ollama_test_write_cb(
-        "{\"message\":{\"content\":\"He", 25, &buf);
+        "{\"message\":{\"content\":\"He",
+        strlen("{\"message\":{\"content\":\"He"), &buf);
 
     ck_assert_ptr_eq(cc.collected, NULL);
 
     ollama_test_write_cb(
-        "llo\"}}\n", 8, &buf);
+        "llo\"}}\n", strlen("llo\"}}\n"), &buf);
 
     ck_assert_str_eq(cc.collected, "Hello");
 
@@ -466,8 +468,8 @@ START_TEST(test_write_cb_ignores_empty_lines)
     buf.on_chunk = collect_chunk;
     buf.userdata = &cc;
 
-    ollama_test_write_cb(
-        "\n\n{\"message\":{\"content\":\"X\"}}\n\n", 35, &buf);
+    const char *empty_lines = "\n\n{\"message\":{\"content\":\"X\"}}\n\n";
+    ollama_test_write_cb(empty_lines, strlen(empty_lines), &buf);
 
     ck_assert_str_eq(cc.collected, "X");
 
@@ -483,10 +485,11 @@ START_TEST(test_write_cb_stores_tool_calls_from_stream)
     buf.on_chunk = collect_chunk;
     buf.userdata = &cc;
 
-    ollama_test_write_cb(
+    const char *tool_call_stream =
         "{\"message\":{\"tool_calls\":["
         "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}}"
-        "]}}\n", 93, &buf);
+        "]}}\n";
+    ollama_test_write_cb(tool_call_stream, strlen(tool_call_stream), &buf);
 
     ck_assert_int_eq(buf.tool_calls_count, 1);
     ck_assert_str_eq(buf.tool_calls[0].name, "bash");

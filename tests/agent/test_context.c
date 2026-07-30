@@ -245,6 +245,7 @@ START_TEST(test_apply_context_window_over_message_limit)
     ck_assert_ptr_nonnull(result);
     ck_assert(count <= 5);
     free(result);
+    if (result != msgs) free(msgs);
 }
 END_TEST
 
@@ -257,6 +258,7 @@ START_TEST(test_apply_context_window_over_char_limit)
     Message *result = apply_context_window(msgs, &count, 100, 5);
     ck_assert_ptr_nonnull(result);
     free(result);
+    if (result != msgs) free(msgs);
 }
 END_TEST
 
