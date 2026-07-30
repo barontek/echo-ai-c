@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "safety/safety.h"
 #include "config/config.h"
 #include "utils/string_utils.h"
@@ -320,6 +322,25 @@ END_TEST
 
 /* --- safety_resolve_path --- */
 
+static void setup_workspace(void)
+{
+    mkdir("/tmp/echo_test_ws", 0755);
+    mkdir("/tmp/echo_test_ws/subdir", 0755);
+    FILE *f = fopen("/tmp/echo_test_ws/existing.txt", "w");
+    if (f) fclose(f);
+    f = fopen("/tmp/echo_test_ws/subdir/existing.txt", "w");
+    if (f) fclose(f);
+}
+
+static void teardown_workspace(void)
+{
+    remove("/tmp/echo_test_ws/subdir/existing.txt");
+    remove("/tmp/echo_test_ws/existing.txt");
+    remove("/tmp/echo_test_ws/subdir");
+    remove("/tmp/echo_test_ws");
+    unlink("/tmp/echo_test_sym");
+}
+
 START_TEST(test_resolve_null_workspace)
 {
     SafetyConfig *cfg = safety_config_create();
@@ -331,43 +352,101 @@ END_TEST
 START_TEST(test_resolve_null_path)
 {
     SafetyConfig *cfg = safety_config_create();
-    cfg->workspace = str_dup("/workspace");
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
     ck_assert_ptr_null(safety_resolve_path(cfg, NULL));
     safety_config_free(cfg);
 }
 END_TEST
 
-START_TEST(test_resolve_absolute_path)
+START_TEST(test_resolve_existing_file_inside_workspace)
 {
     SafetyConfig *cfg = safety_config_create();
-    cfg->workspace = str_dup("/workspace");
-    char *resolved = safety_resolve_path(cfg, "/etc/hosts");
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    char *resolved = safety_resolve_path(cfg, "existing.txt");
     ck_assert_ptr_nonnull(resolved);
-    ck_assert_str_eq(resolved, "/etc/hosts");
+    ck_assert_str_eq(resolved, "/tmp/echo_test_ws/existing.txt");
     free(resolved);
     safety_config_free(cfg);
 }
 END_TEST
 
-START_TEST(test_resolve_relative_path)
+START_TEST(test_resolve_existing_nested_file_inside_workspace)
 {
     SafetyConfig *cfg = safety_config_create();
-    cfg->workspace = str_dup("/workspace");
-    char *resolved = safety_resolve_path(cfg, "file.txt");
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    char *resolved = safety_resolve_path(cfg, "subdir/existing.txt");
     ck_assert_ptr_nonnull(resolved);
-    ck_assert_str_eq(resolved, "/workspace/file.txt");
+    ck_assert_str_eq(resolved, "/tmp/echo_test_ws/subdir/existing.txt");
     free(resolved);
     safety_config_free(cfg);
 }
 END_TEST
 
-START_TEST(test_resolve_relative_nested_path)
+START_TEST(test_resolve_absolute_path_outside_workspace)
 {
     SafetyConfig *cfg = safety_config_create();
-    cfg->workspace = str_dup("/workspace");
-    char *resolved = safety_resolve_path(cfg, "subdir/file.txt");
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    char *resolved = safety_resolve_path(cfg, "/etc/hostname");
+    ck_assert_ptr_null(resolved);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_resolve_dotdot_escape_rejected)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    char *resolved = safety_resolve_path(cfg, "subdir/../../etc/hostname");
+    ck_assert_ptr_null(resolved);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_resolve_symlink_outside_workspace_rejected)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+
+    int rc = symlink("/tmp", "/tmp/echo_test_ws/escape_link");
+    ck_assert_int_eq(rc, 0);
+
+    char *resolved = safety_resolve_path(cfg, "escape_link");
+    ck_assert_ptr_null(resolved);
+
+    unlink("/tmp/echo_test_ws/escape_link");
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_resolve_nonexistent_file_inside_workspace)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    char *resolved = safety_resolve_path(cfg, "newfile.txt");
     ck_assert_ptr_nonnull(resolved);
-    ck_assert_str_eq(resolved, "/workspace/subdir/file.txt");
+    ck_assert_str_eq(resolved, "/tmp/echo_test_ws/newfile.txt");
+    free(resolved);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_resolve_nonexistent_parent_rejected)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    char *resolved = safety_resolve_path(cfg, "nosuchdir/newfile.txt");
+    ck_assert_ptr_null(resolved);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_resolve_absolute_inside_workspace_resolves)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    char *resolved = safety_resolve_path(cfg, "/tmp/echo_test_ws/existing.txt");
+    ck_assert_ptr_nonnull(resolved);
+    ck_assert_str_eq(resolved, "/tmp/echo_test_ws/existing.txt");
     free(resolved);
     safety_config_free(cfg);
 }
@@ -552,11 +631,17 @@ Suite *safety_suite(void)
 
     TCase *tc_res = tcase_create("Resolve");
     tcase_set_timeout(tc_res, 10);
+    tcase_add_checked_fixture(tc_res, setup_workspace, teardown_workspace);
     tcase_add_test(tc_res, test_resolve_null_workspace);
     tcase_add_test(tc_res, test_resolve_null_path);
-    tcase_add_test(tc_res, test_resolve_absolute_path);
-    tcase_add_test(tc_res, test_resolve_relative_path);
-    tcase_add_test(tc_res, test_resolve_relative_nested_path);
+    tcase_add_test(tc_res, test_resolve_existing_file_inside_workspace);
+    tcase_add_test(tc_res, test_resolve_existing_nested_file_inside_workspace);
+    tcase_add_test(tc_res, test_resolve_absolute_path_outside_workspace);
+    tcase_add_test(tc_res, test_resolve_dotdot_escape_rejected);
+    tcase_add_test(tc_res, test_resolve_symlink_outside_workspace_rejected);
+    tcase_add_test(tc_res, test_resolve_nonexistent_file_inside_workspace);
+    tcase_add_test(tc_res, test_resolve_nonexistent_parent_rejected);
+    tcase_add_test(tc_res, test_resolve_absolute_inside_workspace_resolves);
     suite_add_tcase(s, tc_res);
 
     TCase *tc_load = tcase_create("LoadFromConf");

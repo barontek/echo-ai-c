@@ -3,11 +3,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 #include <time.h>
 
 #include "safety.h"
 #include "../config/config.h"
 #include "../utils/string_utils.h"
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 SafetyConfig *safety_config_create(void)
 {
@@ -310,11 +315,79 @@ char *safety_resolve_path(const SafetyConfig *cfg, const char *path)
 {
     if (!cfg->workspace || !path) return NULL;
 
-    char *resolved = NULL;
-    if (path[0] == '/')
-        resolved = str_dup(path);
-    else if (asprintf(&resolved, "%s/%s", cfg->workspace, path) < 0)
-        resolved = NULL;
+    char canonical_workspace[PATH_MAX];
+    if (realpath(cfg->workspace, canonical_workspace) == NULL)
+    {
+        size_t ws_len = strlen(cfg->workspace);
+        if (ws_len >= PATH_MAX) return NULL;
+        memcpy(canonical_workspace, cfg->workspace, ws_len + 1);
+    }
 
-    return resolved;
+    char candidate[PATH_MAX];
+    if (path[0] == '/')
+    {
+        size_t plen = strlen(path);
+        if (plen >= PATH_MAX) return NULL;
+        memcpy(candidate, path, plen + 1);
+    }
+    else
+    {
+        int written = snprintf(candidate, PATH_MAX, "%s/%s", cfg->workspace, path);
+        if (written < 0 || (size_t)written >= PATH_MAX)
+            return NULL;
+    }
+
+    char resolved[PATH_MAX];
+    if (realpath(candidate, resolved) != NULL)
+    {
+        size_t ws_len = strlen(canonical_workspace);
+        if (strncmp(resolved, canonical_workspace, ws_len) != 0)
+            return NULL;
+        if (resolved[ws_len] != '\0' && resolved[ws_len] != '/')
+            return NULL;
+        return str_dup(resolved);
+    }
+
+    char candidate_copy[PATH_MAX];
+    {
+        size_t cp_len = strlen(candidate);
+        if (cp_len >= PATH_MAX) return NULL;
+        memcpy(candidate_copy, candidate, cp_len + 1);
+    }
+
+    char *last_slash = strrchr(candidate_copy, '/');
+    if (!last_slash)
+        return NULL;
+
+    char *filename = last_slash + 1;
+    *last_slash = '\0';
+    char *parent = candidate_copy;
+    if (*parent == '\0')
+        parent = (char *)"/";
+
+    char parent_resolved[PATH_MAX];
+    if (realpath(parent, parent_resolved) == NULL)
+        return NULL;
+
+    char full_resolved[PATH_MAX];
+    if (*filename == '\0')
+    {
+        size_t pr_len = strlen(parent_resolved);
+        if (pr_len >= PATH_MAX) return NULL;
+        memcpy(full_resolved, parent_resolved, pr_len + 1);
+    }
+    else
+    {
+        int written = snprintf(full_resolved, PATH_MAX, "%s/%s", parent_resolved, filename);
+        if (written < 0 || (size_t)written >= PATH_MAX)
+            return NULL;
+    }
+
+    size_t ws_len = strlen(canonical_workspace);
+    if (strncmp(full_resolved, canonical_workspace, ws_len) != 0)
+        return NULL;
+    if (full_resolved[ws_len] != '\0' && full_resolved[ws_len] != '/')
+        return NULL;
+
+    return str_dup(full_resolved);
 }
