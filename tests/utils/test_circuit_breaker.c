@@ -42,12 +42,13 @@ END_TEST
 
 START_TEST(test_cb_half_open_transitions)
 {
-    CircuitBreaker *cb = cb_create(1, 1);
+    CircuitBreaker *cb = cb_create(1, 30000);
+    ck_assert_ptr_nonnull(cb);
     cb_record_failure(cb);
     ck_assert_int_eq(cb->state, CB_OPEN);
     ck_assert_int_eq(cb_is_available(cb), 0);
 
-    while (cb_now_ms() - cb->opened_at_ms < 2) { }
+    cb->opened_at_ms -= cb->half_open_timeout_ms;
 
     ck_assert_int_eq(cb_is_available(cb), 1);
     ck_assert_int_eq(cb->state, CB_HALF_OPEN);
