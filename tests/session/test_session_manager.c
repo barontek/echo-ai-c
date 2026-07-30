@@ -114,7 +114,8 @@ START_TEST(test_session_list_realloc_failures_are_safe)
     char rm[4096];
     ck_assert_int_lt(snprintf(rm, sizeof(rm), "rm -rf %s", tmpdir),
                      (int)sizeof(rm));
-    (void)system(rm);
+    int cleanup_rc = system(rm);
+    ck_assert_int_eq(cleanup_rc, 0);
 }
 END_TEST
 

@@ -48,7 +48,8 @@ START_TEST(test_notes_rejects_traversal_name)
     char command[600];
     ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", home),
                      (int)sizeof(command));
-    (void)system(command);
+    int cleanup_rc = system(command);
+    ck_assert_int_eq(cleanup_rc, 0);
 }
 END_TEST
 
@@ -80,7 +81,8 @@ START_TEST(test_notes_normal_name_round_trips)
     char command[600];
     ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", home),
                      (int)sizeof(command));
-    (void)system(command);
+    int cleanup_rc = system(command);
+    ck_assert_int_eq(cleanup_rc, 0);
 }
 END_TEST
 
