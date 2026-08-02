@@ -3,6 +3,7 @@
 
 #include <sqlite3.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include "session.h"
 #include "encryption.h"
 
@@ -12,9 +13,32 @@ typedef struct {
     pthread_mutex_t lock;
     EncryptionKey enc_key;
     int key_initialized;
+    atomic_uint ref_count;
 } SessionManager;
 
+typedef enum {
+    PROVIDER_OAUTH_LOAD_OK = 0,
+    PROVIDER_OAUTH_LOAD_NOT_FOUND,
+    PROVIDER_OAUTH_LOAD_INVALID_ARGUMENT,
+    PROVIDER_OAUTH_LOAD_SQL_ERROR,
+    PROVIDER_OAUTH_LOAD_DECRYPT_ERROR,
+    PROVIDER_OAUTH_LOAD_OOM
+} ProviderOAuthLoadResult;
+
+typedef enum {
+    SESSION_MANAGER_CREATE_OK = 0,
+    SESSION_MANAGER_CREATE_AUTH_FAILED,
+    SESSION_MANAGER_CREATE_STORAGE_FAILED
+} SessionManagerCreateResult;
+
 SessionManager *session_manager_create(const char *data_dir, const char *password);
+/* Returns an owned manager and classifies authentication versus storage failure. */
+SessionManager *session_manager_create_ex(const char *data_dir,
+                                          const char *password,
+                                          SessionManagerCreateResult *result);
+/* Retains a shared manager; each successful retain requires one free call. */
+SessionManager *session_manager_retain(SessionManager *sm);
+/* Releases one owned reference and destroys the manager after the last one. */
 void session_manager_free(SessionManager *sm);
 Session *session_manager_create_session(SessionManager *sm, const char *title);
 Session *session_manager_load_session(SessionManager *sm, const char *id);
@@ -49,10 +73,13 @@ int session_manager_save_provider_oauth(SessionManager *sm,
                                         const char *provider_name,
                                         const char *data);
 
-/* Loads and decrypts provider credentials. The returned string is owned by the
- * caller and must be freed; NULL means missing data or an error. */
+/* Loads credentials into caller-owned *data_out; failure leaves it NULL. */
+ProviderOAuthLoadResult session_manager_load_provider_oauth_ex(
+    SessionManager *sm, const char *provider_name, char **data_out);
+
+/* Compatibility loader returning caller-owned data, or NULL for any failure. */
 char *session_manager_load_provider_oauth(SessionManager *sm,
-                                          const char *provider_name);
+                                           const char *provider_name);
 
 /* Deletes stored provider credentials and returns 0 on success, -1 on error. */
 int session_manager_delete_provider_oauth(SessionManager *sm,
@@ -80,6 +107,7 @@ void session_manager_test_set_alloc_fail(int nth_allocation);
 void session_manager_test_set_realloc_fail(int nth_allocation);
 void session_manager_test_set_bind_fail(int nth_bind);
 void session_manager_test_set_encrypt_fail(int nth_encrypt);
+void session_manager_test_set_oauth_alloc_fail(int nth_allocation);
 #endif
 
 #endif

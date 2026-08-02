@@ -123,7 +123,7 @@ char *session_serialize_messages(const Session *session)
  * labels. For each field the NULL check distinguishes OOM from missing-key:
  * role and content are always present (guaranteed non-NULL str_dup result
  * means OOM); optional fields (id, tool_call_id, tool_name, error_category,
- * thinking, and tool_call inner members) only treat a NULL str_dup as OOM
+ * thinking, phase, provider_state, and tool_call inner members) only treat a NULL str_dup as OOM
  * when the source cJSON item was actually a non-NULL string. The cleanup
  * labels route everything through message_clear (NULL-safe, idempotent,
  * zeros the struct) — same pattern as the C15 fix. */
@@ -156,6 +156,8 @@ int session_deserialize_messages(Session *session, const char *json_str)
         cJSON *tool_name = cJSON_GetObjectItem(item, "tool_name");
         cJSON *error_cat = cJSON_GetObjectItem(item, "error_category");
         cJSON *thinking = cJSON_GetObjectItem(item, "thinking");
+        cJSON *phase = cJSON_GetObjectItem(item, "phase");
+        cJSON *provider_state = cJSON_GetObjectItem(item, "provider_state");
         cJSON *tool_calls_arr = cJSON_GetObjectItem(item, "tool_calls");
         cJSON *ts_item = cJSON_GetObjectItem(item, "timestamp");
 
@@ -177,6 +179,16 @@ int session_deserialize_messages(Session *session, const char *json_str)
         if (!session->messages[i].error_category && error_cat && error_cat->valuestring) goto partial_fail_msg;
         session->messages[i].thinking = str_dup(thinking && thinking->valuestring ? thinking->valuestring : NULL);
         if (!session->messages[i].thinking && thinking && thinking->valuestring) goto partial_fail_msg;
+        session->messages[i].phase = str_dup(
+            phase && phase->valuestring ? phase->valuestring : NULL);
+        if (!session->messages[i].phase && phase && phase->valuestring)
+            goto partial_fail_msg;
+        session->messages[i].provider_state = str_dup(
+            provider_state && provider_state->valuestring ?
+                provider_state->valuestring : NULL);
+        if (!session->messages[i].provider_state && provider_state &&
+            provider_state->valuestring)
+            goto partial_fail_msg;
         session->messages[i].timestamp = (ts_item && cJSON_IsNumber(ts_item)) ? ts_item->valuedouble : 0.0;
 
         if (tool_calls_arr && cJSON_IsArray(tool_calls_arr))

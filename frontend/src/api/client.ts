@@ -81,9 +81,9 @@ class ApiClient {
     this.unlockToken = null;
   }
 
-  async getModels(provider?: string): Promise<string[]> {
+  async getModels(provider?: string, signal?: AbortSignal): Promise<string[]> {
     const params = provider ? `?provider=${encodeURIComponent(provider)}` : '';
-    const res = await this.client.get<{ models: string[] }>(`/api/models${params}`);
+    const res = await this.client.get<{ models: string[] }>(`/api/models${params}`, { signal });
     return res.data.models || [];
   }
 
@@ -92,7 +92,10 @@ class ApiClient {
     return res.data.providers || [];
   }
 
-  async getOpenAIOAuthStatus(): Promise<{
+  async getOpenAIOAuthStatus(
+    loginId?: string,
+    signal?: AbortSignal
+  ): Promise<{
     state: 'signed_out' | 'pending' | 'signed_in';
     account_id?: string;
     plan_type?: string;
@@ -103,19 +106,28 @@ class ApiClient {
       account_id?: string;
       plan_type?: string;
       error?: string;
-    }>('/api/auth/openai/status');
+    }>('/api/auth/openai/status', {
+      params: loginId ? { login_id: loginId } : undefined,
+      signal,
+    });
     return res.data;
   }
 
-  async startOpenAIOAuth(): Promise<{ authorization_url: string; login_id: string }> {
+  async startOpenAIOAuth(
+    signal?: AbortSignal
+  ): Promise<{ authorization_url: string; login_id: string }> {
     const res = await this.client.post<{ authorization_url: string; login_id: string }>(
-      '/api/auth/openai/start'
+      '/api/auth/openai/start',
+      undefined,
+      { signal }
     );
     return res.data;
   }
 
-  async logoutOpenAIOAuth(): Promise<void> {
-    await this.client.post('/api/auth/openai/logout');
+  async logoutOpenAIOAuth(loginId?: string, signal?: AbortSignal): Promise<void> {
+    await this.client.post('/api/auth/openai/logout', loginId ? { login_id: loginId } : undefined, {
+      signal,
+    });
   }
 
   async getConfig(): Promise<Config> {

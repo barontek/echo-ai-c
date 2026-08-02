@@ -46,6 +46,14 @@ target_include_directories(test_routes_auth PRIVATE ../../src)
 target_link_libraries(test_routes_auth PRIVATE echo_ai_test_deps)
 add_test(NAME test_routes_auth COMMAND test_routes_auth)
 
+add_executable(test_routes_openai_auth
+    ../../src/server/routes/routes_openai_auth.c
+    test_routes_openai_auth.c
+)
+target_include_directories(test_routes_openai_auth PRIVATE ../../src)
+target_link_libraries(test_routes_openai_auth PRIVATE echo_ai_test_deps)
+add_test(NAME test_routes_openai_auth COMMAND test_routes_openai_auth)
+
 add_executable(test_routes_chat
     ../../src/server/routes/routes_chat.c
     ../../src/utils/string_utils.c

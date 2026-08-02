@@ -41,6 +41,7 @@ LLMProvider *get_provider_with_auth(const char *name, const char *model,
 
     if (strcmp(name, "openai") == 0)
     {
+        if (!openai_auth) return NULL;
         return openai_provider_create(base_url, api_token, openai_auth);
     }
 
@@ -73,7 +74,7 @@ const char *provider_default_base_url(const char *name)
     if (strcmp(name, "ollama") == 0)
         return "http://localhost:11434";
     if (strcmp(name, "openai") == 0)
-        return "https://api.openai.com";
+        return "https://chatgpt.com/backend-api/codex/responses";
     if (strcmp(name, "openai_compatible") == 0)
         return "http://localhost:1234";
     if (strcmp(name, "opencode_zen") == 0)

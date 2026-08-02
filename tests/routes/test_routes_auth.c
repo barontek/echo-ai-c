@@ -8,6 +8,8 @@
 #include "../src/server/routes/routes_auth.h"
 #include "../src/utils/string_utils.h"
 
+extern int openai_oauth_stub_attach_result;
+
 /* ---------------------------------------------------------------------------
  * Stub state
  * --------------------------------------------------------------------------- */
@@ -38,6 +40,7 @@ static void reset_stubs(void)
     stub_encrypt_check_verifier_result = 0;
     stub_migration_change_result = 0;
     stub_sm_create_result = NULL;
+    openai_oauth_stub_attach_result = 0;
     reset_capture();
 }
 
@@ -76,6 +79,7 @@ void server_response_error(Client *client, int status, const char *msg)
 void client_close(Client *client) { (void)client; }
 void server_sse_write(Client *client, const char *data)
 { (void)client; (void)data; }
+void routes_ws_invalidate_auth(ServerContext *ctx) { (void)ctx; }
 
 /* ---------------------------------------------------------------------------
  * Stub middleware
@@ -138,6 +142,22 @@ int encryption_check_verifier(const EncryptionKey *key, const char *path)
 SessionManager *session_manager_create(const char *dir, const char *pw)
 {
     (void)dir; (void)pw;
+    return stub_sm_create_result;
+}
+
+SessionManager *session_manager_create_ex(const char *dir, const char *pw,
+                                          SessionManagerCreateResult *result)
+{
+    (void)dir; (void)pw;
+    if (result)
+    {
+        if (stub_sm_create_result)
+            *result = SESSION_MANAGER_CREATE_OK;
+        else if (stub_encrypt_check_verifier_result != 0)
+            *result = SESSION_MANAGER_CREATE_AUTH_FAILED;
+        else
+            *result = SESSION_MANAGER_CREATE_STORAGE_FAILED;
+    }
     return stub_sm_create_result;
 }
 
@@ -408,6 +428,8 @@ END_TEST
 
 START_TEST(test_handle_unlock_success)
 {
+    SessionManager manager = {0};
+    stub_sm_create_result = &manager;
     ServerContext ctx = {0};
     ctx.state = STATE_LOCKED;
     HTTPRequest req = {0};
@@ -460,6 +482,26 @@ START_TEST(test_handle_logout_success)
     ck_assert_ptr_null(ctx.unlock_token);
     ck_assert_int_eq(ctx.state, STATE_LOCKED);
 
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_logout_preserves_unlock_state_when_detach_fails)
+{
+    ServerContext ctx = {0};
+    ctx.unlock_token = str_dup("token123");
+    ctx.state = STATE_UNLOCKED;
+    ctx.openai_oauth = (OpenAIOAuth *)&ctx;
+    HTTPRequest req = {0};
+    openai_oauth_stub_attach_result = -1;
+
+    handle_logout(&req, NULL, &ctx);
+
+    ck_assert_int_eq(captured_status, 500);
+    ck_assert_ptr_nonnull(ctx.unlock_token);
+    ck_assert_int_eq(ctx.state, STATE_UNLOCKED);
+    openai_oauth_stub_attach_result = 0;
+    free(ctx.unlock_token);
     reset_stubs();
 }
 END_TEST
@@ -547,6 +589,26 @@ START_TEST(test_handle_change_password_migration_fails)
 }
 END_TEST
 
+START_TEST(test_handle_change_password_reports_committed_recovery_state)
+{
+    stub_migration_change_result = -2;
+    SessionManager sm = {0};
+    ServerContext ctx = {0};
+    ctx.sm = &sm;
+    HTTPRequest req = {0};
+    req.body = str_dup("{\"new_password\":\"goodpw\"}");
+    req.body_len = strlen(req.body);
+
+    handle_change_password(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 500);
+    ck_assert_ptr_nonnull(strstr(captured_body, "restart"));
+    ck_assert_ptr_nonnull(strstr(captured_body, "new password"));
+
+    free(req.body);
+    reset_stubs();
+}
+END_TEST
+
 START_TEST(test_handle_change_password_success)
 {
     SessionManager sm = {0};
@@ -603,6 +665,7 @@ Suite *routes_auth_suite(void)
     tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_handle_logout_unauthorized);
     tcase_add_test(tc, test_handle_logout_success);
+    tcase_add_test(tc, test_handle_logout_preserves_unlock_state_when_detach_fails);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("handle_change_password");
@@ -612,6 +675,8 @@ Suite *routes_auth_suite(void)
     tcase_add_test(tc, test_handle_change_password_invalid_json);
     tcase_add_test(tc, test_handle_change_password_short);
     tcase_add_test(tc, test_handle_change_password_migration_fails);
+    tcase_add_test(tc,
+                   test_handle_change_password_reports_committed_recovery_state);
     tcase_add_test(tc, test_handle_change_password_success);
     suite_add_tcase(s, tc);
 

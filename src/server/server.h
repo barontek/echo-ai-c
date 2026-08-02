@@ -17,6 +17,8 @@ typedef enum {
     STATE_UNLOCKED
 } ServerState;
 
+struct WSChatCtx;
+
 typedef struct {
     ServerState state;
     Agent *agent;
@@ -38,6 +40,7 @@ typedef struct {
     RateLimiter *rate_limiter;
     Metrics *metrics;
     ChangeTracker *change_tracker;
+    struct WSChatCtx *ws_chat_contexts;
 } ServerContext;
 
 typedef struct Client Client;

@@ -42,3 +42,23 @@ target_compile_definitions(test_openai_compatible PRIVATE OPENAI_COMPATIBLE_TEST
 target_include_directories(test_openai_compatible PRIVATE ../../src)
 target_link_libraries(test_openai_compatible PRIVATE echo_ai_test_deps)
 add_test(NAME test_openai_compatible COMMAND test_openai_compatible)
+
+add_executable(test_openai
+    ../../src/llm/openai.c
+    ../../src/agent/message.c
+    ../../src/utils/string_utils.c
+    test_openai.c
+)
+target_compile_definitions(test_openai PRIVATE OPENAI_TEST=1)
+target_include_directories(test_openai PRIVATE ../../src)
+target_link_libraries(test_openai PRIVATE echo_ai_test_deps)
+add_test(NAME test_openai COMMAND test_openai)
+
+add_executable(test_openai_oauth
+    ../../src/llm/openai_oauth.c
+    test_openai_oauth.c
+)
+target_compile_definitions(test_openai_oauth PRIVATE OPENAI_OAUTH_TEST=1)
+target_include_directories(test_openai_oauth PRIVATE ../../src)
+target_link_libraries(test_openai_oauth PRIVATE echo_ai_test_deps)
+add_test(NAME test_openai_oauth COMMAND test_openai_oauth)

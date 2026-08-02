@@ -18,6 +18,7 @@ type ChatPreferences = {
 };
 
 const CHAT_PREFERENCES_KEY = 'echo-ai-chat-preferences';
+const FALLBACK_PROVIDERS = ['ollama', 'openai', 'openai_compatible', 'opencode_zen'];
 
 function readChatPreferences(): ChatPreferences {
   try {
@@ -34,7 +35,12 @@ function writeChatPreferences(preferences: ChatPreferences): void {
   try {
     localStorage.setItem(CHAT_PREFERENCES_KEY, JSON.stringify(preferences));
   } catch {
+    return;
   }
+}
+
+function validateModels(models: string[]): string[] {
+  return models.filter((model) => typeof model === 'string' && model.trim().length > 0);
 }
 
 function combineAssistantMessages(
@@ -89,7 +95,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [models, setModels] = useState<string[]>([]);
   /* Provider list comes from the backend (/api/providers); the fallback
    * below only covers the window before the fetch resolves. */
-  const FALLBACK_PROVIDERS = ['ollama', 'openai', 'openai_compatible', 'opencode_zen'];
   const [providers, setProviders] = useState<string[]>(FALLBACK_PROVIDERS);
   const [messages, setMessages] = useState<ChatContextValue['messages']>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
@@ -101,6 +106,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const wsGenRef = useRef(0);
+  const modelRequestGenerationRef = useRef(0);
+  const modelRequestControllerRef = useRef<AbortController | null>(null);
   const isReadyRef = useRef(false);
   const messageQueueRef = useRef<string[]>([]);
   const connectRef = useRef<() => void>(() => {});
@@ -587,6 +594,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Load initial data
   useEffect(() => {
     debugLog('mount');
+    const controller = new AbortController();
+    const initialProviderGeneration = modelRequestGenerationRef.current;
+    const isMounted = () => !controller.signal.aborted;
+    const providerSelectionUnchanged = () =>
+      isMounted() && initialProviderGeneration === modelRequestGenerationRef.current;
 
     const loadData = async () => {
       try {
@@ -606,24 +618,52 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
         debugLog('loadData:sessions', sessionsData.length);
         debugLog('loadData:prefs', prefsData);
-        const availableProviders =
-          providersData.length > 0 ? providersData : FALLBACK_PROVIDERS;
+        const availableProviders = providersData.length > 0 ? providersData : FALLBACK_PROVIDERS;
+        if (!isMounted()) return;
         setProviders(availableProviders);
         setSessions(sessionsData);
+        if (!providerSelectionUnchanged()) return;
 
         // Validate saved provider; fall back to first available
-        const savedProvider =
+        let savedProvider =
           (storedPrefs.provider || prefsData.provider) &&
           availableProviders.includes(storedPrefs.provider || prefsData.provider || '')
             ? storedPrefs.provider || prefsData.provider || availableProviders[0]
             : availableProviders[0];
-        setCurrentProvider(savedProvider);
+        if (savedProvider === 'openai') {
+          try {
+            const status = await api.getOpenAIOAuthStatus(undefined, controller.signal);
+            if (!providerSelectionUnchanged()) return;
+            if (status.state !== 'signed_in') {
+              savedProvider = availableProviders.find((provider) => provider !== 'openai') || '';
+            }
+          } catch (error) {
+            if (!providerSelectionUnchanged()) return;
+            debugLog('loadData:openai-auth-unavailable', error);
+            savedProvider = availableProviders.find((provider) => provider !== 'openai') || '';
+          }
+        }
+
+        if (!savedProvider) {
+          setModels([]);
+          setCurrentModel('');
+          return;
+        }
+
         const legacyModel = storedPrefs.model || prefsData.model;
         if (legacyModel && !savedModels[savedProvider]) {
           savedModels[savedProvider] = legacyModel;
         }
 
-        const modelsData = await api.getModels(savedProvider);
+        const modelsData = validateModels(await api.getModels(savedProvider, controller.signal));
+        if (!providerSelectionUnchanged()) return;
+        if (modelsData.length === 0) {
+          setModels([]);
+          setCurrentModel('');
+          return;
+        }
+
+        setCurrentProvider(savedProvider);
         setModels(modelsData);
 
         const savedModel =
@@ -638,15 +678,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         writeChatPreferences(resolvedPrefs);
         api.setPreferences(resolvedPrefs).catch(console.error);
       } catch (err) {
+        if (!providerSelectionUnchanged()) return;
         console.error('[Chat] Failed to load data:', err);
       }
     };
 
-    loadData();
+    void loadData();
+    return () => {
+      controller.abort();
+      modelRequestControllerRef.current?.abort();
+    };
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     connect();
 
     const onVisibilityChange = () => {
@@ -743,23 +787,43 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const selectProvider = useCallback(
-    (provider: string) => {
+    async (provider: string, prefetchedModels?: string[]) => {
       debugLog('selectProvider', provider);
-      setCurrentProvider(provider);
+      modelRequestControllerRef.current?.abort();
+      const controller = new AbortController();
+      const generation = ++modelRequestGenerationRef.current;
+      modelRequestControllerRef.current = controller;
       const preferredModel = modelByProvider[provider] || '';
-      setCurrentModel(preferredModel);
-      api.getModels(provider).then((nextModels) => {
+
+      try {
+        const nextModels = validateModels(
+          prefetchedModels ?? (await api.getModels(provider, controller.signal))
+        );
+        if (controller.signal.aborted || generation !== modelRequestGenerationRef.current) return;
+        if (nextModels.length === 0) {
+          throw new Error(`No models are available for ${provider}.`);
+        }
+
         setModels(nextModels);
-        const model = preferredModel && nextModels.includes(preferredModel)
-          ? preferredModel
-          : nextModels[0] || '';
+        const model =
+          preferredModel && nextModels.includes(preferredModel)
+            ? preferredModel
+            : nextModels[0] || '';
+        setCurrentProvider(provider);
         setCurrentModel(model);
         const models = { ...modelByProvider, [provider]: model };
         setModelByProvider(models);
         const preferences = { model, provider, models };
         writeChatPreferences(preferences);
-        api.setPreferences(preferences).catch(console.error);
-      }).catch(console.error);
+        void api.setPreferences(preferences).catch(console.error);
+      } catch (error) {
+        if (controller.signal.aborted || generation !== modelRequestGenerationRef.current) return;
+        throw error;
+      } finally {
+        if (generation === modelRequestGenerationRef.current) {
+          modelRequestControllerRef.current = null;
+        }
+      }
       // The useEffect on connect() will detect the provider change and reconnect
     },
     [modelByProvider]

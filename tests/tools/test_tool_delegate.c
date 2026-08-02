@@ -9,6 +9,7 @@
 
 extern Tool *tool_delegate_create(SafetyConfig *safety);
 extern void tool_delegate_test_set_alloc_fail(int nth_allocation);
+extern void tool_delegate_test_set_realloc_fail(int nth_allocation);
 
 /* Mock registry functions — avoid linking the whole registry.c tool chain */
 int registry_get_delegate_config(const char **provider_name, const char **base_url,
@@ -28,10 +29,14 @@ int registry_get_delegate_config(const char **provider_name, const char **base_u
     return 0;
 }
 
+OpenAIOAuth *registry_get_openai_oauth(void) { return NULL; }
+
 static int scripted_tool_mode = 0;
 static int scripted_chat_count = 0;
 static int scripted_tool_count = 0;
 static int scripted_history_seen = 0;
+static int scripted_provider_state_seen = 0;
+static int scripted_tool_call_count = 1;
 
 static ToolResult *scripted_tool_execute(Tool *self, const char *args)
 {
@@ -61,16 +66,30 @@ static LLMResponse *mock_chat(LLMProvider *self, Message *messages, int count,
     if (scripted_tool_mode && scripted_chat_count++ == 0)
     {
         resp->content = str_dup("calling tool");
-        resp->tool_calls = calloc(1, sizeof(ToolCall));
-        if (!resp->content || !resp->tool_calls)
+        resp->phase = str_dup("commentary");
+        resp->provider_state = str_dup(
+            "[{\"type\":\"reasoning\",\"encrypted_content\":\"cipher\"}]");
+        resp->tool_calls = calloc((size_t)scripted_tool_call_count,
+                                  sizeof(ToolCall));
+        if (!resp->content || !resp->phase || !resp->provider_state ||
+            !resp->tool_calls)
         {
             llm_response_free(resp);
             return NULL;
         }
-        resp->tool_calls_count = 1;
-        resp->tool_calls[0].id = str_dup("call-1");
-        resp->tool_calls[0].name = str_dup("fake_tool");
-        resp->tool_calls[0].arguments = str_dup("{\"value\":1}");
+        resp->tool_calls_count = scripted_tool_call_count;
+        for (int i = 0; i < scripted_tool_call_count; i++)
+        {
+            resp->tool_calls[i].id = str_dup("call-1");
+            resp->tool_calls[i].name = str_dup("fake_tool");
+            resp->tool_calls[i].arguments = str_dup("{\"value\":1}");
+            if (!resp->tool_calls[i].id || !resp->tool_calls[i].name ||
+                !resp->tool_calls[i].arguments)
+            {
+                llm_response_free(resp);
+                return NULL;
+            }
+        }
         return resp;
     }
 
@@ -81,6 +100,10 @@ static LLMResponse *mock_chat(LLMProvider *self, Message *messages, int count,
             if (messages[i].tool_name && strcmp(messages[i].tool_name, "fake_tool") == 0 &&
                 messages[i].content && strcmp(messages[i].content, "tool output") == 0)
                 scripted_history_seen = 1;
+            if (messages[i].provider_state && messages[i].phase &&
+                strstr(messages[i].provider_state, "cipher") &&
+                strcmp(messages[i].phase, "commentary") == 0)
+                scripted_provider_state_seen = 1;
         }
         resp->content = str_dup("final response");
         return resp;
@@ -92,12 +115,13 @@ static LLMResponse *mock_chat(LLMProvider *self, Message *messages, int count,
 
 static void mock_destroy(LLMProvider *self) { free(self); }
 
-LLMProvider *td_test_get_provider(const char *name, const char *model,
-                                   const char *base_url, const char *api_token,
-                                   int num_ctx, int keep_alive_secs)
+LLMProvider *td_test_get_provider_with_auth(
+    const char *name, const char *model, const char *base_url,
+    const char *api_token, int num_ctx, int keep_alive_secs,
+    OpenAIOAuth *openai_auth)
 {
     (void)name; (void)model; (void)base_url; (void)api_token;
-    (void)num_ctx; (void)keep_alive_secs;
+    (void)num_ctx; (void)keep_alive_secs; (void)openai_auth;
     LLMProvider *p = calloc(1, sizeof(LLMProvider));
     if (p)
     {
@@ -121,6 +145,21 @@ START_TEST(test_delegate_execute_returns_content_without_error)
 }
 END_TEST
 
+START_TEST(test_delegate_realloc_failure_does_not_commit_grown_capacity)
+{
+    scripted_tool_mode = 1;
+    scripted_tool_call_count = 3;
+    tool_delegate_test_set_realloc_fail(1);
+    Tool *t = tool_delegate_create(NULL);
+    ck_assert_ptr_nonnull(t);
+
+    ToolResult *r = t->execute(t, "{\"task\":\"use several tools\",\"iterations\":2}");
+    ck_assert_ptr_nonnull(r);
+    tool_result_free(r);
+    t->destroy(t);
+}
+END_TEST
+
 START_TEST(test_delegate_executes_tool_calls_before_continuing)
 {
     scripted_tool_mode = 1;
@@ -134,6 +173,7 @@ START_TEST(test_delegate_executes_tool_calls_before_continuing)
     ck_assert_int_eq(scripted_tool_count, 1);
     ck_assert_int_eq(scripted_chat_count, 2);
     ck_assert_int_eq(scripted_history_seen, 1);
+    ck_assert_int_eq(scripted_provider_state_seen, 1);
 
     tool_result_free(r);
     t->destroy(t);
@@ -229,6 +269,8 @@ Suite *tool_delegate_suite(void)
     tcase_add_test(tc_fault, test_delegate_alloc_fail_sys_role);
     tcase_add_test(tc_fault, test_delegate_alloc_fail_sys_content);
     tcase_add_test(tc_fault, test_delegate_alloc_fail_user_role);
+    tcase_add_test(tc_fault,
+                   test_delegate_realloc_failure_does_not_commit_grown_capacity);
     suite_add_tcase(s, tc_fault);
 
     return s;

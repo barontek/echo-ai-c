@@ -6,6 +6,7 @@
 #include "../safety/safety.h"
 #include "../change_tracker/change_tracker.h"
 #include "../session/session_manager.h"
+#include "../llm/openai_oauth.h"
 
 void registry_init(SafetyConfig *safety);
 void registry_register(Tool *tool);
@@ -18,6 +19,9 @@ void registry_set_search_provider(SearchProvider *sp);
 SearchProvider *registry_get_search_provider(void);
 void registry_set_session_manager(SessionManager *sm);
 SessionManager *registry_get_session_manager(void);
+/* Stores a borrowed OAuth manager that outlives registered delegate tools. */
+void registry_set_openai_oauth(OpenAIOAuth *auth);
+OpenAIOAuth *registry_get_openai_oauth(void);
 void registry_set_delegate_config(const char *provider_name, const char *base_url,
                                    const char *api_token, const char *model,
                                    int num_ctx, int keep_alive_secs,

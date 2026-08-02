@@ -27,7 +27,7 @@ typedef struct QueuedMsg {
     struct QueuedMsg *next;
 } QueuedMsg;
 
-typedef struct {
+typedef struct WSChatCtx {
     Agent *agent;
     SessionManager *sm;
     SafetyConfig *safety;
@@ -55,6 +55,7 @@ typedef struct {
     int closing;
     ServerContext *server_ctx;
     unsigned long auth_generation;
+    struct WSChatCtx *next;
 } WSChatCtx;
 
 WS_STATIC void ws_title_update_cb(const char *session_id, const char *title, void *userdata);
@@ -62,7 +63,14 @@ WS_STATIC void ws_title_update_cb(const char *session_id, const char *title, voi
 static void ws_chat_ctx_destroy(WSChatCtx *c)
 {
     if (!c) return;
+    if (c->server_ctx)
+    {
+        WSChatCtx **link = &c->server_ctx->ws_chat_contexts;
+        while (*link && *link != c) link = &(*link)->next;
+        if (*link == c) *link = c->next;
+    }
     if (c->agent) agent_destroy(c->agent);
+    session_manager_free(c->sm);
     free(c->pending_request_id);
     free(c->active_session_id);
     free(c->ask_user_response);
@@ -75,6 +83,24 @@ static void ws_chat_ctx_destroy(WSChatCtx *c)
         q = next;
     }
     free(c);
+}
+
+void routes_ws_invalidate_auth(ServerContext *ctx)
+{
+    if (!ctx) return;
+    for (WSChatCtx *c = ctx->ws_chat_contexts; c; c = c->next)
+    {
+        if (c->agent)
+        {
+            agent_cancel(c->agent);
+            agent_set_session_manager(c->agent, NULL);
+        }
+        session_manager_free(c->sm);
+        c->sm = NULL;
+        c->approval_done = 1;
+        c->approval_result = 0;
+        c->ask_user_done = 1;
+    }
 }
 
 WS_STATIC void ws_chat_on_chunk(const char *chunk, void *userdata)
@@ -300,12 +326,11 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
         {
             if (provider->valuestring && c->agent)
             {
-                /* The sidebar sends lm_studio; the canonical name is
-                 * openai (the OpenAI-compatible provider, which LM
-                 * Studio also speaks). Map the FE spelling. */
+                /* The sidebar sends lm_studio; route it through the local
+                 * OpenAI-compatible client rather than OAuth Codex. */
                 const char *pname = provider->valuestring;
                 if (strcmp(pname, "lm_studio") == 0)
-                    pname = "openai";
+                    pname = "openai_compatible";
 
                 /* Resolve the per-provider token from [providers]; a
                  * provider switched mid-session may have its own key.
@@ -719,12 +744,14 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
         free(c);
         return;
     }
-    c->sm = ctx->sm;
+    c->sm = session_manager_retain(ctx->sm);
     c->safety = ctx->safety;
     c->ws = ws;
     c->loop = ctx->loop;
     c->server_ctx = ctx;
     c->auth_generation = ctx->auth_generation;
+    c->next = ctx->ws_chat_contexts;
+    ctx->ws_chat_contexts = c;
 
     /* ask_user_timeout (seconds, default 60) bounds how long a blocked
      * ask_user tool call waits for a client reply before giving up. */

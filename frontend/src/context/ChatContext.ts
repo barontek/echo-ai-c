@@ -37,7 +37,7 @@ export interface ChatContextValue {
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, newTitle: string) => Promise<void>;
   selectModel: (model: string) => void;
-  selectProvider: (provider: string) => void;
+  selectProvider: (provider: string, prefetchedModels?: string[]) => Promise<void>;
   reconnect: () => void;
   pendingApproval: ApprovalRequest | null;
   resolveApproval: (requestId: string, approved: boolean) => void;

@@ -2,6 +2,7 @@
 #include <check.h>
 
 #include "../../src/llm/provider.h"
+#include "../../src/llm/openai_oauth.h"
 
 /* ================================================================
  *  get_provider tests
@@ -21,7 +22,9 @@ END_TEST
 
 START_TEST(test_get_provider_openai_returns_valid_provider)
 {
-    LLMProvider *p = get_provider("openai", "model", "https://api.openai.com", "sk-test-1", 0, 0);
+    OpenAIOAuth *auth = (OpenAIOAuth *)1;
+    LLMProvider *p = get_provider_with_auth("openai", "model", NULL,
+                                            "ignored", 0, 0, auth);
     ck_assert_ptr_ne(p, NULL);
     ck_assert(p->chat != NULL);
     ck_assert(p->chat_streaming != NULL);
@@ -31,13 +34,10 @@ START_TEST(test_get_provider_openai_returns_valid_provider)
 }
 END_TEST
 
-START_TEST(test_get_provider_openai_without_token_returns_valid_provider)
+START_TEST(test_get_provider_openai_without_oauth_returns_null)
 {
-    /* Real OpenAI without a token is still constructible; the service
-     * rejects the request with 401 at request time. */
     LLMProvider *p = get_provider("openai", "model", "https://api.openai.com", NULL, 0, 0);
-    ck_assert_ptr_ne(p, NULL);
-    p->destroy(p);
+    ck_assert_ptr_null(p);
 }
 END_TEST
 
@@ -115,7 +115,8 @@ END_TEST
 START_TEST(test_provider_default_base_url_known_providers)
 {
     ck_assert_str_eq(provider_default_base_url("ollama"), "http://localhost:11434");
-    ck_assert_str_eq(provider_default_base_url("openai"), "https://api.openai.com");
+    ck_assert_str_eq(provider_default_base_url("openai"),
+                     "https://chatgpt.com/backend-api/codex/responses");
     ck_assert_str_eq(provider_default_base_url("openai_compatible"), "http://localhost:1234");
     ck_assert_str_eq(provider_default_base_url("opencode_zen"), "https://opencode.ai/zen/v1");
 }
@@ -140,7 +141,7 @@ Suite *factory_suite(void)
     TCase *tc = tcase_create("GetProvider");
     tcase_add_test(tc, test_get_provider_ollama_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_openai_returns_valid_provider);
-    tcase_add_test(tc, test_get_provider_openai_without_token_returns_valid_provider);
+    tcase_add_test(tc, test_get_provider_openai_without_oauth_returns_null);
     tcase_add_test(tc, test_get_provider_openai_compatible_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_lmstudio_alias_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_opencode_zen_returns_valid_provider);

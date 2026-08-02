@@ -1,9 +1,12 @@
 #include "llm/openai_oauth.h"
 
+OpenAIOAuthState openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_OUT;
+int openai_oauth_stub_attach_result = 0;
+
 int openai_oauth_attach_session(OpenAIOAuth *auth, SessionManager *sm)
 {
     (void)auth; (void)sm;
-    return 0;
+    return openai_oauth_stub_attach_result;
 }
 
 OpenAIOAuthState openai_oauth_status(OpenAIOAuth *auth, char **account_id,
@@ -13,5 +16,5 @@ OpenAIOAuthState openai_oauth_status(OpenAIOAuth *auth, char **account_id,
     if (account_id) *account_id = NULL;
     if (plan_type) *plan_type = NULL;
     if (error) *error = NULL;
-    return OPENAI_OAUTH_SIGNED_OUT;
+    return openai_oauth_stub_state;
 }

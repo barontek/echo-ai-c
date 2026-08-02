@@ -9,8 +9,11 @@
 
 #include "../src/server/routes/routes.h"
 #include "../src/server/routes/routes_general.h"
+#include "../src/llm/openai.h"
 #include "../src/config/config.h"
 #include "../src/utils/string_utils.h"
+
+extern OpenAIOAuthState openai_oauth_stub_state;
 
 /* ---------------------------------------------------------------------------
  * Stub state
@@ -29,6 +32,9 @@ static char captured_curl_url[256] = {0};
 static char captured_auth_header[256] = {0};
 static int captured_status = 0;
 static char *captured_body = NULL;
+static int stub_openai_models_result = -1;
+static const char *stub_openai_models[8] = {NULL};
+static size_t stub_openai_models_count = 0U;
 
 struct curl_slist {
     char *data;
@@ -54,6 +60,10 @@ static void reset_stubs(void)
     captured_writedata = NULL;
     captured_writefunc = NULL;
     stub_models_json = NULL;
+    stub_openai_models_result = -1;
+    stub_openai_models_count = 0U;
+    for (size_t i = 0; i < 8U; i++) stub_openai_models[i] = NULL;
+    openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_OUT;
     memset(captured_curl_url, 0, sizeof(captured_curl_url));
     reset_capture();
 }
@@ -125,6 +135,38 @@ SessionManager *session_manager_create(const char *d, const char *p)
 
 SessionList *session_manager_list_sessions(SessionManager *sm) { (void)sm; return NULL; }
 void session_list_free(SessionList *l) { (void)l; }
+
+int openai_models_fetch_alloc(OpenAIOAuth *auth, char ***models_out,
+                              size_t *count_out)
+{
+    (void)auth;
+    if (!models_out || !count_out) return -1;
+    *models_out = NULL;
+    *count_out = 0U;
+    if (stub_openai_models_result != 0) return stub_openai_models_result;
+    char **models = stub_openai_models_count > 0U ?
+        calloc(stub_openai_models_count, sizeof(*models)) : NULL;
+    if (stub_openai_models_count > 0U && !models) return -1;
+    for (size_t i = 0; i < stub_openai_models_count; i++)
+    {
+        models[i] = str_dup(stub_openai_models[i]);
+        if (!models[i])
+        {
+            for (size_t j = 0; j < i; j++) free(models[j]);
+            free(models);
+            return -1;
+        }
+    }
+    *models_out = models;
+    *count_out = stub_openai_models_count;
+    return 0;
+}
+
+void openai_models_free(char **models, size_t count)
+{
+    for (size_t i = 0; i < count; i++) free(models[i]);
+    free(models);
+}
 
 /* ---------------------------------------------------------------------------
  * Stub logging
@@ -709,7 +751,7 @@ START_TEST(test_handle_models_ollama_explicit_query)
 }
 END_TEST
 
-START_TEST(test_handle_models_openai_url_and_parse)
+START_TEST(test_handle_models_openai_signed_out_returns_empty_local_list)
 {
     stub_curl_init_nonnull = 1;
     stub_curl_perform_code = CURLE_OK;
@@ -718,17 +760,18 @@ START_TEST(test_handle_models_openai_url_and_parse)
     HTTPRequest req = {0};
     strcpy(req.query, "provider=openai");
 
+    ctx.openai_oauth = (OpenAIOAuth *)1;
+    openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_OUT;
     handle_models(&req, NULL, &ctx);
     ck_assert_int_eq(captured_status, 200);
-    ck_assert(strstr(captured_curl_url, "https://api.openai.com/v1/models"));
-    ck_assert(strstr(captured_body, "qwen2.5"));
-    ck_assert(strstr(captured_body, "deepseek-v3"));
+    ck_assert_str_eq(captured_curl_url, "");
+    ck_assert_str_eq(captured_body, "{\"models\":[]}");
 
     reset_stubs();
 }
 END_TEST
 
-START_TEST(test_handle_models_openai_sends_provider_token)
+START_TEST(test_handle_models_openai_signed_in_uses_remote_catalog)
 {
     stub_curl_init_nonnull = 1;
     stub_curl_perform_code = CURLE_OK;
@@ -747,13 +790,23 @@ START_TEST(test_handle_models_openai_sends_provider_token)
     ck_assert_ptr_nonnull(conf);
     ServerContext ctx = {0};
     ctx.conf = conf;
+    ctx.openai_oauth = (OpenAIOAuth *)1;
+    openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_IN;
+    stub_openai_models_result = 0;
+    stub_openai_models[0] = "gpt-5.4";
+    stub_openai_models[1] = "gpt-5.3-codex";
+    stub_openai_models[2] = "gpt-5.2-codex";
+    stub_openai_models_count = 3U;
     HTTPRequest req = {0};
     strcpy(req.query, "provider=openai");
 
     handle_models(&req, NULL, &ctx);
     ck_assert_int_eq(captured_status, 200);
-    ck_assert_str_eq(captured_auth_header, "Authorization: Bearer sk-model-test");
-    ck_assert(strstr(captured_body, "gpt-4o-mini"));
+    ck_assert_str_eq(captured_auth_header, "");
+    ck_assert_str_eq(captured_curl_url, "");
+    ck_assert(strstr(captured_body, "gpt-5.4"));
+    ck_assert(strstr(captured_body, "gpt-5.3-codex"));
+    ck_assert(strstr(captured_body, "gpt-5.2-codex"));
 
     conf_free(conf);
     char rm[512];
@@ -764,9 +817,66 @@ START_TEST(test_handle_models_openai_sends_provider_token)
 }
 END_TEST
 
+START_TEST(test_handle_models_openai_discovery_failure_uses_fallback)
+{
+    ServerContext ctx = {0};
+    ctx.openai_oauth = (OpenAIOAuth *)1;
+    openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_IN;
+    stub_openai_models_result = -1;
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=openai");
+
+    handle_models(&req, NULL, &ctx);
+
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert_ptr_nonnull(strstr(captured_body, "gpt-5.5"));
+    ck_assert_ptr_nonnull(strstr(captured_body, "gpt-5.3-codex-spark"));
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_models_openai_denied_returns_empty_list)
+{
+    /* 4xx entitlement denial must not surface the fallback catalog. */
+    ServerContext ctx = {0};
+    ctx.openai_oauth = (OpenAIOAuth *)1;
+    openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_IN;
+    stub_openai_models_result = OPENAI_MODELS_DENIED;
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=openai");
+
+    handle_models(&req, NULL, &ctx);
+
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert_str_eq(captured_body, "{\"models\":[]}");
+    ck_assert_ptr_null(strstr(captured_body, "gpt-5.5"));
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_models_openai_zero_visible_returns_empty_list)
+{
+    /* A parsed-but-empty catalog must not fall back to the fixed list. */
+    ServerContext ctx = {0};
+    ctx.openai_oauth = (OpenAIOAuth *)1;
+    openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_IN;
+    stub_openai_models_result = OPENAI_MODELS_OK;
+    stub_openai_models_count = 0U;
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=openai");
+
+    handle_models(&req, NULL, &ctx);
+
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert_str_eq(captured_body, "{\"models\":[]}");
+    ck_assert_ptr_null(strstr(captured_body, "gpt-5.5"));
+    reset_stubs();
+}
+END_TEST
+
 START_TEST(test_handle_models_lm_studio_alias_uses_openai)
 {
-    /* lm_studio is an alias for the openai endpoint in the query too. */
+    /* lm_studio is an alias for the static-token compatible endpoint. */
     stub_curl_init_nonnull = 1;
     stub_curl_perform_code = CURLE_OK;
     stub_models_json = "{\"data\":[{\"id\":\"qwen2.5\"}]}";
@@ -776,14 +886,14 @@ START_TEST(test_handle_models_lm_studio_alias_uses_openai)
 
     handle_models(&req, NULL, &ctx);
     ck_assert_int_eq(captured_status, 200);
-    ck_assert(strstr(captured_curl_url, "https://api.openai.com/v1/models"));
+    ck_assert(strstr(captured_curl_url, "http://localhost:1234/v1/models"));
     ck_assert(strstr(captured_body, "qwen2.5"));
 
     reset_stubs();
 }
 END_TEST
 
-START_TEST(test_handle_models_openai_custom_base_url)
+START_TEST(test_handle_models_openai_ignores_custom_public_base_url)
 {
     stub_curl_init_nonnull = 1;
     stub_curl_perform_code = CURLE_OK;
@@ -802,13 +912,18 @@ START_TEST(test_handle_models_openai_custom_base_url)
     ck_assert_ptr_nonnull(conf);
     ServerContext ctx = {0};
     ctx.conf = conf;
+    ctx.openai_oauth = (OpenAIOAuth *)1;
+    openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_IN;
+    stub_openai_models_result = 0;
+    stub_openai_models[0] = "gpt-5.4";
+    stub_openai_models_count = 1U;
     HTTPRequest req = {0};
     strcpy(req.query, "provider=openai");
 
     handle_models(&req, NULL, &ctx);
     ck_assert_int_eq(captured_status, 200);
-    ck_assert(strstr(captured_curl_url, "http://localhost:1234/v1/models"));
-    ck_assert(strstr(captured_body, "local-model"));
+    ck_assert_str_eq(captured_curl_url, "");
+    ck_assert(strstr(captured_body, "gpt-5.4"));
 
     conf_free(conf);
     char rm[512];
@@ -944,10 +1059,14 @@ Suite *routes_general_suite(void)
     tcase_add_test(tc, test_handle_models_empty_models_array);
     tcase_add_test(tc, test_handle_models_ollama_default_url);
     tcase_add_test(tc, test_handle_models_ollama_explicit_query);
-    tcase_add_test(tc, test_handle_models_openai_url_and_parse);
-    tcase_add_test(tc, test_handle_models_openai_sends_provider_token);
+    tcase_add_test(tc, test_handle_models_openai_signed_out_returns_empty_local_list);
+    tcase_add_test(tc, test_handle_models_openai_signed_in_uses_remote_catalog);
+    tcase_add_test(tc,
+                   test_handle_models_openai_discovery_failure_uses_fallback);
+    tcase_add_test(tc, test_handle_models_openai_denied_returns_empty_list);
+    tcase_add_test(tc, test_handle_models_openai_zero_visible_returns_empty_list);
     tcase_add_test(tc, test_handle_models_lm_studio_alias_uses_openai);
-    tcase_add_test(tc, test_handle_models_openai_custom_base_url);
+    tcase_add_test(tc, test_handle_models_openai_ignores_custom_public_base_url);
     tcase_add_test(tc, test_handle_models_openai_compatible_uses_own_base_url);
     tcase_add_test(tc, test_handle_models_unknown_provider_empty_no_curl);
     suite_add_tcase(s, tc);

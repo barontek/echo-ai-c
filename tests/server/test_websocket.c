@@ -13,6 +13,7 @@ static uv_write_cb captured_cb = NULL;
 static char *captured_base = NULL;
 static size_t captured_len = 0;
 static int submit_result = 0;
+static void *captured_ws_private = NULL;
 
 int websocket_test_uv_write(uv_write_t *req, uv_stream_t *handle,
                             const uv_buf_t bufs[], unsigned int nbufs,
@@ -38,7 +39,7 @@ void client_close(Client *client) { (void)client; }
 void client_set_ws_private(Client *client, void *priv)
 {
     (void)client;
-    (void)priv;
+    captured_ws_private = priv;
 }
 
 void log_msg(LogLevel level, const char *file, int line, const char *message, ...)
@@ -81,6 +82,7 @@ static void reset_capture(void)
     captured_base = NULL;
     captured_len = 0;
     submit_result = 0;
+    captured_ws_private = NULL;
 }
 
 START_TEST(test_control_frame_buffer_survives_until_completion)
@@ -154,6 +156,8 @@ START_TEST(test_handshake_upgrades_with_valid_key)
     /* RFC 6455 §4.2.2 sample: key above + WS_MAGIC -> this accept value. */
     ck_assert(strstr(captured_base, "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != NULL);
     captured_cb(captured_req, 0);
+    free(captured_ws_private);
+    captured_ws_private = NULL;
     reset_capture();
 }
 END_TEST
@@ -180,6 +184,7 @@ int main(void)
     tcase_add_test(tc, test_close_frame_encodes_requested_code);
     tcase_add_test(tc, test_control_frame_submission_failure_is_reported);
     tcase_add_test(tc, test_protocol_is_selected_only_when_offered);
+    suite_add_tcase(suite, tc);
     TCase *tc_handshake = tcase_create("Handshake");
     tcase_add_test(tc_handshake, test_handshake_upgrades_with_valid_key);
     tcase_add_test(tc_handshake, test_handshake_rejects_missing_key);

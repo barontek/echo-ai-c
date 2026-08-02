@@ -39,6 +39,7 @@ static SafetyConfig *safety_global = NULL;
 #endif
 static SearchProvider *search_provider_global = NULL;
 static SessionManager *session_manager_global = NULL;
+static OpenAIOAuth *openai_oauth_global = NULL;
 
 typedef struct {
     char *provider_name;
@@ -226,6 +227,16 @@ SessionManager *registry_get_session_manager(void)
     return session_manager_global;
 }
 
+void registry_set_openai_oauth(OpenAIOAuth *auth)
+{
+    openai_oauth_global = auth;
+}
+
+OpenAIOAuth *registry_get_openai_oauth(void)
+{
+    return openai_oauth_global;
+}
+
 void registry_set_delegate_config(const char *provider_name, const char *base_url,
                                    const char *api_token, const char *model,
                                    int num_ctx, int keep_alive_secs,
@@ -292,6 +303,7 @@ int registry_has_ask_user_callback(void)
 
 void registry_destroy(void)
 {
+    openai_oauth_global = NULL;
     for (int i = 0; i < tool_count; i++)
     {
         if (tools[i]->destroy) tools[i]->destroy(tools[i]);

@@ -15,11 +15,19 @@
 #ifdef TOOL_DELEGATE_TEST
 static int td_alloc_counter = 0;
 static int td_alloc_fail_at = -1;
+static int td_realloc_counter = 0;
+static int td_realloc_fail_at = -1;
 
 void tool_delegate_test_set_alloc_fail(int nth_allocation)
 {
     td_alloc_counter = 0;
     td_alloc_fail_at = nth_allocation;
+}
+
+void tool_delegate_test_set_realloc_fail(int nth_allocation)
+{
+    td_realloc_counter = 0;
+    td_realloc_fail_at = nth_allocation;
 }
 
 static char *td_test_strdup(const char *s)
@@ -29,12 +37,21 @@ static char *td_test_strdup(const char *s)
     return str_dup(s);
 }
 
-#define str_dup td_test_strdup
+static void *td_test_realloc(void *ptr, size_t size)
+{
+    td_realloc_counter++;
+    if (td_realloc_counter == td_realloc_fail_at) return NULL;
+    return realloc(ptr, size);
+}
 
-LLMProvider *td_test_get_provider(const char *name, const char *model,
-                                   const char *base_url, const char *api_token,
-                                   int num_ctx, int keep_alive_secs);
-#define get_provider td_test_get_provider
+#define str_dup td_test_strdup
+#define realloc td_test_realloc
+
+LLMProvider *td_test_get_provider_with_auth(
+    const char *name, const char *model, const char *base_url,
+    const char *api_token, int num_ctx, int keep_alive_secs,
+    OpenAIOAuth *openai_auth);
+#define get_provider_with_auth td_test_get_provider_with_auth
 #endif
 
 typedef struct {
@@ -92,9 +109,9 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
     cJSON_Delete(args);
     if (!task_str) return tool_result_error("oom", "execution_error");
 
-    LLMProvider *provider = get_provider(provider_name, model,
-                                          base_url, api_token,
-                                          num_ctx, keep_alive_secs);
+    LLMProvider *provider = get_provider_with_auth(
+        provider_name, model, base_url, api_token, num_ctx, keep_alive_secs,
+        registry_get_openai_oauth());
     if (!provider)
     {
         free(task_str);
@@ -125,13 +142,19 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
     user_msg.content = user_content;
 
     msgs = malloc(sizeof(Message) * 4);
-    if (!msgs) { provider->destroy(provider); return tool_result_error("oom", "execution_error"); }
+    if (!msgs)
+    {
+        free(sys_role); free(sys_content); free(user_role); free(task_str);
+        provider->destroy(provider);
+        return tool_result_error("oom", "execution_error");
+    }
     msgs[0] = sys_msg;
     msgs[1] = user_msg;
     msgs_count = 2;
     msgs_cap = 4;
 
     char *final_content = NULL;
+    int append_failed = 0;
 
     for (int i = 0; i < iterations; i++)
     {
@@ -161,6 +184,8 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
                 Message source = {0};
                 source.role = "assistant";
                 source.content = resp->content ? resp->content : "";
+                source.phase = resp->phase;
+                source.provider_state = resp->provider_state;
                 source.tool_calls = resp->tool_calls;
                 source.tool_calls_count = resp->tool_calls_count;
                 if (message_copy(assistant_msg, &source) != 0)
@@ -225,10 +250,18 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
                         tool_msg->error_category = t_err_cat;
                         if (msgs_count >= msgs_cap)
                         {
-                            msgs_cap *= 2;
-                            Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
-                            if (!new_msgs) { free(t_role); free(t_content); free(t_call_id); free(t_name); free(t_err_cat); free(tool_msg); break; }
+                            int new_cap = msgs_cap * 2;
+                            Message *new_msgs = realloc(
+                                msgs, sizeof(Message) * (size_t)new_cap);
+                            if (!new_msgs)
+                            {
+                                free(t_role); free(t_content); free(t_call_id);
+                                free(t_name); free(t_err_cat); free(tool_msg);
+                                append_failed = 1;
+                                break;
+                            }
                             msgs = new_msgs;
+                            msgs_cap = new_cap;
                         }
                         msgs[msgs_count++] = *tool_msg;
                         free(tool_msg);
@@ -269,10 +302,19 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
                 tool_msg->error_category = t_err_cat;
                 if (msgs_count >= msgs_cap)
                 {
-                    msgs_cap *= 2;
-                    Message *new_msgs = realloc(msgs, sizeof(Message) * msgs_cap);
-                    if (!new_msgs) { free(t_role); free(t_content); free(t_call_id); free(t_name); free(t_err_cat); free(tool_msg); tool_result_free(result); break; }
+                    int new_cap = msgs_cap * 2;
+                    Message *new_msgs = realloc(
+                        msgs, sizeof(Message) * (size_t)new_cap);
+                    if (!new_msgs)
+                    {
+                        free(t_role); free(t_content); free(t_call_id);
+                        free(t_name); free(t_err_cat); free(tool_msg);
+                        tool_result_free(result);
+                        append_failed = 1;
+                        break;
+                    }
                     msgs = new_msgs;
+                    msgs_cap = new_cap;
                 }
                 msgs[msgs_count++] = *tool_msg;
                 free(tool_msg);
@@ -281,24 +323,11 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
         }
 
         llm_response_free(resp);
+        if (append_failed) break;
     }
 
     for (int i = 0; i < msgs_count; i++)
-    {
-        free(msgs[i].role);
-        free(msgs[i].content);
-        free(msgs[i].id);
-        free(msgs[i].tool_call_id);
-        free(msgs[i].tool_name);
-        free(msgs[i].error_category);
-        free(msgs[i].thinking);
-        if (msgs[i].tool_calls)
-        {
-            for (int j = 0; j < msgs[i].tool_calls_count; j++)
-                tool_call_free(&msgs[i].tool_calls[j]);
-            free(msgs[i].tool_calls);
-        }
-    }
+        message_clear(&msgs[i]);
     free(msgs);
     provider->destroy(provider);
 

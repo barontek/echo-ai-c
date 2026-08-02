@@ -1,5 +1,5 @@
 build/
-build-valgrind/
+build-*/
 coverage/
 CMakeCache.txt
 CMakeFiles/
@@ -14,5 +14,3 @@ compile_commands.json
 config.conf
 scripts/decrypt_session
 scripts/test_ollama
-build-asan/
-build-wsfix/

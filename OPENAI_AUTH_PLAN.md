@@ -154,10 +154,16 @@ translation.
 
 ## Models
 
-The ChatGPT Codex backend does not use the public `/v1/models` endpoint.
-Initially expose a reviewed local allow-list only while OAuth is signed in.
-Keep this list in one backend location and update it deliberately as OpenAI's
-entitlements change.
+The ChatGPT Codex backend does not use the public `/v1/models` endpoint. Fetch
+the signed-in account's catalog from
+`GET https://chatgpt.com/backend-api/codex/models?client_version=<version>`
+with the same OAuth and account-routing headers used for Responses requests.
+Expose models whose backend `visibility` is `list`, preserving backend order;
+malformed or unexpected entries are skipped rather than aborting the catalog.
+Use the reviewed local list only as a fallback when discovery is unavailable
+(transport, 5xx, or parse failure). A 4xx response means the account has no
+entitlement and must return an empty list, never the fallback catalog — and a
+successful parse yielding zero visible models also returns an empty list.
 
 The frontend must receive an empty list while signed out. It must start login
 before committing `openai` as the active provider.
@@ -257,6 +263,10 @@ credentials, and clear sensitive in-memory state.
 - Non-2xx and `401` refresh/retry behavior
 - Configured request timeout propagation
 
+Route tests cover the catalog fallback policy: transient discovery failures
+use the reviewed local list, while 4xx denial and empty catalogs return an
+empty list.
+
 ### Route And Frontend Tests
 
 - Unlock enforcement for start/status/logout
@@ -279,35 +289,43 @@ production build.
 
 ## Beta Branch Status
 
-The `beta` branch currently contains an initial implementation:
+The `beta` implementation now includes:
 
-- OAuth-only OpenAI configuration
-- Browser PKCE flow with a loopback callback listener
-- Encrypted provider credential table
-- Token refresh and metadata extraction
-- Dedicated Codex Responses provider
-- Auth start/status/logout routes
-- Sidebar login trigger and status polling
-- Initial local model allow-list
+- OAuth-only OpenAI configuration and a fixed Codex backend endpoint
+- Browser PKCE and CLI device-code login flows
+- Strict callback, token, JWT, device-response, and SSE parsing
+- Encrypted OAuth persistence with atomic refresh-token rotation
+- OAuth-aware password migration and crash recovery
+- Single-flight refresh and one bounded retry after `401`
+- Entitlement-aware model discovery from the authenticated Codex models route
+- Dedicated streaming Responses API conversion, structured output, parallel
+  tool calls, encrypted reasoning replay, and response phase preservation
+- Unlock-protected start/status/cancel/logout routes
+- Transactional frontend login, provider selection, polling, cancellation, and
+  sign-out behavior
+- Check regression tests and libFuzzer targets for each external parser
+- Clang/libFuzzer smoke execution in CI and frontend production-build coverage
 
-This is a work-in-progress snapshot, not merge-ready.
+The Linux GCC development shell is sanitizer-clean but does not provide
+`-fsanitize=fuzzer`; the four new fuzz targets are therefore compiled and run
+by the dedicated Clang CI job rather than by the local GCC build.
 
-Known remaining work:
+Known limitations that are outside the credential implementation:
 
-- Add device-code login.
-- Complete the security and concurrency audit.
-- Validate callback parsing and partial socket I/O.
-- Make refresh fully single-flight without holding state locks during network I/O.
-- Add `401` refresh/retry and proper timeout propagation.
-- Correct multi-tool streaming index/call-ID handling.
-- Implement structured output instead of ignoring the schema.
-- Ensure OAuth persistence participates in password migration.
-- Add real OAuth, provider, route, persistence, frontend, and fuzz tests rather
-  than link-only stubs.
-- Update four legacy `routes_general` tests that still expect public OpenAI API
-  keys and `/v1/models` behavior.
-- Verify frontend typecheck/tests/build.
-- Run the full Linux test suite inside `nix develop` with ASan/UBSan.
+- Browser callback login is intentionally loopback-only. A browser running on
+  another machine must use the CLI device-code flow on the Echo host.
+- Echo's provider contract combines text from a response into one assistant
+  message. A response containing multiple distinct commentary/final phases is
+  flattened; a single phase is preserved and replayed.
+- WebSocket generation still uses the repository's synchronous provider
+  architecture. Stop/disconnect is observed between provider calls, while an
+  active transfer remains bounded by its configured request timeout.
+- Credentials written by the earlier beta migration bug may require signing in
+  again after a password change; current migrations include OAuth rows in the
+  same transaction.
+- A live OpenAI account smoke test is still required before release because CI
+  uses deterministic transport/parser tests and does not hold production
+  credentials.
 
 ## Linux Continuation
 
@@ -327,5 +345,5 @@ npm run lint
 npm run build
 ```
 
-Do not merge the beta branch until the remaining implementation items and
-sanitizer-clean verification are complete.
+Before merging, confirm the final sanitizer matrix and the Clang fuzz job are
+green, then perform the credential-free live smoke test described above.

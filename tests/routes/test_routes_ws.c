@@ -18,7 +18,7 @@
 
 /* WSChatCtx mirror — matches routes_ws.c */
 typedef struct QueuedMsg { char *data; struct QueuedMsg *next; } QueuedMsg;
-typedef struct {
+typedef struct WSChatCtx {
     Agent *agent; SessionManager *sm; SafetyConfig *safety; WSClient *ws;
     uv_loop_t *loop; char *pending_request_id; int approval_done;
     int approval_result; int ready; QueuedMsg *msg_queue;
@@ -29,6 +29,7 @@ typedef struct {
     int num_ctx; int keep_alive_secs;
     int active_runs; int closing;
     ServerContext *server_ctx; unsigned long auth_generation;
+    struct WSChatCtx *next;
 } WSChatCtx;
 
 extern void ws_chat_on_chunk(const char *, void *);
@@ -75,6 +76,9 @@ static const char *stub_agent_set_provider_token = NULL;
 static int stub_agent_set_provider_num_ctx = 0;
 static int stub_agent_set_provider_keep_alive = 0;
 static const char *stub_agent_set_model_name = NULL;
+static int stub_agent_cancel_calls = 0;
+static int stub_agent_clear_sm_calls = 0;
+static int stub_session_manager_free_calls = 0;
 
 static LLMResponse fake_resp_basic = {0};
 static LLMResponse fake_resp_with_tools = {0};
@@ -110,6 +114,9 @@ static void setup(void)
     stub_agent_set_provider_token = NULL;
     stub_agent_set_provider_num_ctx = 0;
     stub_agent_set_provider_keep_alive = 0;
+    stub_agent_cancel_calls = 0;
+    stub_agent_clear_sm_calls = 0;
+    stub_session_manager_free_calls = 0;
     free((char *)stub_agent_set_model_name);
     stub_agent_set_model_name = NULL;
 
@@ -219,7 +226,7 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *input,
 }
 
 void llm_response_free(LLMResponse *resp) { (void)resp; }
-void agent_cancel(Agent *a) { (void)a; }
+void agent_cancel(Agent *a) { (void)a; stub_agent_cancel_calls++; }
 void agent_destroy(Agent *a) {
     if (!a) return;
     free(a->session_id);
@@ -234,7 +241,8 @@ Agent *agent_create(const AgentConfig *cfg)
     return calloc(1, sizeof(Agent));
 }
 
-void agent_set_session_manager(Agent *a, SessionManager *sm) { (void)a; (void)sm; }
+void agent_set_session_manager(Agent *a, SessionManager *sm)
+{ (void)a; if (!sm) stub_agent_clear_sm_calls++; }
 void agent_set_approval_callback(Agent *a, int (*cb)(const char *, const char *, void *), void *u)
 { (void)a; (void)cb; (void)u; }
 void agent_set_title_callback(Agent *a, title_callback cb, void *u) { (void)a; (void)cb; (void)u; }
@@ -277,13 +285,17 @@ LLMProvider *ollama_provider_create(const char *b, int n, int k)
 { (void)b; (void)n; (void)k; return NULL; }
 LLMProvider *openai_compatible_provider_create(const char *b, const char *t)
 { (void)b; (void)t; return NULL; }
-LLMProvider *openai_provider_create(const char *b, const char *t)
-{ (void)b; (void)t; return NULL; }
+LLMProvider *openai_provider_create(const char *b, const char *t, OpenAIOAuth *auth)
+{ (void)b; (void)t; (void)auth; return NULL; }
 LLMProvider *opencode_zen_provider_create(const char *b, const char *t)
 { (void)b; (void)t; return NULL; }
 
 Session *session_manager_load_session(SessionManager *sm, const char *id)
 { (void)sm; (void)id; return stub_session_load_result; }
+
+SessionManager *session_manager_retain(SessionManager *sm) { return sm; }
+void session_manager_free(SessionManager *sm)
+{ if (sm) stub_session_manager_free_calls++; }
 
 int session_manager_truncate_history(SessionManager *sm, const char *sid, int idx)
 { (void)sm; (void)sid; (void)idx; return 0; }
@@ -1087,11 +1099,9 @@ START_TEST(test_on_message_provider_config_switches_provider)
     ws_chat_on_message((WSClient *)&dummy_ws,
         "{\"provider\":\"lm_studio\",\"model\":\"qwen\"}", 41, &c);
     ck_assert_int_eq(stub_agent_set_provider_calls, 1);
-    ck_assert_str_eq(stub_agent_set_provider_name, "openai");
-    /* Switches resolve the target provider's own URL, never the startup
-     * provider's — lm_studio maps to openai, whose canonical default is
-     * api.openai.com even though the session started on localhost. */
-    ck_assert_str_eq(stub_agent_set_provider_base_url, "https://api.openai.com");
+    ck_assert_str_eq(stub_agent_set_provider_name, "openai_compatible");
+    ck_assert_str_eq(stub_agent_set_provider_base_url,
+                     "http://localhost:1234");
     ck_assert_int_eq(stub_agent_set_provider_num_ctx, 4096);
     ck_assert_int_eq(stub_agent_set_provider_keep_alive, 120);
     ck_assert_str_eq(stub_agent_set_model_name, "qwen");
@@ -1558,6 +1568,28 @@ START_TEST(test_ws_init_with_session_id_query)
 }
 END_TEST
 
+START_TEST(test_logout_invalidation_cancels_agents_and_releases_storage)
+{
+    ServerContext ctx = {0};
+    Agent agent = {0};
+    WSChatCtx chat = {0};
+    chat.agent = &agent;
+    chat.sm = (SessionManager *)&ctx;
+    chat.server_ctx = &ctx;
+    ctx.ws_chat_contexts = &chat;
+
+    routes_ws_invalidate_auth(&ctx);
+
+    ck_assert_ptr_null(chat.sm);
+    ck_assert_int_eq(chat.approval_done, 1);
+    ck_assert_int_eq(chat.approval_result, 0);
+    ck_assert_int_eq(chat.ask_user_done, 1);
+    ck_assert_int_eq(stub_agent_cancel_calls, 1);
+    ck_assert_int_eq(stub_agent_clear_sm_calls, 1);
+    ck_assert_int_eq(stub_session_manager_free_calls, 1);
+}
+END_TEST
+
 Suite *routes_ws_suite(void)
 {
     Suite *s = suite_create("routes_ws");
@@ -1687,6 +1719,8 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_ws_init_with_query_no_session_param);
     tcase_add_test(tc, test_ws_init_agent_has_session_id);
     tcase_add_test(tc, test_ws_init_with_session_id_query);
+    tcase_add_test(tc,
+                   test_logout_invalidation_cancels_agents_and_releases_storage);
     suite_add_tcase(s, tc);
 
     return s;

@@ -100,11 +100,26 @@ static int sm_test_bind_null(sqlite3_stmt *s, int idx)
  * instead of letting `bind_null` silently overwrite the existing blob. */
 static int sm_enc_counter = 0;
 static int sm_enc_fail_at = -1;
+static int sm_oauth_alloc_counter = 0;
+static int sm_oauth_alloc_fail_at = -1;
 
 void session_manager_test_set_encrypt_fail(int nth_encrypt)
 {
     sm_enc_counter = 0;
     sm_enc_fail_at = nth_encrypt;
+}
+
+void session_manager_test_set_oauth_alloc_fail(int nth_allocation)
+{
+    sm_oauth_alloc_counter = 0;
+    sm_oauth_alloc_fail_at = nth_allocation;
+}
+
+static void *sm_oauth_malloc(size_t size)
+{
+    sm_oauth_alloc_counter++;
+    if (sm_oauth_alloc_counter == sm_oauth_alloc_fail_at) return NULL;
+    return malloc(size);
 }
 
 static unsigned char *sm_test_encrypt(const EncryptionKey *key,
@@ -121,6 +136,9 @@ static unsigned char *sm_test_encrypt(const EncryptionKey *key,
 #define sqlite3_bind_blob  sm_test_bind_blob
 #define sqlite3_bind_null  sm_test_bind_null
 #define encryption_encrypt sm_test_encrypt
+#define oauth_malloc       sm_oauth_malloc
+#else
+#define oauth_malloc       malloc
 #endif
 
 #define SALT_FILE "salt"
@@ -181,27 +199,44 @@ static int init_db(sqlite3 *db)
 }
 
 int session_manager_save_provider_oauth(SessionManager *sm,
-                                        const char *provider_name,
-                                        const char *data)
+                                         const char *provider_name,
+                                         const char *data)
 {
-    if (!sm || !provider_name || !provider_name[0] || !data) return -1;
+    if (!sm || !sm->db || !sm->key_initialized || !provider_name ||
+        !provider_name[0] || !data || !data[0])
+        return -1;
+    size_t provider_len = strlen(provider_name);
+    size_t plain_len = strlen(data);
+    if (provider_len > (size_t)INT_MAX ||
+        plain_len > (size_t)(INT_MAX - 128))
+        return -1;
 
-    int data_len = 0;
-    unsigned char *encrypted = encryption_encrypt(&sm->enc_key,
-                                                  (const unsigned char *)data,
-                                                  (int)strlen(data), &data_len);
-    if (!encrypted) return -1;
-
+    unsigned char *encrypted = NULL;
+    int encrypted_len = 0;
     int result = -1;
     session_manager_lock(sm);
+    encrypted = encryption_encrypt(&sm->enc_key, (const unsigned char *)data,
+                                   (int)plain_len, &encrypted_len);
+    if (!encrypted || encrypted_len <= 0)
+    {
+        log_error("encrypt provider oauth", "provider", provider_name, NULL);
+        goto cleanup;
+    }
+
     sqlite3_stmt *stmt = NULL;
     const char *sql = "INSERT INTO provider_oauth(provider, data_encrypted) "
                       "VALUES(?, ?) ON CONFLICT(provider) DO UPDATE SET "
                       "data_encrypted=excluded.data_encrypted";
-    if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) == SQLITE_OK &&
-        sqlite3_bind_text(stmt, 1, provider_name, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
-        sqlite3_bind_blob(stmt, 2, encrypted, data_len, SQLITE_TRANSIENT) == SQLITE_OK &&
-        sqlite3_step(stmt) == SQLITE_DONE)
+    int rc = sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_text(stmt, 1, provider_name, (int)provider_len,
+                               SQLITE_TRANSIENT);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_blob(stmt, 2, encrypted, encrypted_len,
+                               SQLITE_TRANSIENT);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE)
     {
         result = 0;
     }
@@ -209,71 +244,152 @@ int session_manager_save_provider_oauth(SessionManager *sm,
     {
         log_error("sqlite save provider oauth", "provider", provider_name, NULL);
     }
-    if (stmt) sqlite3_finalize(stmt);
+    if (stmt && sqlite3_finalize(stmt) != SQLITE_OK)
+    {
+        log_error("sqlite finalize provider oauth save", "provider",
+                  provider_name, NULL);
+        result = -1;
+    }
+
+cleanup:
+    if (encrypted)
+    {
+        if (encrypted_len > 0)
+            memset(encrypted, 0, (size_t)encrypted_len);
+        free(encrypted);
+    }
     session_manager_unlock(sm);
-    memset(encrypted, 0, (size_t)data_len);
-    free(encrypted);
+    return result;
+}
+
+ProviderOAuthLoadResult session_manager_load_provider_oauth_ex(
+    SessionManager *sm, const char *provider_name, char **data_out)
+{
+    if (data_out) *data_out = NULL;
+    if (!sm || !sm->db || !sm->key_initialized || !provider_name ||
+        !provider_name[0] || !data_out)
+        return PROVIDER_OAUTH_LOAD_INVALID_ARGUMENT;
+    size_t provider_len = strlen(provider_name);
+    if (provider_len > (size_t)INT_MAX)
+        return PROVIDER_OAUTH_LOAD_INVALID_ARGUMENT;
+
+    ProviderOAuthLoadResult result = PROVIDER_OAUTH_LOAD_SQL_ERROR;
+    char *data = NULL;
+    unsigned char *plain = NULL;
+    int plain_len = 0;
+    session_manager_lock(sm);
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "SELECT data_encrypted FROM provider_oauth WHERE provider = ?";
+    int rc = sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) goto cleanup;
+    rc = sqlite3_bind_text(stmt, 1, provider_name, (int)provider_len,
+                           SQLITE_TRANSIENT);
+    if (rc != SQLITE_OK) goto cleanup;
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE)
+    {
+        result = PROVIDER_OAUTH_LOAD_NOT_FOUND;
+        goto cleanup;
+    }
+    if (rc != SQLITE_ROW || sqlite3_column_type(stmt, 0) != SQLITE_BLOB)
+        goto cleanup;
+
+    const void *blob = sqlite3_column_blob(stmt, 0);
+    int blob_len = sqlite3_column_bytes(stmt, 0);
+    if (!blob || blob_len <= 0)
+    {
+        result = PROVIDER_OAUTH_LOAD_DECRYPT_ERROR;
+        goto cleanup;
+    }
+    plain = encryption_decrypt(&sm->enc_key, blob, blob_len, &plain_len);
+    if (!plain || plain_len <= 0 || memchr(plain, '\0', (size_t)plain_len))
+    {
+        result = PROVIDER_OAUTH_LOAD_DECRYPT_ERROR;
+        goto cleanup;
+    }
+    data = oauth_malloc((size_t)plain_len + 1U);
+    if (!data)
+    {
+        result = PROVIDER_OAUTH_LOAD_OOM;
+        goto cleanup;
+    }
+    memcpy(data, plain, (size_t)plain_len);
+    data[plain_len] = '\0';
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) goto cleanup;
+    result = PROVIDER_OAUTH_LOAD_OK;
+
+cleanup:
+    if (plain)
+    {
+        if (plain_len > 0) memset(plain, 0, (size_t)plain_len);
+        free(plain);
+    }
+    if (stmt && sqlite3_finalize(stmt) != SQLITE_OK)
+        result = PROVIDER_OAUTH_LOAD_SQL_ERROR;
+    if (result == PROVIDER_OAUTH_LOAD_SQL_ERROR)
+        log_error("sqlite load provider oauth", "provider", provider_name,
+                  "err", sqlite3_errmsg(sm->db), NULL);
+    else if (result == PROVIDER_OAUTH_LOAD_DECRYPT_ERROR)
+        log_error("decrypt provider oauth", "provider", provider_name, NULL);
+    else if (result == PROVIDER_OAUTH_LOAD_OOM)
+        log_error("allocate provider oauth result", "provider", provider_name,
+                  NULL);
+    if (result == PROVIDER_OAUTH_LOAD_OK)
+    {
+        *data_out = data;
+        data = NULL;
+    }
+    free(data);
+    session_manager_unlock(sm);
     return result;
 }
 
 char *session_manager_load_provider_oauth(SessionManager *sm,
-                                          const char *provider_name)
+                                           const char *provider_name)
 {
-    if (!sm || !provider_name || !provider_name[0]) return NULL;
-
     char *result = NULL;
-    session_manager_lock(sm);
-    sqlite3_stmt *stmt = NULL;
-    const char *sql = "SELECT data_encrypted FROM provider_oauth WHERE provider = ?";
-    if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) == SQLITE_OK &&
-        sqlite3_bind_text(stmt, 1, provider_name, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
-        sqlite3_step(stmt) == SQLITE_ROW)
-    {
-        const void *blob = sqlite3_column_blob(stmt, 0);
-        int blob_len = sqlite3_column_bytes(stmt, 0);
-        int plain_len = 0;
-        unsigned char *plain = encryption_decrypt(&sm->enc_key, blob, blob_len,
-                                                  &plain_len);
-        if (plain)
-        {
-            result = malloc((size_t)plain_len + 1);
-            if (result)
-            {
-                memcpy(result, plain, (size_t)plain_len);
-                result[plain_len] = '\0';
-            }
-            memset(plain, 0, (size_t)plain_len);
-            free(plain);
-        }
-    }
-    if (stmt) sqlite3_finalize(stmt);
-    session_manager_unlock(sm);
+    if (session_manager_load_provider_oauth_ex(sm, provider_name, &result) !=
+        PROVIDER_OAUTH_LOAD_OK)
+        return NULL;
     return result;
 }
 
 int session_manager_delete_provider_oauth(SessionManager *sm,
                                           const char *provider_name)
 {
-    if (!sm || !provider_name || !provider_name[0]) return -1;
+    if (!sm || !sm->db || !provider_name || !provider_name[0]) return -1;
+    size_t provider_len = strlen(provider_name);
+    if (provider_len > (size_t)INT_MAX) return -1;
 
     int result = -1;
     session_manager_lock(sm);
     sqlite3_stmt *stmt = NULL;
     const char *sql = "DELETE FROM provider_oauth WHERE provider = ?";
-    if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) == SQLITE_OK &&
-        sqlite3_bind_text(stmt, 1, provider_name, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
-        sqlite3_step(stmt) == SQLITE_DONE)
+    int rc = sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_text(stmt, 1, provider_name, (int)provider_len,
+                               SQLITE_TRANSIENT);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE)
         result = 0;
     else
         log_error("sqlite delete provider oauth", "provider", provider_name, NULL);
-    if (stmt) sqlite3_finalize(stmt);
+    if (stmt && sqlite3_finalize(stmt) != SQLITE_OK)
+        result = -1;
     session_manager_unlock(sm);
     return result;
 }
 
-static int init_encryption(SessionManager *sm, const char *password)
+static int init_encryption(SessionManager *sm, const char *password,
+                           SessionManagerCreateResult *result)
 {
-    migration_check_and_recover(sm);
+    if (migration_check_and_recover(sm, password) != 0)
+    {
+        log_error("password migration recovery failed", NULL);
+        return -1;
+    }
 
     char *salt_path = NULL;
     if (asprintf(&salt_path, "%s/%s", sm->data_dir, SALT_FILE) < 0) return -1;
@@ -291,36 +407,60 @@ static int init_encryption(SessionManager *sm, const char *password)
         }
     }
 
-    unsigned char salt[64];
+    unsigned char salt[64] = {0};
     int salt_len = 0;
     if (encryption_salt_load(salt_path, salt, &salt_len) != 0)
     {
         log_error("failed to load salt", NULL);
+        if (is_first_run) (void)unlink(salt_path);
+        memset(salt, 0, sizeof(salt));
         free(salt_path);
         return -1;
     }
-    free(salt_path);
 
     if (encryption_key_derive(password, salt, salt_len, &sm->enc_key) != 0)
     {
         log_error("key derivation failed", NULL);
+        if (is_first_run) (void)unlink(salt_path);
+        memset(salt, 0, sizeof(salt));
+        free(salt_path);
         return -1;
     }
 
     sm->key_initialized = 1;
 
     char *verifier_path = NULL;
-    if (asprintf(&verifier_path, "%s/.verifier", sm->data_dir) >= 0)
+    if (asprintf(&verifier_path, "%s/.verifier", sm->data_dir) < 0)
     {
-        struct stat st;
-        int verifier_exists = (stat(verifier_path, &st) == 0);
-        if (!verifier_exists)
+        if (is_first_run) (void)unlink(salt_path);
+        memset(salt, 0, sizeof(salt));
+        free(salt_path);
+        return -1;
+    }
+    struct stat st;
+    int verifier_exists = stat(verifier_path, &st) == 0;
+    int verifier_result = verifier_exists ?
+        encryption_check_verifier(&sm->enc_key, verifier_path) :
+        (is_first_run ? encryption_create_verifier(&sm->enc_key, verifier_path) : -1);
+    if (verifier_result != 0)
+    {
+        if (verifier_exists) *result = SESSION_MANAGER_CREATE_AUTH_FAILED;
+        log_error(verifier_exists ? "password verifier mismatch" :
+                    (is_first_run ? "failed to create verifier" :
+                                    "password verifier missing"), NULL);
+        if (is_first_run)
         {
-            if (encryption_create_verifier(&sm->enc_key, verifier_path) != 0)
-                log_warn("failed to create verifier", NULL);
+            (void)unlink(verifier_path);
+            (void)unlink(salt_path);
         }
         free(verifier_path);
+        memset(salt, 0, sizeof(salt));
+        free(salt_path);
+        return -1;
     }
+    free(verifier_path);
+    memset(salt, 0, sizeof(salt));
+    free(salt_path);
 
     log_info("encryption initialized", NULL);
     return 0;
@@ -328,6 +468,16 @@ static int init_encryption(SessionManager *sm, const char *password)
 
 SessionManager *session_manager_create(const char *data_dir, const char *password)
 {
+    return session_manager_create_ex(data_dir, password, NULL);
+}
+
+SessionManager *session_manager_create_ex(const char *data_dir,
+                                          const char *password,
+                                          SessionManagerCreateResult *result)
+{
+    SessionManagerCreateResult local_result = SESSION_MANAGER_CREATE_STORAGE_FAILED;
+    if (!result) result = &local_result;
+    *result = SESSION_MANAGER_CREATE_STORAGE_FAILED;
     if (!data_dir || !password) return NULL;
 
     SessionManager *sm = calloc(1, sizeof(SessionManager));
@@ -336,6 +486,7 @@ SessionManager *session_manager_create(const char *data_dir, const char *passwor
     sm->data_dir = str_dup(data_dir);
     if (!sm->data_dir) { free(sm); return NULL; }
 
+    atomic_init(&sm->ref_count, 1U);
     pthread_mutex_init(&sm->lock, NULL);
 
     /* mkdir_p must run before init_encryption: the salt file is written
@@ -347,7 +498,7 @@ SessionManager *session_manager_create(const char *data_dir, const char *passwor
         return NULL;
     }
 
-    if (init_encryption(sm, password) != 0)
+    if (init_encryption(sm, password, result) != 0)
     {
         log_error("failed to initialize encryption", NULL);
         session_manager_free(sm);
@@ -388,12 +539,30 @@ SessionManager *session_manager_create(const char *data_dir, const char *passwor
     }
 
     log_info("session manager initialized", "data_dir", sm->data_dir, NULL);
+    *result = SESSION_MANAGER_CREATE_OK;
+    return sm;
+}
+
+SessionManager *session_manager_retain(SessionManager *sm)
+{
+    if (!sm) return NULL;
+    unsigned int old_count = atomic_fetch_add_explicit(
+        &sm->ref_count, 1U, memory_order_relaxed);
+    if (old_count == 0U || old_count == UINT_MAX)
+    {
+        (void)atomic_fetch_sub_explicit(&sm->ref_count, 1U,
+                                        memory_order_relaxed);
+        return NULL;
+    }
     return sm;
 }
 
 void session_manager_free(SessionManager *sm)
 {
     if (!sm) return;
+    if (atomic_fetch_sub_explicit(&sm->ref_count, 1U,
+                                  memory_order_acq_rel) != 1U)
+        return;
     if (sm->db) sqlite3_close(sm->db);
     pthread_mutex_destroy(&sm->lock);
     free(sm->data_dir);
@@ -1021,7 +1190,7 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
     if (!s) { session_manager_unlock(sm); return -1; }
 
     int idx = s->messages_count;
-    if (idx >= (int)(SIZE_MAX / sizeof(Message)) - 1)
+    if (idx < 0 || (size_t)idx >= SIZE_MAX / sizeof(Message) - 1U)
     {
         session_free(s);
         session_manager_unlock(sm);
@@ -1038,6 +1207,16 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
     s->messages[idx].content = str_dup(content ? content : "");
     if (tool_call_id) s->messages[idx].tool_call_id = str_dup(tool_call_id);
     if (tool_name) s->messages[idx].tool_name = str_dup(tool_name);
+    if (!s->messages[idx].role || !s->messages[idx].content ||
+        (tool_call_id && !s->messages[idx].tool_call_id) ||
+        (tool_name && !s->messages[idx].tool_name))
+    {
+        message_clear(&s->messages[idx]);
+        s->messages_count = idx;
+        session_free(s);
+        session_manager_unlock(sm);
+        return -1;
+    }
 
     int rc = save_session_core_locked(sm, s, SM_UPSERT);
     session_manager_unlock(sm);
@@ -1060,21 +1239,7 @@ int session_manager_truncate_history(SessionManager *sm, const char *session_id,
     }
 
     for (int i = index; i < s->messages_count; i++)
-    {
-        free(s->messages[i].role);
-        free(s->messages[i].content);
-        free(s->messages[i].id);
-        free(s->messages[i].tool_call_id);
-        free(s->messages[i].tool_name);
-        free(s->messages[i].error_category);
-        free(s->messages[i].thinking);
-        if (s->messages[i].tool_calls)
-        {
-            for (int j = 0; j < s->messages[i].tool_calls_count; j++)
-                tool_call_free(&s->messages[i].tool_calls[j]);
-            free(s->messages[i].tool_calls);
-        }
-    }
+        message_clear(&s->messages[i]);
     s->messages_count = index;
 
     int rc = save_session_core_locked(sm, s, SM_UPSERT);

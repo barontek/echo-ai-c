@@ -8,6 +8,7 @@
 
 #include "routes.h"
 #include "routes_auth.h"
+#include "routes_ws.h"
 #include "../middleware.h"
 #include "../../agent/agent.h"
 #include "../../safety/safety.h"
@@ -91,7 +92,8 @@ void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
     ctx->sm = sm;
-    if (ctx->openai_oauth) openai_oauth_attach_session(ctx->openai_oauth, sm);
+    if (ctx->openai_oauth && openai_oauth_attach_session(ctx->openai_oauth, sm) != 0)
+        log_error("failed to load stored OpenAI credentials", NULL);
     registry_set_session_manager(sm);
     if (ctx->agent) agent_set_session_manager(ctx->agent, sm);
     free(ctx->unlock_token);
@@ -112,7 +114,7 @@ void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
 
 void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
-    if (ctx->state != STATE_LOCKED && ctx->state != STATE_UNLOCKED)
+    if (ctx->state != STATE_LOCKED)
     {
         server_response_error(client, 400, "not locked");
         return;
@@ -153,75 +155,43 @@ void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
     log_debug("unlock", "home", home ? home : "NULL", NULL);
     if (!home) { free(password); server_response_error(client, 500, "HOME not set"); return; }
 
-    char *salt_path = NULL;
-    if (asprintf(&salt_path, "%s/.config/echo-ai/salt", home) < 0)
-    { free(password); server_response_error(client, 500, "oom"); return; }
-
-    unsigned char salt[64];
-    int salt_len = 0;
-    if (encryption_salt_load(salt_path, salt, &salt_len) != 0)
+    char *data_dir = NULL;
+    if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0)
     {
-        free(salt_path);
+        memset(password, 0, strlen(password));
         free(password);
-        server_response_error(client, 500, "salt not found");
+        server_response_error(client, 500, "oom");
         return;
     }
-
-    EncryptionKey key;
-    if (encryption_key_derive(password, salt, salt_len, &key) != 0)
-    {
-        free(salt_path);
-        free(password);
-        server_response_error(client, 500, "key derivation failed");
-        return;
-    }
-
-    char *verifier_path = NULL;
-    if (asprintf(&verifier_path, "%s/.config/echo-ai/.verifier", home) < 0)
-    { memset(&key, 0, sizeof(key)); free(salt_path); free(password); server_response_error(client, 500, "oom"); return; }
-
-    int rc = encryption_check_verifier(&key, verifier_path);
-    log_debug("verifier", "result", rc == 0 ? "ok" : "fail", NULL);
-    free(verifier_path);
-    if (rc != 0)
-    {
-        memset(&key, 0, sizeof(key));
-        if (ctx->rate_limiter)
-            rate_limiter_record_unlock_failure(ctx->rate_limiter, req->ip);
-        free(salt_path);
-        free(password);
-        server_response_error(client, 401, "wrong password");
-        return;
-    }
-
-    memset(&key, 0, sizeof(key));
-    free(salt_path);
-
-    if (!ctx->sm)
-    {
-        char *data_dir = NULL;
-        if (asprintf(&data_dir, "%s/.config/echo-ai", home) >= 0)
-        {
-            SessionManager *sm = session_manager_create(data_dir, password);
-            free(data_dir);
-            if (sm)
-            {
-                ctx->sm = sm;
-                if (ctx->openai_oauth) openai_oauth_attach_session(ctx->openai_oauth, sm);
-                registry_set_session_manager(sm);
-                if (ctx->agent) agent_set_session_manager(ctx->agent, sm);
-            }
-        }
-    }
-
+    SessionManagerCreateResult create_result = SESSION_MANAGER_CREATE_STORAGE_FAILED;
+    SessionManager *sm = session_manager_create_ex(data_dir, password,
+                                                    &create_result);
+    free(data_dir);
+    memset(password, 0, strlen(password));
     free(password);
-
+    if (!sm)
+    {
+        if (create_result == SESSION_MANAGER_CREATE_AUTH_FAILED && ctx->rate_limiter)
+            rate_limiter_record_unlock_failure(ctx->rate_limiter, req->ip);
+        if (create_result == SESSION_MANAGER_CREATE_AUTH_FAILED)
+            server_response_error(client, 401, "wrong password");
+        else
+            server_response_error(client, 500, "session storage unavailable");
+        return;
+    }
     char *token = generate_unlock_token();
     if (!token)
     {
+        session_manager_free(sm);
         server_response_error(client, 500, "failed to generate unlock token");
         return;
     }
+    ctx->sm = sm;
+    if (ctx->openai_oauth && openai_oauth_attach_session(ctx->openai_oauth, sm) != 0)
+        log_error("failed to load stored OpenAI credentials", NULL);
+    registry_set_session_manager(sm);
+    if (ctx->agent) agent_set_session_manager(ctx->agent, sm);
+
     free(ctx->unlock_token);
     ctx->unlock_token = token;
     ctx->auth_generation++;
@@ -246,8 +216,18 @@ void handle_logout(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
 
+    if (ctx->openai_oauth && openai_oauth_attach_session(ctx->openai_oauth, NULL) != 0)
+    {
+        server_response_error(client, 500, "failed to lock credential storage");
+        return;
+    }
     free(ctx->unlock_token);
     ctx->unlock_token = NULL;
+    routes_ws_invalidate_auth(ctx);
+    if (ctx->agent) agent_set_session_manager(ctx->agent, NULL);
+    registry_set_session_manager(NULL);
+    session_manager_free(ctx->sm);
+    ctx->sm = NULL;
     ctx->auth_generation++;
     ctx->state = STATE_LOCKED;
     server_response_json(client, 200, "{\"message\":\"logged out\"}");
@@ -288,7 +268,10 @@ void handle_change_password(HTTPRequest *req, Client *client, ServerContext *ctx
 
     if (rc != 0)
     {
-        server_response_error(client, 500, "password change failed");
+        server_response_error(client, 500,
+            rc == -2 ?
+                "password changed but activation is incomplete; restart and unlock with the new password" :
+                "password change failed");
         return;
     }
 

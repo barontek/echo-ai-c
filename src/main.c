@@ -145,6 +145,7 @@ static SessionManager *init_session_manager(Conf *conf)
 }
 
 static SessionManager *g_session_manager = NULL;
+static int run_openai_device_login(OpenAIOAuth *auth);
 
 static void run_chat(Conf *conf)
 {
@@ -168,13 +169,27 @@ static void run_chat(Conf *conf)
 
     OpenAIOAuth *openai_auth = openai_oauth_create();
     if (!openai_auth) { registry_destroy(); safety_config_free(safety); return; }
+    registry_set_openai_oauth(openai_auth);
     AgentConfig *cfg = load_agent_config(conf);
     if (cfg) cfg->openai_auth = openai_auth;
-    if (!cfg) { log_error("failed to load agent config", NULL); registry_destroy(); safety_config_free(safety); return; }
+    if (!cfg) { log_error("failed to load agent config", NULL); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
 
     Agent *agent = agent_create(cfg);
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
     agent_set_safety(agent, safety);
+
+    SessionManager *sm = NULL;
+    if (strcmp(cfg->provider, "openai") == 0)
+    {
+        sm = init_session_manager(conf);
+        if (sm)
+        {
+            registry_set_session_manager(sm);
+            agent_set_session_manager(agent, sm);
+            if (openai_oauth_attach_session(openai_auth, sm) != 0)
+                log_error("failed to load stored OpenAI credentials", NULL);
+        }
+    }
 
     registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
                                   cfg->num_ctx, cfg->keep_alive_secs,
@@ -199,6 +214,20 @@ static void run_chat(Conf *conf)
         if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
 
         if (strcmp(line, "/exit") == 0 || strcmp(line, "/quit") == 0) break;
+        if (strcmp(line, "/openai-login") == 0)
+        {
+            if (!sm)
+                printf("OpenAI login requires agent.provider=openai and encrypted storage.\n\n");
+            else
+                (void)run_openai_device_login(openai_auth);
+            continue;
+        }
+        if (strcmp(line, "/openai-logout") == 0)
+        {
+            printf(openai_oauth_logout(openai_auth) == 0 ?
+                       "OpenAI signed out.\n\n" : "OpenAI sign-out failed.\n\n");
+            continue;
+        }
         if (line[0] == '\0') continue;
 
         printf("\n");
@@ -217,6 +246,8 @@ static void run_chat(Conf *conf)
     free(line);
     agent_destroy(agent);
     openai_oauth_destroy(openai_auth);
+    registry_set_session_manager(NULL);
+    session_manager_free(sm);
     registry_destroy();
     safety_config_free(safety);
 }
@@ -233,7 +264,42 @@ static void print_cli_help(void)
     printf("  /redo           Redo last undone file change\n");
     printf("  /clear          Clear the screen\n");
     printf("  /sessions       List saved sessions\n");
+    printf("  /openai-login    Sign in to OpenAI using a device code\n");
+    printf("  /openai-logout   Remove stored OpenAI credentials\n");
     printf("  /help           Show this message\n");
+}
+
+static int run_openai_device_login(OpenAIOAuth *auth)
+{
+    char *verification_url = NULL;
+    char *user_code = NULL;
+    char *login_id = NULL;
+    unsigned int interval = 0;
+    if (openai_oauth_device_start(auth, &verification_url, &user_code,
+                                  &login_id, &interval) != 0)
+    {
+        printf("OpenAI device login could not be started.\n\n");
+        return -1;
+    }
+    printf("Open %s and enter code: %s\n", verification_url, user_code);
+    printf("Waiting for OpenAI authorization...\n");
+    free(verification_url);
+    free(user_code);
+    OpenAIOAuthDeviceResult result = OPENAI_OAUTH_DEVICE_PENDING;
+    while (result == OPENAI_OAUTH_DEVICE_PENDING ||
+           result == OPENAI_OAUTH_DEVICE_TRANSIENT)
+    {
+        sleep(interval > 0 ? interval : 1U);
+        result = openai_oauth_device_poll(auth, login_id);
+    }
+    free(login_id);
+    if (result == OPENAI_OAUTH_DEVICE_COMPLETE)
+    {
+        printf("OpenAI sign-in complete.\n\n");
+        return 0;
+    }
+    printf("OpenAI device login failed or expired.\n\n");
+    return -1;
 }
 
 static void run_cli(Conf *conf)
@@ -260,6 +326,7 @@ static void run_cli(Conf *conf)
 
     OpenAIOAuth *openai_auth = openai_oauth_create();
     if (!openai_auth) { registry_destroy(); safety_config_free(safety); return; }
+    registry_set_openai_oauth(openai_auth);
     AgentConfig *cfg = load_agent_config(conf);
     if (cfg) cfg->openai_auth = openai_auth;
     if (!cfg) { log_error("failed to load agent config", NULL); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
@@ -277,7 +344,8 @@ static void run_cli(Conf *conf)
     {
         registry_set_session_manager(g_session_manager);
         agent_set_session_manager(agent, g_session_manager);
-        openai_oauth_attach_session(openai_auth, g_session_manager);
+        if (openai_oauth_attach_session(openai_auth, g_session_manager) != 0)
+            log_error("failed to load stored OpenAI credentials", NULL);
         log_info("session manager ready", NULL);
     }
 
@@ -314,6 +382,7 @@ static void run_cli(Conf *conf)
             AgentConfig *new_cfg = load_agent_config(conf);
             if (new_cfg)
             {
+                new_cfg->openai_auth = openai_auth;
                 agent = agent_create(new_cfg);
                 if (agent && g_session_manager)
                 {
@@ -330,6 +399,24 @@ static void run_cli(Conf *conf)
         {
             print_cli_help();
             printf("\n");
+            continue;
+        }
+
+        if (strcmp(line, "/openai-login") == 0)
+        {
+            if (!g_session_manager)
+                printf("OpenAI login requires encrypted session storage.\n\n");
+            else
+                (void)run_openai_device_login(openai_auth);
+            continue;
+        }
+
+        if (strcmp(line, "/openai-logout") == 0)
+        {
+            if (openai_oauth_logout(openai_auth) == 0)
+                printf("OpenAI signed out.\n\n");
+            else
+                printf("OpenAI sign-out failed.\n\n");
             continue;
         }
 
@@ -506,6 +593,7 @@ static void run_web(Conf *conf, const char *config_path)
 
     OpenAIOAuth *openai_auth = openai_oauth_create();
     if (!openai_auth) { registry_destroy(); safety_config_free(safety); return; }
+    registry_set_openai_oauth(openai_auth);
     AgentConfig *cfg = load_agent_config(conf);
     if (cfg) cfg->openai_auth = openai_auth;
     if (!cfg) { log_error("failed to load agent config", NULL); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }

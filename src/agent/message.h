@@ -22,11 +22,15 @@ typedef struct {
     char *error_category;
     double timestamp;
     char *thinking;
+    char *phase;
+    char *provider_state;
 } Message;
 
 typedef struct {
     char *content;
     char *thinking;
+    char *phase;
+    char *provider_state;
     ToolCall *tool_calls;
     int tool_calls_count;
 } LLMResponse;
@@ -43,7 +47,8 @@ void message_free(Message *msg);
 void message_free_all(Message *msgs, int count);
 
 /* C15: clear all owned fields of `msg` (role, content, id, tool_call_id,
- * tool_name, error_category, thinking, and every owned entry of `tool_calls`)
+ * tool_name, error_category, thinking, phase, provider_state, and every owned
+ * entry of `tool_calls`)
  * AND reset the field pointers / counts to NULL / 0. Does NOT free `msg`
  * itself — the caller still owns the surrounding array (or single Message
  * allocation). Use this for every per-message teardown path so that adding a

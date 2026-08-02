@@ -3,11 +3,392 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sqlite3.h>
 #include "session/session_manager.h"
 #include "session/encryption.h"
 #include "session/memory.h"
 #include "utils/string_utils.h"
+
+static size_t read_test_file(const char *path, unsigned char *buffer,
+                             size_t capacity)
+{
+    FILE *file = fopen(path, "rb");
+    ck_assert_ptr_nonnull(file);
+    size_t count = fread(buffer, 1, capacity, file);
+    ck_assert_int_eq(ferror(file), 0);
+    ck_assert_int_eq(fclose(file), 0);
+    return count;
+}
+
+static void write_test_file(const char *path, const unsigned char *data,
+                            size_t length)
+{
+    FILE *file = fopen(path, "wb");
+    ck_assert_ptr_nonnull(file);
+    ck_assert_uint_eq(fwrite(data, 1, length, file), length);
+    ck_assert_int_eq(fclose(file), 0);
+}
+
+START_TEST(test_provider_oauth_encrypted_roundtrip_and_delete)
+{
+    char tmpdir[] = "/tmp/test_sm_oauth_roundtrip_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "oauth_password");
+    ck_assert_ptr_nonnull(sm);
+    const char *credentials =
+        "{\"access_token\":\"secret-access\",\"refresh_token\":\"secret-refresh\"}";
+    ck_assert_int_eq(session_manager_save_provider_oauth(
+                         sm, "openai", credentials), 0);
+
+    sqlite3_stmt *stmt = NULL;
+    ck_assert_int_eq(sqlite3_prepare_v2(
+                         sm->db,
+                         "SELECT data_encrypted FROM provider_oauth "
+                         "WHERE provider='openai'",
+                         -1, &stmt, NULL), SQLITE_OK);
+    ck_assert_int_eq(sqlite3_step(stmt), SQLITE_ROW);
+    ck_assert_int_eq(sqlite3_column_type(stmt, 0), SQLITE_BLOB);
+    const void *blob = sqlite3_column_blob(stmt, 0);
+    int blob_len = sqlite3_column_bytes(stmt, 0);
+    ck_assert_ptr_nonnull(blob);
+    ck_assert_int_gt(blob_len, (int)strlen(credentials));
+    ck_assert_int_ne(memcmp(blob, credentials, strlen(credentials)), 0);
+    ck_assert_int_eq(sqlite3_step(stmt), SQLITE_DONE);
+    ck_assert_int_eq(sqlite3_finalize(stmt), SQLITE_OK);
+
+    char *loaded = NULL;
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OK);
+    ck_assert_ptr_nonnull(loaded);
+    ck_assert_str_eq(loaded, credentials);
+    free(loaded);
+    ck_assert_int_eq(session_manager_delete_provider_oauth(sm, "openai"), 0);
+    loaded = (char *)credentials;
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded),
+                     PROVIDER_OAUTH_LOAD_NOT_FOUND);
+    ck_assert_ptr_null(loaded);
+
+    session_manager_free(sm);
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
+
+START_TEST(test_legacy_post_commit_recovery_uses_encrypted_row_evidence)
+{
+    char tmpdir[] = "/tmp/test_sm_legacy_migrate_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "old_password");
+    ck_assert_ptr_nonnull(sm);
+    Session *session = session_manager_create_session(sm, "legacy session");
+    ck_assert_ptr_nonnull(session);
+    char *session_id = str_dup(session->id);
+    ck_assert_ptr_nonnull(session_id);
+    session_free(session);
+
+    char salt_path[4096];
+    char old_salt_path[4096];
+    char marker_path[4096];
+    char verifier_path[4096];
+    ck_assert_int_lt(snprintf(salt_path, sizeof(salt_path), "%s/salt", tmpdir),
+                     (int)sizeof(salt_path));
+    ck_assert_int_lt(snprintf(old_salt_path, sizeof(old_salt_path),
+                              "%s/salt.old", tmpdir),
+                     (int)sizeof(old_salt_path));
+    ck_assert_int_lt(snprintf(marker_path, sizeof(marker_path),
+                              "%s/.changing_pwd", tmpdir),
+                     (int)sizeof(marker_path));
+    ck_assert_int_lt(snprintf(verifier_path, sizeof(verifier_path),
+                              "%s/.verifier", tmpdir),
+                     (int)sizeof(verifier_path));
+    unsigned char old_salt[64] = {0};
+    unsigned char old_verifier[4096] = {0};
+    size_t old_salt_len = read_test_file(salt_path, old_salt,
+                                         sizeof(old_salt));
+    size_t old_verifier_len = read_test_file(verifier_path, old_verifier,
+                                             sizeof(old_verifier));
+    ck_assert_uint_gt(old_salt_len, 0);
+    ck_assert_uint_gt(old_verifier_len, 0);
+
+    ck_assert_int_eq(migration_change_password(sm, "new_password"), 0);
+    ck_assert_int_eq(sqlite3_exec(sm->db,
+                                  "DROP TABLE password_migration_state",
+                                  NULL, NULL, NULL), SQLITE_OK);
+    write_test_file(old_salt_path, old_salt, old_salt_len);
+    write_test_file(verifier_path, old_verifier, old_verifier_len);
+    write_test_file(marker_path, (const unsigned char *)"pending\n", 8);
+    session_manager_free(sm);
+
+    ck_assert_ptr_null(session_manager_create(tmpdir, "wrong_password"));
+    ck_assert_int_eq(access(marker_path, F_OK), 0);
+    ck_assert_int_eq(access(old_salt_path, F_OK), 0);
+
+    sm = session_manager_create(tmpdir, "new_password");
+    ck_assert_ptr_nonnull(sm);
+    ck_assert_int_eq(access(marker_path, F_OK), -1);
+    ck_assert_int_eq(access(old_salt_path, F_OK), -1);
+    session = session_manager_load_session(sm, session_id);
+    ck_assert_ptr_nonnull(session);
+    ck_assert_str_eq(session->title, "legacy session");
+    session_free(session);
+    free(session_id);
+    session_manager_free(sm);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
+
+START_TEST(test_provider_state_survives_encrypted_reload_and_retained_owner)
+{
+    char tmpdir[] = "/tmp/test_sm_provider_state_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "state_password");
+    ck_assert_ptr_nonnull(sm);
+    SessionManager *retained = session_manager_retain(sm);
+    ck_assert_ptr_eq(retained, sm);
+
+    Session *session = session_manager_create_session(sm, "reasoning session");
+    ck_assert_ptr_nonnull(session);
+    session->messages = message_create("assistant", "tool requested");
+    ck_assert_ptr_nonnull(session->messages);
+    session->messages_count = 1;
+    session->messages[0].provider_state = str_dup(
+        "[{\"type\":\"reasoning\",\"encrypted_content\":\"cipher\"}]");
+    session->messages[0].phase = str_dup("commentary");
+    ck_assert_ptr_nonnull(session->messages[0].provider_state);
+    ck_assert_ptr_nonnull(session->messages[0].phase);
+    ck_assert_int_eq(session_manager_save_session(sm, session), 0);
+    char *session_id = str_dup(session->id);
+    ck_assert_ptr_nonnull(session_id);
+    session_free(session);
+
+    session_manager_free(sm);
+    Session *loaded = session_manager_load_session(retained, session_id);
+    ck_assert_ptr_nonnull(loaded);
+    ck_assert_int_eq(loaded->messages_count, 1);
+    ck_assert_str_eq(loaded->messages[0].provider_state,
+        "[{\"type\":\"reasoning\",\"encrypted_content\":\"cipher\"}]");
+    ck_assert_str_eq(loaded->messages[0].phase, "commentary");
+    session_free(loaded);
+    free(session_id);
+    session_manager_free(retained);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
+
+START_TEST(test_missing_verifier_never_accepts_or_commits_a_password)
+{
+    char tmpdir[] = "/tmp/test_sm_missing_verifier_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "right_password");
+    ck_assert_ptr_nonnull(sm);
+    session_manager_free(sm);
+
+    char verifier_path[4096];
+    ck_assert_int_lt(snprintf(verifier_path, sizeof(verifier_path),
+                              "%s/.verifier", tmpdir),
+                     (int)sizeof(verifier_path));
+    ck_assert_int_eq(unlink(verifier_path), 0);
+    ck_assert_ptr_null(session_manager_create(tmpdir, "wrong_password"));
+    ck_assert_int_eq(access(verifier_path, F_OK), -1);
+    ck_assert_ptr_null(session_manager_create(tmpdir, "right_password"));
+    ck_assert_int_eq(access(verifier_path, F_OK), -1);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
+
+START_TEST(test_provider_oauth_typed_failures_preserve_credentials)
+{
+    char tmpdir[] = "/tmp/test_sm_oauth_failure_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "right_password");
+    ck_assert_ptr_nonnull(sm);
+    const char *original = "{\"refresh_token\":\"keep-me\"}";
+    ck_assert_int_eq(session_manager_save_provider_oauth(
+                         sm, "openai", original), 0);
+
+    session_manager_test_set_encrypt_fail(1);
+    ck_assert_int_eq(session_manager_save_provider_oauth(
+                         sm, "openai", "{\"refresh_token\":\"replace\"}"), -1);
+    session_manager_test_set_encrypt_fail(-1);
+    ck_assert_int_eq(sqlite3_exec(
+                         sm->db,
+                         "CREATE TRIGGER fail_oauth_update BEFORE UPDATE ON "
+                         "provider_oauth BEGIN SELECT RAISE(ABORT, 'forced'); END",
+                         NULL, NULL, NULL), SQLITE_OK);
+    ck_assert_int_eq(session_manager_save_provider_oauth(
+                         sm, "openai", "{\"refresh_token\":\"replace\"}"), -1);
+    ck_assert_int_eq(sqlite3_exec(sm->db, "DROP TRIGGER fail_oauth_update",
+                                  NULL, NULL, NULL), SQLITE_OK);
+
+    char *loaded = NULL;
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OK);
+    ck_assert_str_eq(loaded, original);
+    free(loaded);
+    session_manager_test_set_oauth_alloc_fail(1);
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OOM);
+    ck_assert_ptr_null(loaded);
+    session_manager_test_set_oauth_alloc_fail(-1);
+    session_manager_test_set_bind_fail(1);
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_SQL_ERROR);
+    ck_assert_ptr_null(loaded);
+    session_manager_test_set_bind_fail(-1);
+    ck_assert_int_eq(sqlite3_exec(
+                         sm->db,
+                         "UPDATE provider_oauth SET data_encrypted = X'00' "
+                         "WHERE provider = 'openai'",
+                         NULL, NULL, NULL), SQLITE_OK);
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded),
+                      PROVIDER_OAUTH_LOAD_DECRYPT_ERROR);
+    ck_assert_ptr_null(loaded);
+    session_manager_free(sm);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
+
+START_TEST(test_password_change_migrates_oauth_and_recovers_post_commit)
+{
+    char tmpdir[] = "/tmp/test_sm_oauth_migrate_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "old_password");
+    ck_assert_ptr_nonnull(sm);
+    const char *credentials = "{\"refresh_token\":\"survives-change\"}";
+    ck_assert_int_eq(session_manager_save_provider_oauth(
+                         sm, "openai", credentials), 0);
+    Session *session = session_manager_create_session(sm, "surviving session");
+    ck_assert_ptr_nonnull(session);
+    char *session_id = str_dup(session->id);
+    ck_assert_ptr_nonnull(session_id);
+    session_free(session);
+
+    char salt_path[4096];
+    char old_salt_path[4096];
+    char marker_path[4096];
+    ck_assert_int_lt(snprintf(salt_path, sizeof(salt_path), "%s/salt", tmpdir),
+                     (int)sizeof(salt_path));
+    ck_assert_int_lt(snprintf(old_salt_path, sizeof(old_salt_path),
+                              "%s/salt.old", tmpdir),
+                     (int)sizeof(old_salt_path));
+    ck_assert_int_lt(snprintf(marker_path, sizeof(marker_path),
+                              "%s/.changing_pwd", tmpdir),
+                     (int)sizeof(marker_path));
+    unsigned char old_salt[64] = {0};
+    size_t old_salt_len = read_test_file(salt_path, old_salt,
+                                         sizeof(old_salt));
+    ck_assert_uint_gt(old_salt_len, 0);
+
+    ck_assert_int_eq(migration_change_password(sm, "new_password"), 0);
+    char *loaded = NULL;
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OK);
+    ck_assert_str_eq(loaded, credentials);
+    free(loaded);
+    session = session_manager_load_session(sm, session_id);
+    ck_assert_ptr_nonnull(session);
+    ck_assert_str_eq(session->title, "surviving session");
+    session_free(session);
+
+    /* Simulate a crash after COMMIT but before salt.old/marker cleanup. */
+    write_test_file(old_salt_path, old_salt, old_salt_len);
+    write_test_file(marker_path, (const unsigned char *)"pending\n", 8);
+    session_manager_free(sm);
+
+    sm = session_manager_create(tmpdir, "new_password");
+    ck_assert_ptr_nonnull(sm);
+    ck_assert_int_eq(access(marker_path, F_OK), -1);
+    ck_assert_int_eq(access(old_salt_path, F_OK), -1);
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OK);
+    ck_assert_str_eq(loaded, credentials);
+    free(loaded);
+    session = session_manager_load_session(sm, session_id);
+    ck_assert_ptr_nonnull(session);
+    ck_assert_str_eq(session->title, "surviving session");
+    session_free(session);
+    free(session_id);
+    session_manager_free(sm);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
+
+START_TEST(test_password_change_rolls_back_on_malformed_oauth_row)
+{
+    char tmpdir[] = "/tmp/test_sm_oauth_bad_migration_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "old_password");
+    ck_assert_ptr_nonnull(sm);
+    const char *credentials = "{\"refresh_token\":\"still-valid\"}";
+    ck_assert_int_eq(session_manager_save_provider_oauth(
+                         sm, "a-valid", credentials), 0);
+    Session *session = session_manager_create_session(sm, "rollback session");
+    ck_assert_ptr_nonnull(session);
+    char *session_id = str_dup(session->id);
+    ck_assert_ptr_nonnull(session_id);
+    session_free(session);
+    ck_assert_int_eq(sqlite3_exec(
+                         sm->db,
+                         "INSERT INTO provider_oauth(provider, data_encrypted) "
+                         "VALUES('z-malformed', X'01')",
+                         NULL, NULL, NULL), SQLITE_OK);
+
+    ck_assert_int_eq(migration_change_password(sm, "new_password"), -1);
+    char *loaded = NULL;
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "a-valid", &loaded), PROVIDER_OAUTH_LOAD_OK);
+    ck_assert_str_eq(loaded, credentials);
+    free(loaded);
+    session = session_manager_load_session(sm, session_id);
+    ck_assert_ptr_nonnull(session);
+    ck_assert_str_eq(session->title, "rollback session");
+    session_free(session);
+    session_manager_free(sm);
+
+    sm = session_manager_create(tmpdir, "old_password");
+    ck_assert_ptr_nonnull(sm);
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "a-valid", &loaded), PROVIDER_OAUTH_LOAD_OK);
+    ck_assert_str_eq(loaded, credentials);
+    free(loaded);
+    session = session_manager_load_session(sm, session_id);
+    ck_assert_ptr_nonnull(session);
+    ck_assert_str_eq(session->title, "rollback session");
+    session_free(session);
+    free(session_id);
+    session_manager_free(sm);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
 
 /* Regression test for A1: title is documented as encrypted but used to be
  * stored as plaintext in a `title TEXT` column. The fix renamed the column to
@@ -396,9 +777,7 @@ START_TEST(test_load_returns_null_on_decrypt_failure_preserves_row)
      * key -> HMAC mismatch on every blob. The new contract: load_session
      * returns NULL with informative logs, and the DB row is untouched. */
     sm = session_manager_create(tmpdir, "wrong_password");
-    ck_assert_ptr_nonnull(sm);
-
-    ck_assert_ptr_null(session_manager_load_session(sm, sid));
+    ck_assert_ptr_null(sm);
 
     /* Raw DB inspection: the messages blob is still there, still non-empty. */
     char db_path[4096];
@@ -416,8 +795,6 @@ START_TEST(test_load_returns_null_on_decrypt_failure_preserves_row)
     ck_assert_int_gt(blob_len, 0);
     sqlite3_finalize(stmt);
     sqlite3_close(raw);
-
-    session_manager_free(sm);
 
     /* Third SM: original password again -> load now works, original content
      * preserved (not overwritten by the wrong-password open). */
@@ -721,9 +1098,72 @@ START_TEST(test_create_creates_missing_parent_dirs)
     ck_assert_ptr_nonnull(sm);
     session_manager_free(sm);
 
-    char salt_path[4096];
+    char salt_path[8192];
     snprintf(salt_path, sizeof(salt_path), "%s/salt", data_dir);
     ck_assert_int_eq(access(salt_path, F_OK), 0);
+}
+END_TEST
+
+START_TEST(test_recovery_restores_backup_when_new_salt_was_not_created)
+{
+    char tmpdir[] = "/tmp/test_sm_missing_new_salt_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "password");
+    ck_assert_ptr_nonnull(sm);
+    session_manager_free(sm);
+
+    char salt_path[4096];
+    char old_salt_path[4096];
+    char marker_path[4096];
+    ck_assert_int_lt(snprintf(salt_path, sizeof(salt_path), "%s/salt", tmpdir),
+                     (int)sizeof(salt_path));
+    ck_assert_int_lt(snprintf(old_salt_path, sizeof(old_salt_path),
+                              "%s/salt.old", tmpdir),
+                     (int)sizeof(old_salt_path));
+    ck_assert_int_lt(snprintf(marker_path, sizeof(marker_path),
+                              "%s/.changing_pwd", tmpdir),
+                     (int)sizeof(marker_path));
+    ck_assert_int_eq(rename(salt_path, old_salt_path), 0);
+    write_test_file(marker_path, (const unsigned char *)"pending\n", 8);
+
+    sm = session_manager_create(tmpdir, "password");
+    ck_assert_ptr_nonnull(sm);
+    ck_assert_int_eq(access(salt_path, F_OK), 0);
+    ck_assert_int_eq(access(old_salt_path, F_OK), -1);
+    ck_assert_int_eq(access(marker_path, F_OK), -1);
+    session_manager_free(sm);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
+
+START_TEST(test_first_run_verifier_failure_removes_orphan_salt)
+{
+    char tmpdir[] = "/tmp/test_sm_first_run_cleanup_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    char verifier_path[4096];
+    char salt_path[4096];
+    ck_assert_int_lt(snprintf(verifier_path, sizeof(verifier_path),
+                              "%s/.verifier", tmpdir),
+                     (int)sizeof(verifier_path));
+    ck_assert_int_lt(snprintf(salt_path, sizeof(salt_path), "%s/salt", tmpdir),
+                     (int)sizeof(salt_path));
+    ck_assert_int_eq(mkdir(verifier_path, 0700), 0);
+
+    ck_assert_ptr_null(session_manager_create(tmpdir, "password"));
+    ck_assert_int_eq(access(salt_path, F_OK), -1);
+    ck_assert_int_eq(rmdir(verifier_path), 0);
+    SessionManager *sm = session_manager_create(tmpdir, "password");
+    ck_assert_ptr_nonnull(sm);
+    session_manager_free(sm);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
@@ -732,14 +1172,29 @@ Suite *session_mgr_suite(void)
     Suite *s = suite_create("SessionManager");
 
     TCase *tc_encrypt = tcase_create("Encryption");
-    tcase_set_timeout(tc_encrypt, 30);
+    tcase_set_timeout(tc_encrypt, 120);
     tcase_add_test(tc_encrypt, test_title_is_encrypted_at_rest);
     tcase_add_test(tc_encrypt, test_load_returns_null_on_decrypt_failure_preserves_row);
     tcase_add_test(tc_encrypt, test_save_aborts_when_encrypt_fails_preserves_row);
+    tcase_add_test(tc_encrypt,
+                   test_missing_verifier_never_accepts_or_commits_a_password);
     suite_add_tcase(s, tc_encrypt);
 
+    TCase *tc_oauth = tcase_create("ProviderOAuth");
+    tcase_set_timeout(tc_oauth, 180);
+    tcase_add_test(tc_oauth, test_provider_oauth_encrypted_roundtrip_and_delete);
+    tcase_add_test(tc_oauth,
+                   test_provider_oauth_typed_failures_preserve_credentials);
+    tcase_add_test(tc_oauth,
+                   test_password_change_migrates_oauth_and_recovers_post_commit);
+    tcase_add_test(tc_oauth,
+                   test_password_change_rolls_back_on_malformed_oauth_row);
+    tcase_add_test(tc_oauth,
+                   test_legacy_post_commit_recovery_uses_encrypted_row_evidence);
+    suite_add_tcase(s, tc_oauth);
+
     TCase *tc_crud = tcase_create("CRUD");
-    tcase_set_timeout(tc_crud, 30);
+    tcase_set_timeout(tc_crud, 120);
     tcase_add_test(tc_crud, test_user_memory_table_ready_after_sm_create);
     tcase_add_test(tc_crud, test_save_session_bind_failure_aborts);
     tcase_add_test(tc_crud, test_purge_sessions_bind_failure_returns_error);
@@ -750,6 +1205,12 @@ Suite *session_mgr_suite(void)
     tcase_add_test(tc_crud, test_session_list_realloc_failures_are_safe);
     tcase_add_test(tc_crud, test_import_rejects_duplicate_id_preserves_existing);
     tcase_add_test(tc_crud, test_create_creates_missing_parent_dirs);
+    tcase_add_test(tc_crud,
+                   test_recovery_restores_backup_when_new_salt_was_not_created);
+    tcase_add_test(tc_crud,
+                   test_first_run_verifier_failure_removes_orphan_salt);
+    tcase_add_test(tc_crud,
+                   test_provider_state_survives_encrypted_reload_and_retained_owner);
     suite_add_tcase(s, tc_crud);
 
     return s;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatProvider, useChat } from '../context';
 
@@ -11,6 +11,7 @@ const { mockApi, wsCalls } = vi.hoisted(() => ({
     ]),
     getModels: vi.fn().mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']),
     getProviders: vi.fn().mockResolvedValue(['ollama', 'openai', 'opencode_zen']),
+    getOpenAIOAuthStatus: vi.fn().mockResolvedValue({ state: 'signed_out' }),
     createSession: vi.fn().mockResolvedValue({ session_id: 'new-session-456' }),
     loadSession: vi.fn().mockResolvedValue({
       session_id: 'session-1',
@@ -99,6 +100,11 @@ describe('Session History Bug Tests', () => {
         { role: 'assistant', content: 'Hi there!', timestamp: '10:01' },
       ],
     });
+    mockApi.getProviders.mockResolvedValue(['ollama', 'openai', 'opencode_zen']);
+    mockApi.getModels.mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']);
+    mockApi.getPreferences.mockResolvedValue({});
+    mockApi.setPreferences.mockResolvedValue(undefined);
+    mockApi.getOpenAIOAuthStatus.mockResolvedValue({ state: 'signed_out' });
   });
 
   describe('BUG: Session history not appearing', () => {
@@ -448,6 +454,153 @@ describe('Session History Bug Tests', () => {
         expect(screen.getByTestId('selected-provider').textContent).toBe('ollama');
         expect(screen.getByTestId('selected-model').textContent).toBe('qwen3:4b-instruct');
       });
+    });
+
+    it('does not restore OpenAI while signed out', async () => {
+      localStorage.setItem(
+        'echo-ai-chat-preferences',
+        JSON.stringify({
+          provider: 'openai',
+          model: 'gpt-5-codex',
+          models: { openai: 'gpt-5-codex' },
+        })
+      );
+      mockApi.getProviders.mockResolvedValueOnce(['ollama', 'openai']);
+      mockApi.getOpenAIOAuthStatus.mockResolvedValueOnce({ state: 'signed_out' });
+
+      function TestComponent() {
+        const { currentProvider, currentModel } = useChat();
+        return (
+          <>
+            <span data-testid="restored-provider">{currentProvider}</span>
+            <span data-testid="restored-model">{currentModel}</span>
+          </>
+        );
+      }
+
+      render(
+        <ChatProvider>
+          <TestComponent />
+        </ChatProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('restored-model').textContent).toBe('qwen3:4b-instruct');
+      });
+      expect(screen.getByTestId('restored-provider').textContent).toBe('ollama');
+      expect(mockApi.getOpenAIOAuthStatus).toHaveBeenCalled();
+      expect(mockApi.getModels).not.toHaveBeenCalledWith('openai', expect.anything());
+    });
+
+    it('keeps models in response order and ignores an older provider completion', async () => {
+      let resolveOpenAI: ((models: string[]) => void) | undefined;
+      let resolveZen: ((models: string[]) => void) | undefined;
+      let openAISignal: AbortSignal | undefined;
+      mockApi.getModels.mockImplementation((provider?: string, signal?: AbortSignal) => {
+        if (provider === 'openai') {
+          openAISignal = signal;
+          return new Promise<string[]>((resolve) => {
+            resolveOpenAI = resolve;
+          });
+        }
+        if (provider === 'opencode_zen') {
+          return new Promise<string[]>((resolve) => {
+            resolveZen = resolve;
+          });
+        }
+        return Promise.resolve(['qwen3:4b-instruct']);
+      });
+
+      function TestComponent() {
+        const { currentProvider, currentModel, models, selectProvider } = useChat();
+        return (
+          <>
+            <span data-testid="ordered-provider">{currentProvider}</span>
+            <span data-testid="ordered-model">{currentModel}</span>
+            <span data-testid="ordered-models">{models.join(',')}</span>
+            <button onClick={() => void selectProvider('openai')}>OpenAI request</button>
+            <button onClick={() => void selectProvider('opencode_zen')}>Zen request</button>
+          </>
+        );
+      }
+
+      render(
+        <ChatProvider>
+          <TestComponent />
+        </ChatProvider>
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId('ordered-model').textContent).toBe('qwen3:4b-instruct')
+      );
+
+      fireEvent.click(screen.getByText('OpenAI request'));
+      expect(screen.getByTestId('ordered-provider').textContent).toBe('ollama');
+      expect(screen.getByTestId('ordered-models').textContent).toBe('qwen3:4b-instruct');
+      fireEvent.click(screen.getByText('Zen request'));
+      expect(openAISignal?.aborted).toBe(true);
+
+      await act(async () => {
+        resolveZen?.(['zen-second', 'zen-first']);
+      });
+      expect(screen.getByTestId('ordered-provider').textContent).toBe('opencode_zen');
+      expect(screen.getByTestId('ordered-model').textContent).toBe('zen-second');
+      expect(screen.getByTestId('ordered-models').textContent).toBe('zen-second,zen-first');
+
+      await act(async () => {
+        resolveOpenAI?.(['stale-openai']);
+      });
+      expect(screen.getByTestId('ordered-provider').textContent).toBe('opencode_zen');
+      expect(screen.getByTestId('ordered-models').textContent).toBe('zen-second,zen-first');
+      expect(mockApi.setPreferences).not.toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'openai' })
+      );
+      expect(wsCalls).not.toContainEqual(expect.stringContaining('"provider":"openai"'));
+    });
+
+    it('keeps startup sessions and providers when a provider is selected early', async () => {
+      let resolveProviders: ((providers: string[]) => void) | undefined;
+      mockApi.getProviders.mockImplementationOnce(
+        () =>
+          new Promise<string[]>((resolve) => {
+            resolveProviders = resolve;
+          })
+      );
+      mockApi.getModels.mockImplementation((provider?: string) =>
+        Promise.resolve(provider === 'opencode_zen' ? ['zen-model'] : ['ollama-model'])
+      );
+
+      function TestComponent() {
+        const { sessions, providers, currentProvider, selectProvider } = useChat();
+        return (
+          <>
+            <span data-testid="startup-session-count">{sessions.length}</span>
+            <span data-testid="startup-providers">{providers.join(',')}</span>
+            <span data-testid="startup-provider">{currentProvider}</span>
+            <button onClick={() => void selectProvider('opencode_zen')}>Select early</button>
+          </>
+        );
+      }
+
+      render(
+        <ChatProvider>
+          <TestComponent />
+        </ChatProvider>
+      );
+      fireEvent.click(screen.getByText('Select early'));
+      await waitFor(() =>
+        expect(screen.getByTestId('startup-provider').textContent).toBe('opencode_zen')
+      );
+
+      await act(async () => {
+        resolveProviders?.(['ollama', 'openai', 'opencode_zen']);
+      });
+      await waitFor(() =>
+        expect(screen.getByTestId('startup-session-count').textContent).toBe('2')
+      );
+      expect(screen.getByTestId('startup-providers').textContent).toBe(
+        'ollama,openai,opencode_zen'
+      );
+      expect(screen.getByTestId('startup-provider').textContent).toBe('opencode_zen');
     });
 
     it('should handle empty sessions list', async () => {

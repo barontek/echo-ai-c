@@ -45,6 +45,29 @@ jobs:
     - name: test
       run: nix develop --command bash -c "ctest --test-dir build -V"
 
+  oauth-fuzz:
+    runs-on: ubuntu-latest
+    container: debian:bookworm-slim
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: install pinned distro toolchain
+      run: apt-get update && apt-get install -y clang cmake pkgconf pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check
+
+    - name: configure with libFuzzer
+      run: CC=clang cmake -B build-fuzz -DCMAKE_BUILD_TYPE=Debug
+
+    - name: build OAuth and Codex fuzz targets
+      run: cmake --build build-fuzz --target fuzz_openai_oauth_callback fuzz_openai_oauth_token fuzz_openai_oauth_jwt fuzz_openai_codex_stream
+
+    - name: run bounded fuzz smoke tests
+      run: |
+        build-fuzz/tests/fuzz_openai_oauth_callback -runs=1000
+        build-fuzz/tests/fuzz_openai_oauth_token -runs=1000
+        build-fuzz/tests/fuzz_openai_oauth_jwt -runs=1000
+        build-fuzz/tests/fuzz_openai_codex_stream -runs=1000
+
   backend-macos:
     runs-on: macos-latest
 
@@ -92,4 +115,8 @@ jobs:
 
     - name: test
       run: npm run test:run
+      working-directory: frontend
+
+    - name: production build
+      run: npm run build
       working-directory: frontend

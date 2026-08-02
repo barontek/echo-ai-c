@@ -1,6 +1,43 @@
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { useChat } from '../context';
 import { api } from '../api/client';
+
+const OPENAI_AUTH_POLL_MS = 1000;
+const OPENAI_AUTH_TIMEOUT_MS = 5 * 60 * 1000;
+
+type OpenAIAuthAttempt = {
+  generation: number;
+  controller: AbortController;
+  loginId?: string;
+  loginWindow: Window | null;
+  signedIn: boolean;
+};
+
+function waitForOpenAIAuthPoll(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('OpenAI login cancelled', 'AbortError'));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, OPENAI_AUTH_POLL_MS);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException('OpenAI login cancelled', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function getOpenAIAuthError(error: unknown): string {
+  if (!(error instanceof Error)) return 'OpenAI login failed. Please try again.';
+  if (error.message === '__BACKEND_UNREACHABLE__') {
+    return 'Cannot reach Echo. Check that the server is running and try again.';
+  }
+  return error.message || 'OpenAI login failed. Please try again.';
+}
 
 export const Sidebar = memo(function Sidebar() {
   const {
@@ -26,8 +63,12 @@ export const Sidebar = memo(function Sidebar() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [openAIAuthBusy, setOpenAIAuthBusy] = useState(false);
+  const [openAISignOutBusy, setOpenAISignOutBusy] = useState(false);
   const [openAIAuthError, setOpenAIAuthError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const authGenerationRef = useRef(0);
+  const authAttemptRef = useRef<OpenAIAuthAttempt | null>(null);
+  const mountedRef = useRef(true);
 
   const filteredSessions = !searchTerm
     ? sessions
@@ -61,48 +102,138 @@ export const Sidebar = memo(function Sidebar() {
     setRenameValue('');
   };
 
+  const cancelOpenAIAuthAttempt = useCallback(() => {
+    const attempt = authAttemptRef.current;
+    if (!attempt) return;
+
+    authGenerationRef.current++;
+    authAttemptRef.current = null;
+    attempt.controller.abort();
+    attempt.loginWindow?.close();
+    if (attempt.loginId && !attempt.signedIn) {
+      void api.logoutOpenAIOAuth(attempt.loginId).catch(() => {});
+    }
+    if (mountedRef.current) setOpenAIAuthBusy(false);
+  }, []);
+
   const handleSelectProvider = async (provider: string) => {
+    if (openAISignOutBusy) return;
     if (provider !== 'openai') {
-      selectProvider(provider);
+      cancelOpenAIAuthAttempt();
+      setOpenAIAuthError(null);
       setShowProviderDropdown(false);
+      try {
+        await selectProvider(provider);
+      } catch (error: unknown) {
+        if (mountedRef.current) setOpenAIAuthError(getOpenAIAuthError(error));
+      }
       return;
     }
+
+    if (authAttemptRef.current) return;
 
     setOpenAIAuthError(null);
     setOpenAIAuthBusy(true);
     setShowProviderDropdown(false);
     const loginWindow = window.open('about:blank', 'echo-ai-openai-login');
+    const generation = ++authGenerationRef.current;
+    const controller = new AbortController();
+    const attempt: OpenAIAuthAttempt = {
+      generation,
+      controller,
+      loginWindow,
+      signedIn: false,
+    };
+    authAttemptRef.current = attempt;
+    const isCurrent = () =>
+      mountedRef.current &&
+      authAttemptRef.current === attempt &&
+      authGenerationRef.current === generation;
+
     try {
-      const status = await api.getOpenAIOAuthStatus();
+      const status = await api.getOpenAIOAuthStatus(undefined, controller.signal);
+      if (!isCurrent()) return;
       if (status.state === 'signed_in') {
+        attempt.signedIn = true;
         loginWindow?.close();
-        selectProvider(provider);
+        await selectProvider(provider);
+        if (!isCurrent()) return;
+        authAttemptRef.current = null;
+        setOpenAIAuthBusy(false);
         return;
       }
+      if (status.state === 'pending') {
+        throw new Error('Another OpenAI login is already in progress. Wait for it to finish or cancel it.');
+      }
 
-      const login = await api.startOpenAIOAuth();
-      if (loginWindow) loginWindow.location.href = login.authorization_url;
-      else window.location.href = login.authorization_url;
+      if (!loginWindow) {
+        throw new Error('Your browser blocked the OpenAI login popup. Allow popups and try again.');
+      }
 
-      const deadline = Date.now() + 5 * 60 * 1000;
+      const login = await api.startOpenAIOAuth(controller.signal);
+      attempt.loginId = login.login_id;
+      if (!isCurrent()) {
+        void api.logoutOpenAIOAuth(login.login_id).catch(() => {});
+        return;
+      }
+      loginWindow.location.href = login.authorization_url;
+
+      const deadline = Date.now() + OPENAI_AUTH_TIMEOUT_MS;
       while (Date.now() < deadline) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        const next = await api.getOpenAIOAuthStatus();
+        await waitForOpenAIAuthPoll(controller.signal);
+        if (!isCurrent()) return;
+        const next = await api.getOpenAIOAuthStatus(login.login_id, controller.signal);
+        if (!isCurrent()) return;
         if (next.state === 'signed_in') {
-          loginWindow?.close();
-          selectProvider(provider);
+          attempt.signedIn = true;
+          loginWindow.close();
+          await selectProvider(provider);
+          if (!isCurrent()) return;
+          authAttemptRef.current = null;
+          setOpenAIAuthBusy(false);
           return;
         }
-        if (next.state === 'signed_out' && next.error) {
-          throw new Error(next.error);
+        if (next.state === 'signed_out') {
+          throw new Error(next.error || 'OpenAI sign-in did not complete. Please try again.');
+        }
+        if (loginWindow.closed) {
+          throw new Error('The OpenAI login window was closed before sign-in completed.');
         }
       }
-      throw new Error('OpenAI login timed out');
+      throw new Error('OpenAI login timed out. Please try again.');
     } catch (err: unknown) {
+      if (!isCurrent()) return;
+      authAttemptRef.current = null;
+      authGenerationRef.current++;
+      controller.abort();
       loginWindow?.close();
-      setOpenAIAuthError(err instanceof Error ? err.message : 'OpenAI login failed');
-    } finally {
+      if (attempt.loginId && !attempt.signedIn) {
+        void api.logoutOpenAIOAuth(attempt.loginId).catch(() => {});
+      }
+      setOpenAIAuthError(getOpenAIAuthError(err));
       setOpenAIAuthBusy(false);
+    }
+  };
+
+  const handleOpenAISignOut = async () => {
+    cancelOpenAIAuthAttempt();
+    setOpenAISignOutBusy(true);
+    setOpenAIAuthError(null);
+    try {
+      const fallback = providers.find((provider) => provider !== 'openai');
+      const fallbackModels = fallback ? await api.getModels(fallback) : [];
+      const validFallbackModels = fallbackModels.filter(
+        (model): model is string => typeof model === 'string' && model.trim().length > 0
+      );
+      if (fallback && validFallbackModels.length === 0) {
+        throw new Error(`No models are available for ${fallback}.`);
+      }
+      await api.logoutOpenAIOAuth();
+      if (fallback) await selectProvider(fallback, validFallbackModels);
+    } catch (error: unknown) {
+      if (mountedRef.current) setOpenAIAuthError(getOpenAIAuthError(error));
+    } finally {
+      if (mountedRef.current) setOpenAISignOutBusy(false);
     }
   };
 
@@ -122,6 +253,14 @@ export const Sidebar = memo(function Sidebar() {
       renameInputRef.current.select();
     }
   }, [renamingId]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      cancelOpenAIAuthAttempt();
+    };
+  }, [cancelOpenAIAuthAttempt]);
 
   // Close delete confirmation on Escape
   useEffect(() => {
@@ -179,6 +318,7 @@ export const Sidebar = memo(function Sidebar() {
             aria-expanded={showProviderDropdown}
             aria-haspopup="listbox"
             aria-label="Select provider"
+            disabled={openAISignOutBusy}
           >
             <span className="model-name">{currentProvider}</span>
             <span className="dropdown-arrow">▼</span>
@@ -206,6 +346,15 @@ export const Sidebar = memo(function Sidebar() {
           <div className="provider-auth-notice" role="status">
             Complete the OpenAI login in your browser...
           </div>
+        )}
+        {currentProvider === 'openai' && !openAIAuthBusy && (
+          <button
+            className="provider-auth-notice"
+            disabled={openAISignOutBusy}
+            onClick={() => void handleOpenAISignOut()}
+          >
+            {openAISignOutBusy ? 'Signing out of OpenAI...' : 'Sign out of OpenAI'}
+          </button>
         )}
         {openAIAuthError && (
           <div className="provider-auth-error" role="alert">

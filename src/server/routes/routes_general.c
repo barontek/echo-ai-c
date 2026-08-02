@@ -9,6 +9,7 @@
 #include "routes_general.h"
 #include "../middleware.h"
 #include "../../config/config.h"
+#include "../../llm/openai.h"
 #include "../../llm/provider.h"
 #include "../../llm/openai_oauth.h"
 #include "../../session/session_manager.h"
@@ -203,9 +204,9 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
             {
                 memcpy(provider, p, plen);
                 provider[plen] = '\0';
-                /* FE spelling is lm_studio; canonical name is openai. */
+                /* FE spelling is lm_studio; use the static-token compatible provider. */
                 if (strcmp(provider, "lm_studio") == 0)
-                    snprintf(provider, sizeof(provider), "openai");
+                    snprintf(provider, sizeof(provider), "openai_compatible");
             }
         }
     }
@@ -217,20 +218,57 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
     const char *name_key = "name";
     if (strcmp(provider, "openai") == 0)
     {
-        /* ChatGPT OAuth uses the Codex backend, which does not expose the
-         * public /v1/models endpoint. Keep the catalog local and only expose
-         * it after OAuth succeeds. */
         if (!ctx || !ctx->openai_oauth ||
             openai_oauth_status(ctx->openai_oauth, NULL, NULL, NULL) != OPENAI_OAUTH_SIGNED_IN)
         {
             models_response(client, arr);
             return;
         }
-        static const char *const oauth_models[] = {
+        char **remote_models = NULL;
+        size_t remote_count = 0U;
+        int fetch_rc = openai_models_fetch_alloc(ctx->openai_oauth,
+                                                 &remote_models, &remote_count);
+        if (fetch_rc == OPENAI_MODELS_OK && remote_count > 0U)
+        {
+            for (size_t i = 0; i < remote_count; i++)
+            {
+                cJSON *name = cJSON_CreateString(remote_models[i]);
+                if (!name || !cJSON_AddItemToArray(arr, name))
+                {
+                    cJSON_Delete(name);
+                    openai_models_free(remote_models, remote_count);
+                    cJSON_Delete(arr);
+                    server_response_error(client, 500, "oom");
+                    return;
+                }
+            }
+            openai_models_free(remote_models, remote_count);
+            models_response(client, arr);
+            return;
+        }
+        openai_models_free(remote_models, remote_count);
+        /* Signed in with nothing listable, or the backend denied the account:
+         * an empty list beats offering models the account cannot use. */
+        if (fetch_rc == OPENAI_MODELS_OK || fetch_rc == OPENAI_MODELS_DENIED)
+        {
+            models_response(client, arr);
+            return;
+        }
+        log_warn("OpenAI model discovery failed; using fallback catalog", NULL);
+        static const char *const fallback_models[] = {
             "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"
         };
-        for (size_t i = 0; i < sizeof(oauth_models) / sizeof(oauth_models[0]); i++)
-            cJSON_AddItemToArray(arr, cJSON_CreateString(oauth_models[i]));
+        for (size_t i = 0; i < sizeof(fallback_models) / sizeof(fallback_models[0]); i++)
+        {
+            cJSON *name = cJSON_CreateString(fallback_models[i]);
+            if (!name || !cJSON_AddItemToArray(arr, name))
+            {
+                cJSON_Delete(name);
+                cJSON_Delete(arr);
+                server_response_error(client, 500, "oom");
+                return;
+            }
+        }
         models_response(client, arr);
         return;
     }

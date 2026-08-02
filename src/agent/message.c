@@ -44,13 +44,16 @@ int message_copy(Message *dst, const Message *src)
     dst->tool_name = str_dup(src->tool_name);
     dst->error_category = str_dup(src->error_category);
     dst->thinking = str_dup(src->thinking);
+    dst->phase = str_dup(src->phase);
+    dst->provider_state = str_dup(src->provider_state);
     dst->timestamp = src->timestamp;
 
     if ((src->role && !dst->role) || (src->content && !dst->content) ||
         (src->id && !dst->id) || (src->tool_call_id && !dst->tool_call_id) ||
         (src->tool_name && !dst->tool_name) ||
         (src->error_category && !dst->error_category) ||
-        (src->thinking && !dst->thinking))
+        (src->thinking && !dst->thinking) || (src->phase && !dst->phase) ||
+        (src->provider_state && !dst->provider_state))
         goto cleanup;
 
     if (src->tool_calls && src->tool_calls_count > 0)
@@ -85,6 +88,8 @@ cleanup:
     free(dst->tool_name);
     free(dst->error_category);
     free(dst->thinking);
+    free(dst->phase);
+    free(dst->provider_state);
     if (dst->tool_calls)
     {
         for (int i = 0; i < dst->tool_calls_count; i++)
@@ -112,6 +117,8 @@ void message_clear(Message *msg)
     free(msg->tool_name);
     free(msg->error_category);
     free(msg->thinking);
+    free(msg->phase);
+    free(msg->provider_state);
     if (msg->tool_calls)
     {
         for (int i = 0; i < msg->tool_calls_count; i++)
@@ -127,6 +134,8 @@ void message_clear(Message *msg)
     msg->tool_name = NULL;
     msg->error_category = NULL;
     msg->thinking = NULL;
+    msg->phase = NULL;
+    msg->provider_state = NULL;
     msg->tool_calls = NULL;
     msg->tool_calls_count = 0;
 }
@@ -174,6 +183,8 @@ void llm_response_free(LLMResponse *resp)
     if (!resp) return;
     free(resp->content);
     free(resp->thinking);
+    free(resp->phase);
+    free(resp->provider_state);
     if (resp->tool_calls)
     {
         for (int i = 0; i < resp->tool_calls_count; i++)
@@ -198,6 +209,19 @@ cJSON *messages_to_json_array(Message *msgs, int count)
 
         if (msgs[i].thinking)
             cJSON_AddStringToObject(item, "thinking", msgs[i].thinking);
+
+        if (msgs[i].phase)
+        {
+            if (!cJSON_AddStringToObject(item, "phase", msgs[i].phase))
+            { cJSON_Delete(item); cJSON_Delete(arr); return NULL; }
+        }
+
+        if (msgs[i].provider_state)
+        {
+            if (!cJSON_AddStringToObject(item, "provider_state",
+                                         msgs[i].provider_state))
+            { cJSON_Delete(item); cJSON_Delete(arr); return NULL; }
+        }
 
         if (msgs[i].tool_name)
             cJSON_AddStringToObject(item, "tool_name", msgs[i].tool_name);

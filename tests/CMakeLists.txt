@@ -95,4 +95,34 @@ if(HAS_LIBFUZZER)
         -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_openai_compatible_stream PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON)
+
+    foreach(OAUTH_FUZZ_TARGET IN ITEMS callback token jwt)
+        add_executable(fuzz_openai_oauth_${OAUTH_FUZZ_TARGET}
+            ../src/llm/openai_oauth.c
+            fuzz/openai_oauth_stubs.c
+            fuzz/fuzz_openai_oauth_${OAUTH_FUZZ_TARGET}.c
+        )
+        target_compile_definitions(fuzz_openai_oauth_${OAUTH_FUZZ_TARGET}
+            PRIVATE OPENAI_OAUTH_TEST=1)
+        target_include_directories(fuzz_openai_oauth_${OAUTH_FUZZ_TARGET} PRIVATE ../src)
+        target_compile_options(fuzz_openai_oauth_${OAUTH_FUZZ_TARGET} PRIVATE
+            -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+        target_link_libraries(fuzz_openai_oauth_${OAUTH_FUZZ_TARGET} PRIVATE
+            -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL
+            PkgConfig::OPENSSL PkgConfig::CJSON m)
+    endforeach()
+
+    add_executable(fuzz_openai_codex_stream
+        ../src/llm/openai.c
+        ../src/agent/message.c
+        ../src/utils/string_utils.c
+        fuzz/openai_provider_stubs.c
+        fuzz/fuzz_openai_codex_stream.c
+    )
+    target_compile_definitions(fuzz_openai_codex_stream PRIVATE OPENAI_TEST=1)
+    target_include_directories(fuzz_openai_codex_stream PRIVATE ../src)
+    target_compile_options(fuzz_openai_codex_stream PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+    target_link_libraries(fuzz_openai_codex_stream PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON m)
 endif()

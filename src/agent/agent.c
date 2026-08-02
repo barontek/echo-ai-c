@@ -726,8 +726,27 @@ LLMResponse *agent_run(Agent *agent, const char *user_input)
         if (resp->content)
         {
             Message *assistant_msg = message_create("assistant", resp->content);
+            if (!assistant_msg)
+            {
+                llm_response_free(resp);
+                free(run_id);
+                return NULL;
+            }
             if (assistant_msg && resp->thinking)
                 assistant_msg->thinking = str_dup(resp->thinking);
+            if (assistant_msg && resp->phase)
+                assistant_msg->phase = str_dup(resp->phase);
+            if (assistant_msg && resp->provider_state)
+                assistant_msg->provider_state = str_dup(resp->provider_state);
+            if ((resp->thinking && !assistant_msg->thinking) ||
+                (resp->phase && !assistant_msg->phase) ||
+                (resp->provider_state && !assistant_msg->provider_state))
+            {
+                message_free(assistant_msg);
+                llm_response_free(resp);
+                free(run_id);
+                return NULL;
+            }
             if (has_tool_calls)
             {
                 message_set_tool_calls(assistant_msg, resp->tool_calls, resp->tool_calls_count);
@@ -814,8 +833,25 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
         if (resp->content)
         {
             Message *assistant_msg = message_create("assistant", resp->content);
+            if (!assistant_msg)
+            {
+                llm_response_free(resp);
+                return NULL;
+            }
             if (assistant_msg && resp->thinking)
                 assistant_msg->thinking = str_dup(resp->thinking);
+            if (assistant_msg && resp->phase)
+                assistant_msg->phase = str_dup(resp->phase);
+            if (assistant_msg && resp->provider_state)
+                assistant_msg->provider_state = str_dup(resp->provider_state);
+            if ((resp->thinking && !assistant_msg->thinking) ||
+                (resp->phase && !assistant_msg->phase) ||
+                (resp->provider_state && !assistant_msg->provider_state))
+            {
+                message_free(assistant_msg);
+                llm_response_free(resp);
+                return NULL;
+            }
             if (has_tool_calls)
             {
                 message_set_tool_calls(assistant_msg, resp->tool_calls, resp->tool_calls_count);
