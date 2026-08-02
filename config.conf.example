@@ -88,6 +88,14 @@ num_ctx = 4096
 # How long to keep the model loaded in seconds (default: 120)
 keep_alive_secs = 120
 
+[openai]
+# Base URL of the OpenAI-compatible endpoint (default: https://api.openai.com).
+# This also covers LM Studio and other local OpenAI-compatible servers —
+# point it at your local server, e.g. http://localhost:1234 (LM Studio).
+# Note: no API-key support yet, so the real OpenAI service will reject
+# requests with 401 until that lands.
+base_url = https://api.openai.com
+
 [safety]
 # Restrict file operations to this directory (default: current dir)
 workspace = ./
@@ -105,6 +113,11 @@ max_execution_time = 300
 # Default: bash, write_file, replace_in_file, git, python_execute, delegate
 # Empty string to disable all approvals: require_approval_for =
 require_approval_for = bash, write_file, git, python_execute
+
+# How long the Web UI waits for the user to answer an agent's ask_user
+# question before the tool gives up with "(user did not respond)"
+# (seconds, default: 60)
+ask_user_timeout = 60
 
 [session]
 # Enable encrypted session persistence via SQLite (default: false)

@@ -33,6 +33,7 @@ typedef char *(*ask_user_callback)(const char *question, void *userdata);
 
 typedef struct {
     LLMProvider *provider;
+    char *provider_name; /* canonical factory name of provider ("ollama"/"openai") */
     Message *messages;
     int messages_count;
     char *model;
@@ -82,5 +83,11 @@ void agent_set_ask_user_callback(Agent *agent, ask_user_callback cb, void *userd
 void agent_set_safety(Agent *agent, SafetyConfig *safety);
 void agent_set_callback_manager(Agent *agent, CallbackManager *mgr);
 void agent_set_model(Agent *agent, const char *model);
+
+/* Switch the live LLM provider. base_url/num_ctx/keep_alive_secs are passed
+ * to get_provider; on failure returns -1 and the old provider is kept and
+ * still owned by the agent. The caller keeps no ownership of anything. */
+int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
+                       int num_ctx, int keep_alive_secs);
 
 #endif

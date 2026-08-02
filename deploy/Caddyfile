@@ -1,0 +1,12 @@
+{
+	# dev TLS proxy for echo-ai — run via: nix develop -c make run-tls
+	# (or: nix develop -c ./scripts/serve-tls.sh)
+	auto_https disable_redirects
+}
+
+# Caddy issues an internal-CA cert for localhost automatically; the first
+# browser visit shows a warning unless caddy's local root is trusted.
+# Change the port here if config.conf uses a different `port`.
+localhost:8443 {
+	reverse_proxy 127.0.0.1:8080
+}

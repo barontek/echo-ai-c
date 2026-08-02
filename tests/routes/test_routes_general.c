@@ -7,6 +7,7 @@
 
 #include "../src/server/routes/routes.h"
 #include "../src/server/routes/routes_general.h"
+#include "../src/config/config.h"
 #include "../src/utils/string_utils.h"
 
 /* ---------------------------------------------------------------------------
@@ -22,6 +23,7 @@ static int stub_curl_perform_code = 0; /* CURLE_OK */
 static void *captured_writedata = NULL;
 static size_t (*captured_writefunc)(void *, size_t, size_t, void *) = NULL;
 static const char *stub_models_json = NULL;
+static char captured_curl_url[256] = {0};
 static int captured_status = 0;
 static char *captured_body = NULL;
 
@@ -43,6 +45,7 @@ static void reset_stubs(void)
     captured_writedata = NULL;
     captured_writefunc = NULL;
     stub_models_json = NULL;
+    memset(captured_curl_url, 0, sizeof(captured_curl_url));
     reset_capture();
 }
 
@@ -147,6 +150,11 @@ CURLcode curl_easy_setopt(CURL *c, int option, ...)
         captured_writefunc = va_arg(args, size_t (*)(void *, size_t, size_t, void *));
     else if (option == CURLOPT_WRITEDATA)
         captured_writedata = va_arg(args, void *);
+    else if (option == CURLOPT_URL)
+    {
+        const char *u = va_arg(args, const char *);
+        snprintf(captured_curl_url, sizeof(captured_curl_url), "%s", u);
+    }
     va_end(args);
     (void)c;
     return CURLE_OK;
@@ -594,6 +602,130 @@ START_TEST(test_handle_models_empty_models_array)
 }
 END_TEST
 
+START_TEST(test_handle_models_ollama_default_url)
+{
+    stub_curl_init_nonnull = 1;
+    stub_curl_perform_code = CURLE_OK;
+    stub_models_json = "{\"models\":[{\"name\":\"llama3:latest\"}]}";
+    ServerContext ctx = {0};
+    HTTPRequest req = {0};
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_curl_url, "http://localhost:11434/api/tags"));
+    ck_assert(strstr(captured_body, "llama3:latest"));
+
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_models_ollama_explicit_query)
+{
+    stub_curl_init_nonnull = 1;
+    stub_curl_perform_code = CURLE_OK;
+    stub_models_json = "{\"models\":[{\"name\":\"llama3:latest\"}]}";
+    ServerContext ctx = {0};
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=ollama&foo=1");
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_curl_url, "http://localhost:11434/api/tags"));
+
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_models_openai_url_and_parse)
+{
+    stub_curl_init_nonnull = 1;
+    stub_curl_perform_code = CURLE_OK;
+    stub_models_json = "{\"data\":[{\"id\":\"qwen2.5\"},{\"id\":\"deepseek-v3\"}]}";
+    ServerContext ctx = {0};
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=openai");
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_curl_url, "https://api.openai.com/v1/models"));
+    ck_assert(strstr(captured_body, "qwen2.5"));
+    ck_assert(strstr(captured_body, "deepseek-v3"));
+
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_models_lm_studio_alias_uses_openai)
+{
+    /* lm_studio is an alias for the openai endpoint in the query too. */
+    stub_curl_init_nonnull = 1;
+    stub_curl_perform_code = CURLE_OK;
+    stub_models_json = "{\"data\":[{\"id\":\"qwen2.5\"}]}";
+    ServerContext ctx = {0};
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=lm_studio");
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_curl_url, "https://api.openai.com/v1/models"));
+    ck_assert(strstr(captured_body, "qwen2.5"));
+
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_models_openai_custom_base_url)
+{
+    stub_curl_init_nonnull = 1;
+    stub_curl_perform_code = CURLE_OK;
+    stub_models_json = "{\"data\":[{\"id\":\"local-model\"}]}";
+
+    char tmpdir[] = "/tmp/test_models_conf_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    char conf_path[512];
+    snprintf(conf_path, sizeof(conf_path), "%s/test.conf", tmpdir);
+    FILE *f = fopen(conf_path, "w");
+    ck_assert_ptr_nonnull(f);
+    fprintf(f, "[openai]\nbase_url = http://localhost:1234\n");
+    fclose(f);
+
+    Conf *conf = conf_load(conf_path);
+    ck_assert_ptr_nonnull(conf);
+    ServerContext ctx = {0};
+    ctx.conf = conf;
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=openai");
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_curl_url, "http://localhost:1234/v1/models"));
+    ck_assert(strstr(captured_body, "local-model"));
+
+    conf_free(conf);
+    char rm[512];
+    snprintf(rm, sizeof(rm), "rm -rf %s", tmpdir);
+    int syst = system(rm);
+    (void)syst;
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_models_unknown_provider_empty_no_curl)
+{
+    stub_curl_init_nonnull = 1;
+    ServerContext ctx = {0};
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=anthropic");
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_body, "\"models\":[]"));
+    ck_assert_str_eq(captured_curl_url, "");
+
+    reset_stubs();
+}
+END_TEST
+
 /* ---------------------------------------------------------------------------
  * Suite
  * --------------------------------------------------------------------------- */
@@ -664,6 +796,12 @@ Suite *routes_general_suite(void)
     tcase_add_test(tc, test_handle_models_perform_fails);
     tcase_add_test(tc, test_handle_models_success);
     tcase_add_test(tc, test_handle_models_empty_models_array);
+    tcase_add_test(tc, test_handle_models_ollama_default_url);
+    tcase_add_test(tc, test_handle_models_ollama_explicit_query);
+    tcase_add_test(tc, test_handle_models_openai_url_and_parse);
+    tcase_add_test(tc, test_handle_models_lm_studio_alias_uses_openai);
+    tcase_add_test(tc, test_handle_models_openai_custom_base_url);
+    tcase_add_test(tc, test_handle_models_unknown_provider_empty_no_curl);
     suite_add_tcase(s, tc);
 
     return s;

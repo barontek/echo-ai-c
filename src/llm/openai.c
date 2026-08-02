@@ -12,7 +12,7 @@
 
 typedef struct {
     char *base_url;
-} LMStudioCtx;
+} OpenAICtx;
 
 typedef struct {
     char *data;
@@ -158,8 +158,8 @@ static int parse_stream_response(char *raw, LLMResponse *resp,
     return 0;
 }
 
-#ifdef LMSTUDIO_TEST
-LLMResponse *lmstudio_test_parse_stream(
+#ifdef OPENAI_TEST
+LLMResponse *openai_test_parse_stream(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata)
 {
     if (!input) return NULL;
@@ -241,7 +241,7 @@ static char *build_messages_json(Message *messages, int count, const char *syste
     return json;
 }
 
-static LLMResponse *lmstudio_parse_response(const char *raw)
+static LLMResponse *openai_parse_response(const char *raw)
 {
     LLMResponse *resp = llm_response_create();
     if (!resp) return NULL;
@@ -249,7 +249,7 @@ static LLMResponse *lmstudio_parse_response(const char *raw)
     cJSON *json = cJSON_Parse(raw);
     if (!json)
     {
-        log_error("lmstudio parse failed", "response", raw, NULL);
+        log_error("openai parse failed", "response", raw, NULL);
         free(resp);
         return NULL;
     }
@@ -323,7 +323,7 @@ static LLMResponse *lmstudio_parse_response(const char *raw)
     return resp;
 }
 
-static char *lmstudio_chat_request(const char *base_url, const char *json_body,
+static char *openai_chat_request(const char *base_url, const char *json_body,
                                     int timeout, int stream,
                                     void (*on_chunk)(const char *, void *),
                                     void *userdata)
@@ -354,7 +354,7 @@ static char *lmstudio_chat_request(const char *base_url, const char *json_body,
 
     if (res != CURLE_OK)
     {
-        log_error("lmstudio request failed", "error", curl_easy_strerror(res), NULL);
+        log_error("openai request failed", "error", curl_easy_strerror(res), NULL);
         free(buf.data);
         return NULL;
     }
@@ -366,11 +366,11 @@ static char *lmstudio_chat_request(const char *base_url, const char *json_body,
     return buf.data;
 }
 
-static LLMResponse *lmstudio_chat(LLMProvider *self, Message *messages, int count,
+static LLMResponse *openai_chat(LLMProvider *self, Message *messages, int count,
                                    const char *model, double temperature, int timeout,
                                    const char *tools_json)
 {
-    LMStudioCtx *ctx = self->ctx;
+    OpenAICtx *ctx = self->ctx;
 
     char *msgs_json = build_messages_json(messages, count, NULL, model);
     if (!msgs_json) return NULL;
@@ -398,25 +398,25 @@ static LLMResponse *lmstudio_chat(LLMProvider *self, Message *messages, int coun
     }
     free(msgs_json);
 
-    log_debug("lmstudio request", "model", model, NULL);
+    log_debug("openai request", "model", model, NULL);
 
-    char *raw = lmstudio_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL);
+    char *raw = openai_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL);
     free(body);
 
     if (!raw) return NULL;
 
-    LLMResponse *resp = lmstudio_parse_response(raw);
+    LLMResponse *resp = openai_parse_response(raw);
     free(raw);
     return resp;
 }
 
-static LLMResponse *lmstudio_chat_streaming(LLMProvider *self, Message *messages, int count,
+static LLMResponse *openai_chat_streaming(LLMProvider *self, Message *messages, int count,
                                              const char *model, double temperature, int timeout,
                                              void (*on_chunk)(const char *, void *),
                                              void *userdata,
                                              const char *tools_json)
 {
-    LMStudioCtx *ctx = self->ctx;
+    OpenAICtx *ctx = self->ctx;
 
     char *msgs_json = build_messages_json(messages, count, NULL, model);
     if (!msgs_json) return NULL;
@@ -447,7 +447,7 @@ static LLMResponse *lmstudio_chat_streaming(LLMProvider *self, Message *messages
     LLMResponse *resp = llm_response_create();
     if (!resp) { free(body); return NULL; }
 
-    char *raw = lmstudio_chat_request(ctx->base_url, body, timeout, 1,
+    char *raw = openai_chat_request(ctx->base_url, body, timeout, 1,
                                        on_chunk, userdata);
     free(body);
 
@@ -467,11 +467,11 @@ static LLMResponse *lmstudio_chat_streaming(LLMProvider *self, Message *messages
     return resp;
 }
 
-static LLMResponse *lmstudio_extract_structured(LLMProvider *self, Message *messages, int count,
+static LLMResponse *openai_extract_structured(LLMProvider *self, Message *messages, int count,
                                                  const char *model, double temperature, int timeout,
                                                  const char *json_schema)
 {
-    LMStudioCtx *ctx = self->ctx;
+    OpenAICtx *ctx = self->ctx;
 
     char *msgs_json = build_messages_json(messages, count, NULL, model);
     if (!msgs_json) return NULL;
@@ -495,39 +495,39 @@ static LLMResponse *lmstudio_extract_structured(LLMProvider *self, Message *mess
     }
     free(msgs_json);
 
-    char *raw = lmstudio_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL);
+    char *raw = openai_chat_request(ctx->base_url, body, timeout, 0, NULL, NULL);
     free(body);
 
     if (!raw) return NULL;
 
-    LLMResponse *resp = lmstudio_parse_response(raw);
+    LLMResponse *resp = openai_parse_response(raw);
     free(raw);
     return resp;
 }
 
-static void lmstudio_destroy(LLMProvider *self)
+static void openai_destroy(LLMProvider *self)
 {
     if (!self) return;
-    LMStudioCtx *ctx = self->ctx;
+    OpenAICtx *ctx = self->ctx;
     free(ctx->base_url);
     free(ctx);
     free(self);
 }
 
-LLMProvider *lmstudio_provider_create(const char *base_url)
+LLMProvider *openai_provider_create(const char *base_url)
 {
     LLMProvider *p = calloc(1, sizeof(LLMProvider));
     if (!p) return NULL;
 
-    LMStudioCtx *ctx = calloc(1, sizeof(LMStudioCtx));
+    OpenAICtx *ctx = calloc(1, sizeof(OpenAICtx));
     if (!ctx) { free(p); return NULL; }
 
-    ctx->base_url = str_dup(base_url ? base_url : "http://localhost:1234");
+    ctx->base_url = str_dup(base_url ? base_url : "https://api.openai.com");
 
-    p->chat = lmstudio_chat;
-    p->chat_streaming = lmstudio_chat_streaming;
-    p->extract_structured = lmstudio_extract_structured;
-    p->destroy = lmstudio_destroy;
+    p->chat = openai_chat;
+    p->chat_streaming = openai_chat_streaming;
+    p->extract_structured = openai_extract_structured;
+    p->destroy = openai_destroy;
     p->ctx = ctx;
     return p;
 }

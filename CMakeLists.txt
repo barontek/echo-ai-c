@@ -23,7 +23,7 @@ add_executable(echo-ai
     src/agent/agent.c
     src/agent/context.c
     src/llm/ollama.c
-    src/llm/lmstudio.c
+    src/llm/openai.c
     src/llm/factory.c
     src/tools/tool.c
     src/tools/registry.c

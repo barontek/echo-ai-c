@@ -26,6 +26,7 @@
             valgrind
             gcovr
             nodejs_22
+            caddy
           ];
 
           shellHook = ''

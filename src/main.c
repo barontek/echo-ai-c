@@ -53,8 +53,18 @@ static AgentConfig *load_agent_config(Conf *conf)
     if (!v) { log_error("agent.model required in config", NULL); free(cfg); return NULL; }
     cfg->model = v;
 
-    v = conf_get(conf, "ollama.base_url");
-    cfg->base_url = v ? v : "http://localhost:11434";
+    if (strcmp(cfg->provider, "openai") == 0)
+    {
+        /* OpenAI-compatible provider (also covers LM Studio etc. via a
+         * local openai.base_url). */
+        v = conf_get(conf, "openai.base_url");
+        cfg->base_url = v ? v : "https://api.openai.com";
+    }
+    else
+    {
+        v = conf_get(conf, "ollama.base_url");
+        cfg->base_url = v ? v : "http://localhost:11434";
+    }
 
     v = conf_get(conf, "agent.system_prompt");
     cfg->system_prompt = v ? v : "You are a helpful AI assistant.";

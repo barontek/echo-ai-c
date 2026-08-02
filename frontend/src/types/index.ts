@@ -42,6 +42,11 @@ export interface ApprovalRequest {
   arguments: string;
 }
 
+export interface AskUserRequest {
+  type: 'ask_user';
+  question: string;
+}
+
 export interface StreamEvent {
   type:
     | 'ready'
@@ -52,6 +57,7 @@ export interface StreamEvent {
     | 'pong'
     | 'session_start'
     | 'approval_request'
+    | 'ask_user'
     | 'title_updated'
     | 'history'
     | 'tool_start'
@@ -67,6 +73,7 @@ export interface StreamEvent {
   request_id?: string;
   tool_name?: string;
   arguments?: string;
+  question?: string;
   tool_call_id?: string;
   result_content?: string;
   result_error?: string;

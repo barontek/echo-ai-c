@@ -41,6 +41,8 @@ export interface ChatContextValue {
   reconnect: () => void;
   pendingApproval: ApprovalRequest | null;
   resolveApproval: (requestId: string, approved: boolean) => void;
+  pendingQuestion: string | null;
+  resolveAskUser: (answer: string) => void;
 }
 
 export const ChatContext: Context<ChatContextValue | null> = createContext<ChatContextValue | null>(

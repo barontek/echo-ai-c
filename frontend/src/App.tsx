@@ -3,6 +3,7 @@ import { api } from './api/client';
 import { ChatProvider } from './context';
 import {
   ApprovalDialog,
+  AskUserDialog,
   Header,
   Sidebar,
   MessageList,
@@ -66,6 +67,7 @@ function App() {
   return (
     <ChatProvider>
       <ApprovalDialog />
+      <AskUserDialog />
       <div className="app">
         <Sidebar />
         <div className="main-content">

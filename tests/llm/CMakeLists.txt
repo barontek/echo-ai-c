@@ -18,6 +18,7 @@ add_test(NAME test_ollama COMMAND test_ollama)
 add_executable(test_factory
     ../../src/llm/factory.c
     ../../src/llm/ollama.c
+    ../../src/llm/openai.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
@@ -27,14 +28,14 @@ target_include_directories(test_factory PRIVATE ../../src)
 target_link_libraries(test_factory PRIVATE echo_ai_test_deps)
 add_test(NAME test_factory COMMAND test_factory)
 
-add_executable(test_lmstudio
-    ../../src/llm/lmstudio.c
+add_executable(test_openai
+    ../../src/llm/openai.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
-    test_lmstudio.c
+    test_openai.c
 )
-target_compile_definitions(test_lmstudio PRIVATE LMSTUDIO_TEST=1)
-target_include_directories(test_lmstudio PRIVATE ../../src)
-target_link_libraries(test_lmstudio PRIVATE echo_ai_test_deps)
-add_test(NAME test_lmstudio COMMAND test_lmstudio)
+target_compile_definitions(test_openai PRIVATE OPENAI_TEST=1)
+target_include_directories(test_openai PRIVATE ../../src)
+target_link_libraries(test_openai PRIVATE echo_ai_test_deps)
+add_test(NAME test_openai COMMAND test_openai)

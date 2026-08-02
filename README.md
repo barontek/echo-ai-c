@@ -16,6 +16,42 @@ cp config.conf.example config.conf
 
 Open http://localhost:8080 in your browser.
 
+### TLS dev proxy (optional)
+
+Tokens and chat content travel in plaintext on plain HTTP. For a TLS-fronted
+dev setup with no system changes, run echo-ai behind Caddy:
+
+```bash
+# Nix (caddy is in the dev shell)
+nix develop -c make run-tls
+
+# Debian 12+ / Ubuntu
+apt install caddy && make run-tls
+
+# macOS
+brew install caddy && make run-tls
+```
+
+All three serve https://localhost:8443. Caddy terminates TLS, proxies REST
+and WebSocket to `127.0.0.1:8080`, and issues an internal-CA cert for
+`localhost` (ports in `deploy/Caddyfile`; the frontend uses relative URLs,
+so no client changes are needed).
+
+The internal CA is not in any system trust store (deliberately), so the
+first visit shows a browser warning. To silence it, import Caddy's root CA
+into your browser (per-user, not system-wide):
+
+- CA file location: Linux `~/.local/share/caddy/pki/authorities/local/root.crt`;
+  macOS `~/Library/Application Support/Caddy/pki/authorities/local/root.crt`
+- Firefox: Settings → Privacy & Security → Certificates → View Certificates →
+  Authorities → Import → select the file, trust for "Websites"
+- Chrome/Brave: Settings → Security → Manage certificates → Authorities →
+  Import (a browser restart may be needed)
+
+Note: certificates only stay valid for `localhost` — for any other hostname,
+replace the site name in `deploy/Caddyfile` (Caddy will then request a
+Let's Encrypt cert, which requires the hostname to be publicly resolvable).
+
 ## Dependencies
 
 | Library | Use |
@@ -100,9 +136,14 @@ nested_key = value
 | GET | /api/metrics | No | Prometheus metrics |
 | POST | /api/undo | Token | Undo last file write |
 | POST | /api/redo | Token | Redo last undone file write |
-| GET /ws/chat | WebSocket | Token | Real-time chat |
+| GET /ws/chat | WebSocket | Token² | Real-time chat |
 
 ¹ Token passed as query parameter `?token=...` because EventSource cannot set custom headers.
+
+² WebSocket upgrades from browsers cannot set custom headers either; the token is
+carried in the `Sec-WebSocket-Protocol` subprotocol value (e.g. `new WebSocket('/ws/chat', [token])`)
+and echoed back in the 101 response. Non-browser clients (curl, websocat) may keep using the
+`X-Unlock-Token` header instead.
 
 ## Environment Variables
 

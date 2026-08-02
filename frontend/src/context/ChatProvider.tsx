@@ -60,13 +60,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [currentModel, setCurrentModel] = useState<string>('');
   const [currentProvider, setCurrentProvider] = useState<string>('ollama');
   const [models, setModels] = useState<string[]>([]);
-  const [providers] = useState<string[]>(['ollama', 'openai', 'anthropic', 'lm_studio']);
+  /* openai = any OpenAI-compatible endpoint (LM Studio, vLLM, ...);
+   * the backend's openai.base_url config points it at the local
+   * server. anthropic stays listed but is not implemented server-side. */
+  const [providers] = useState<string[]>(['ollama', 'openai', 'anthropic']);
   const [messages, setMessages] = useState<ChatContextValue['messages']>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [isConnected, setIsConnected] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const wsGenRef = useRef(0);
@@ -162,6 +166,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   arguments: data.arguments || '',
                 });
               }
+              break;
+
+            case 'ask_user':
+              /* The agent is blocked waiting for a freeform text answer;
+               * pause streaming and surface the question. The backend
+               * gives up after `ask_user_timeout` (default 60s) if we
+               * never reply, so this can't hang forever. */
+              debugLog('ask_user', { question: data.question });
+              setIsStreaming(false);
+              setPendingQuestion(data.question ?? '');
               break;
 
             case 'title_updated':
@@ -504,6 +518,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setPendingApproval(null);
   }, []);
 
+  const resolveAskUser = useCallback((answer: string) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ask_user_response', answer }));
+    }
+    setPendingQuestion(null);
+  }, []);
+
   const editMessage = useCallback(
     (index: number, newText: string, msgId?: string) => {
       setMessages((prev) => {
@@ -723,6 +745,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       reconnect,
       pendingApproval,
       resolveApproval,
+      pendingQuestion,
+      resolveAskUser,
     }),
     [
       sessions,
@@ -749,6 +773,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       reconnect,
       pendingApproval,
       resolveApproval,
+      pendingQuestion,
+      resolveAskUser,
     ]
   );
 

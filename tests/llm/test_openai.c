@@ -3,7 +3,7 @@
 #include <string.h>
 #include "agent/message.h"
 
-LLMResponse *lmstudio_test_parse_stream(
+LLMResponse *openai_test_parse_stream(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata);
 
 typedef struct {
@@ -30,7 +30,7 @@ START_TEST(test_lmstudio_stream_accumulates_content_and_tool_calls)
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"} \"}}]}}]}\n\n"
         "data: [DONE]\n\n";
     ChunkCapture capture = {0};
-    LLMResponse *resp = lmstudio_test_parse_stream(stream, capture_chunk, &capture);
+    LLMResponse *resp = openai_test_parse_stream(stream, capture_chunk, &capture);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "Hello");
     ck_assert_int_eq(capture.calls, 2);
@@ -45,7 +45,7 @@ END_TEST
 
 START_TEST(test_lmstudio_stream_handles_empty_response)
 {
-    LLMResponse *resp = lmstudio_test_parse_stream("data: [DONE]", NULL, NULL);
+    LLMResponse *resp = openai_test_parse_stream("data: [DONE]", NULL, NULL);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "");
     llm_response_free(resp);

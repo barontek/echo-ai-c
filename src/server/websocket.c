@@ -9,6 +9,7 @@
 
 #include "websocket.h"
 #include "server.h"
+#include "middleware.h"
 #include "routes/routes.h"
 #include "routes/routes_ws.h"
 #include "../utils/logging.h"
@@ -293,6 +294,7 @@ int ws_do_handshake(HTTPRequest *req, Client *client, ServerContext *ctx)
         "%s"
         "Sec-WebSocket-Accept: %s\r\n"
         "\r\n", protocol_header, b64) < 0)
+    { return -1; }
     { return -1; }
 
     size_t resp_len = strlen(resp);

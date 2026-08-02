@@ -5,7 +5,7 @@ CONFIG  ?= config.conf
 NPM     ?= npm
 NPM_DIR  = frontend
 
-.PHONY: all debug release clean test run run-web run-cli docs init frontend frontend-build frontend-test frontend-clean
+.PHONY: all debug release clean test run run-web run-cli run-tls docs init frontend frontend-build frontend-test frontend-clean
 
 init:
 	@if [ ! -f config.conf ]; then cp config.conf.example config.conf && echo "Created config.conf from example"; else echo "config.conf already exists"; fi
@@ -33,6 +33,12 @@ run-web: frontend-build debug
 
 run-cli: debug
 	$(BUILD_DIR)/echo-ai --cli --config $(CONFIG)
+
+# echo-ai behind a Caddy TLS proxy (see deploy/Caddyfile). Needs `caddy`
+# on PATH (nix develop on Nix; `apt install caddy` / `brew install caddy`
+# elsewhere). Ctrl-C stops both processes.
+run-tls: debug
+	@./scripts/serve-tls.sh
 
 docs:
 	@echo "=== README ==="

@@ -42,6 +42,13 @@ typedef struct {
     int session_start_emitted;
     int ask_user_done;
     char *ask_user_response;
+    int ask_user_timeout;
+    /* Provider-switch params copied from ServerContext; base_url aliases
+     * ctx->agent_cfg (ServerContext outlives every connection, so there is
+     * no ownership transfer). */
+    const char *base_url;
+    int num_ctx;
+    int keep_alive_secs;
     int active_runs;
     int closing;
     ServerContext *server_ctx;
@@ -289,6 +296,30 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
         cJSON *provider = cJSON_GetObjectItem(json, "provider");
         if (provider)
         {
+            if (provider->valuestring && c->agent)
+            {
+                /* The sidebar sends lm_studio; the canonical name is
+                 * openai (the OpenAI-compatible provider, which LM
+                 * Studio also speaks). Map the FE spelling. */
+                const char *pname = provider->valuestring;
+                if (strcmp(pname, "lm_studio") == 0)
+                    pname = "openai";
+
+                if (agent_set_provider(c->agent, pname, c->base_url,
+                                       c->num_ctx, c->keep_alive_secs) != 0)
+                {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "provider switch failed: %s",
+                             provider->valuestring);
+                    cJSON *err = cJSON_CreateObject();
+                    cJSON_AddStringToObject(err, "type", "error");
+                    cJSON_AddStringToObject(err, "content", msg);
+                    char *es = cJSON_PrintUnformatted(err);
+                    if (es) ws_send_json(ws, es);
+                    free(es);
+                    cJSON_Delete(err);
+                }
+            }
             cJSON *model = cJSON_GetObjectItem(json, "model");
             if (model && model->valuestring && c->agent)
                 agent_set_model(c->agent, model->valuestring);
@@ -602,11 +633,27 @@ WS_STATIC char *ws_ask_user_cb(const char *question, void *userdata)
     free(req_str);
     cJSON_Delete(req);
 
-    while (!c->ask_user_done && c->ws && c->loop)
-        uv_run(c->loop, UV_RUN_NOWAIT);
+    /* Bound the wait: a client that never answers (or dies mid-block)
+     * must not freeze the connection. Configurable via `ask_user_timeout`
+     * (seconds, default 60); 0/negative falls back to the default. */
+    int timeout_s = c->ask_user_timeout > 0 ? c->ask_user_timeout : 60;
+    uint64_t deadline = 0;
+    if (c->loop)
+        deadline = uv_now(c->loop) + (uint64_t)timeout_s * 1000;
 
-    char *answer = c->ask_user_response ? str_dup(c->ask_user_response) : NULL;
-    return answer;
+    while (!c->ask_user_done && c->ws && c->loop)
+    {
+        uv_run(c->loop, UV_RUN_NOWAIT);
+        if (uv_now(c->loop) >= deadline) break;
+    }
+
+    /* Web mode has no stdin fallback (tool_ask_user reads stdin only when
+     * this callback is not registered). Return a placeholder so the tool
+     * completes on timeout, connection loss, or `stop` (which sets
+     * ask_user_done without a response). */
+    if (!c->ask_user_done || !c->ask_user_response)
+        return str_dup("(user did not respond)");
+    return str_dup(c->ask_user_response);
 }
 
 WS_STATIC void ws_chat_emit_session_start(WSChatCtx *c)
@@ -642,6 +689,17 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     c->loop = ctx->loop;
     c->server_ctx = ctx;
     c->auth_generation = ctx->auth_generation;
+
+    /* ask_user_timeout (seconds, default 60) bounds how long a blocked
+     * ask_user tool call waits for a client reply before giving up. */
+    c->ask_user_timeout = ctx->conf
+        ? conf_get_int(ctx->conf, "ask_user_timeout", 60) : 60;
+
+    /* Copy the provider-creation params so the config handshake can
+     * rebuild the provider when the client switches it mid-session. */
+    c->base_url = ctx->agent_cfg.base_url;
+    c->num_ctx = ctx->agent_cfg.num_ctx;
+    c->keep_alive_secs = ctx->agent_cfg.keep_alive_secs;
 
     ws->on_message = ws_chat_on_message;
     ws->on_close = ws_chat_on_close;

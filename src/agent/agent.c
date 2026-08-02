@@ -38,6 +38,14 @@ Agent *agent_create(const AgentConfig *cfg)
         return NULL;
     }
 
+    agent->provider_name = str_dup(cfg->provider);
+    if (!agent->provider_name)
+    {
+        log_error("agent_create: str_dup failed", "field", "provider_name", NULL);
+        agent_destroy(agent);
+        return NULL;
+    }
+
     agent->model = str_dup(cfg->model);
     agent->system_prompt = str_dup(cfg->system_prompt ? cfg->system_prompt : "");
     agent->temperature = cfg->temperature;
@@ -75,6 +83,7 @@ void agent_destroy(Agent *agent)
         free(agent->messages);
     }
     free(agent->model);
+    free(agent->provider_name);
     free(agent->system_prompt);
     free(agent->session_id);
     free(agent->context_summary);
@@ -941,4 +950,39 @@ void agent_set_model(Agent *agent, const char *model)
     if (!agent || !model) return;
     free(agent->model);
     agent->model = str_dup(model);
+}
+
+int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
+                       int num_ctx, int keep_alive_secs)
+{
+    if (!agent || !provider || !provider[0]) return -1;
+
+    /* Same provider: nothing to rebuild; the model is switched separately
+     * via agent_set_model. */
+    if (agent->provider_name && strcmp(agent->provider_name, provider) == 0)
+        return 0;
+
+    /* Build the replacement first so a failure leaves the old provider
+     * untouched and the connection usable. */
+    LLMProvider *replacement = get_provider(provider,
+                                            agent->model ? agent->model : "",
+                                            base_url, num_ctx, keep_alive_secs);
+    if (!replacement)
+    {
+        log_error("failed to create provider", "name", provider, NULL);
+        return -1;
+    }
+    char *new_name = str_dup(provider);
+    if (!new_name)
+    {
+        replacement->destroy(replacement);
+        return -1;
+    }
+
+    if (agent->provider)
+        agent->provider->destroy(agent->provider);
+    agent->provider = replacement;
+    free(agent->provider_name);
+    agent->provider_name = new_name;
+    return 0;
 }

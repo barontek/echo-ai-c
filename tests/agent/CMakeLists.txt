@@ -47,3 +47,20 @@ target_compile_definitions(test_agent_save PRIVATE AGENT_TEST=1)
 target_include_directories(test_agent_save PRIVATE ../../src)
 target_link_libraries(test_agent_save PRIVATE echo_ai_test_deps)
 add_test(NAME test_agent_save COMMAND test_agent_save)
+
+add_executable(test_agent_provider
+    ../../src/agent/agent.c
+    ../../src/agent/message.c
+    ../../src/session/session_manager.c
+    ../../src/session/session.c
+    ../../src/session/encryption.c
+    ../../src/session/migration.c
+    ../../src/session/memory.c
+    ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
+    ../../src/tools/tool.c
+    test_agent_provider.c
+)
+target_include_directories(test_agent_provider PRIVATE ../../src)
+target_link_libraries(test_agent_provider PRIVATE echo_ai_test_deps)
+add_test(NAME test_agent_provider COMMAND test_agent_provider)

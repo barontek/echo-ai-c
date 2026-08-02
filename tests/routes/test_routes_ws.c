@@ -23,6 +23,8 @@ typedef struct {
     int approval_result; int ready; QueuedMsg *msg_queue;
     QueuedMsg *msg_queue_tail; char *active_session_id;
     int session_start_emitted; int ask_user_done; char *ask_user_response;
+    int ask_user_timeout;
+    const char *base_url; int num_ctx; int keep_alive_secs;
     int active_runs; int closing;
     ServerContext *server_ctx; unsigned long auth_generation;
 } WSChatCtx;
@@ -43,6 +45,14 @@ extern void ws_chat_emit_session_start(WSChatCtx *);
 static int captured_ws_send_count = 0;
 static char captured_ws_json[8192] = {0};
 
+/* Monotonic-clock stand-in: first call returns UV_NOW_FIRST (used to
+ * compute the deadline), later calls return UV_NOW_LATER — enough to
+ * make a 1s ask_user timeout elapse deterministically without real
+ * waiting. Declared here so setup() can reset it. */
+#define UV_NOW_FIRST 1000
+#define UV_NOW_LATER 2001
+static int stub_uv_now_calls = 0;
+
 static int stub_agent_run_streaming_count = 0;
 static LLMResponse *stub_agent_run_streaming_resp = NULL;
 static int stub_streaming_chunk_count = 0;
@@ -52,6 +62,16 @@ static WSChatCtx *stub_close_ctx = NULL;
 
 static int stub_agent_create_succeeds = 1;
 static Session *stub_session_load_result = NULL;
+
+/* Recorded by the agent_set_provider / agent_set_model stubs below;
+ * declared here so setup() can reset them. */
+static int stub_agent_set_provider_result = 0;
+static int stub_agent_set_provider_calls = 0;
+static const char *stub_agent_set_provider_name = NULL;
+static const char *stub_agent_set_provider_base_url = NULL;
+static int stub_agent_set_provider_num_ctx = 0;
+static int stub_agent_set_provider_keep_alive = 0;
+static const char *stub_agent_set_model_name = NULL;
 
 static LLMResponse fake_resp_basic = {0};
 static LLMResponse fake_resp_with_tools = {0};
@@ -68,6 +88,7 @@ static void reset_capture(void)
 static void setup(void)
 {
     reset_capture();
+    stub_uv_now_calls = 0;
     stub_agent_run_streaming_count = 0;
     stub_agent_run_streaming_resp = NULL;
     stub_streaming_chunk_count = 0;
@@ -76,6 +97,16 @@ static void setup(void)
     for (int i = 0; i < 4; i++) stub_streaming_chunks[i] = NULL;
     stub_agent_create_succeeds = 1;
     stub_session_load_result = NULL;
+    stub_agent_set_provider_result = 0;
+    stub_agent_set_provider_calls = 0;
+    free((char *)stub_agent_set_provider_name);
+    free((char *)stub_agent_set_provider_base_url);
+    stub_agent_set_provider_name = NULL;
+    stub_agent_set_provider_base_url = NULL;
+    stub_agent_set_provider_num_ctx = 0;
+    stub_agent_set_provider_keep_alive = 0;
+    free((char *)stub_agent_set_model_name);
+    stub_agent_set_model_name = NULL;
 
     fake_resp_basic.content = "Hello world";
     fake_resp_basic.thinking = NULL;
@@ -154,6 +185,15 @@ int uv_run(uv_loop_t *loop, uv_run_mode mode)
     return 0;
 }
 
+/* Monotonic-clock stand-in: first call returns START (used to compute the
+ * deadline), later calls return LATER — enough to make a 1s ask_user
+ * timeout elapse deterministically without real waiting. */
+uint64_t uv_now(const uv_loop_t *loop)
+{
+    (void)loop;
+    return stub_uv_now_calls++ == 0 ? UV_NOW_FIRST : UV_NOW_LATER;
+}
+
 LLMResponse *agent_run_streaming(Agent *agent, const char *input,
                                   void (*on_chunk)(const char *, void *),
                                   void *userdata)
@@ -199,7 +239,27 @@ void agent_set_ask_user_callback(Agent *a, ask_user_callback cb, void *u)
 { (void)a; (void)cb; (void)u; }
 void agent_set_safety(Agent *a, SafetyConfig *s) { (void)a; (void)s; }
 void agent_set_metrics(Agent *a, Metrics *m) { (void)a; (void)m; }
-void agent_set_model(Agent *a, const char *m) { (void)a; (void)m; }
+
+int agent_set_provider(Agent *a, const char *provider, const char *base_url,
+                       int num_ctx, int keep_alive_secs)
+{
+    (void)a;
+    stub_agent_set_provider_calls++;
+    free((char *)stub_agent_set_provider_name);
+    free((char *)stub_agent_set_provider_base_url);
+    stub_agent_set_provider_name = str_dup(provider);
+    stub_agent_set_provider_base_url = str_dup(base_url);
+    stub_agent_set_provider_num_ctx = num_ctx;
+    stub_agent_set_provider_keep_alive = keep_alive_secs;
+    return stub_agent_set_provider_result;
+}
+
+void agent_set_model(Agent *a, const char *m)
+{
+    (void)a;
+    free((char *)stub_agent_set_model_name);
+    stub_agent_set_model_name = str_dup(m);
+}
 void agent_set_callback_manager(Agent *a, CallbackManager *m) { (void)a; (void)m; }
 
 Session *session_manager_load_session(SessionManager *sm, const char *id)
@@ -805,6 +865,49 @@ START_TEST(test_ask_user_cb_null_question)
 }
 END_TEST
 
+START_TEST(test_ask_user_cb_times_out_without_response)
+{
+    /* No client reply ever arrives (g_loop_ctx = NULL, so the uv_run
+     * stub leaves ask_user_done at 0); uv_now elapses past the deadline.
+     * The tool must complete with a placeholder, not hang or fall
+     * through to the CLI stdin fallback. */
+    WSChatCtx c = {0};
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    c.loop = (uv_loop_t *)&c;
+    c.ask_user_timeout = 1;
+    char *r = ws_ask_user_cb("Time-sensitive question?", &c);
+    ck_assert_ptr_nonnull(r);
+    ck_assert_str_eq(r, "(user did not respond)");
+    ck_assert_int_eq(c.ask_user_done, 0);
+    ck_assert(strstr(captured_ws_json, "\"type\":\"ask_user\""));
+    free(r);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_ask_user_cb_default_timeout_never_nulls)
+{
+    /* ask_user_timeout == 0 must fall back to the 60s default (deadline
+     * = 1000 + 60000) rather than timing out instantly; the uv_run stub
+     * delivers the answer before the deadline elapses. */
+    WSChatCtx c = {0};
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    c.loop = (uv_loop_t *)&c;
+    g_loop_ctx = &c;
+    g_want_answer = "still here";
+    char *r = ws_ask_user_cb("Default timeout?", &c);
+    g_loop_ctx = NULL;
+    g_want_answer = NULL;
+    ck_assert_ptr_nonnull(r);
+    ck_assert_str_eq(r, "still here");
+    free(r);
+    free(c.ask_user_response);
+    reset_capture();
+}
+END_TEST
+
 /* ==================================================================
  * ws_chat_on_message tests
  * ================================================================== */
@@ -948,6 +1051,81 @@ START_TEST(test_on_message_provider_config)
     ws_chat_on_message((WSClient *)&dummy_ws,
         "{\"provider\":\"ollama\",\"model\":\"llama3\"}", 40, &c);
     ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_switches_provider)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    c.base_url = "http://localhost:11434";
+    c.num_ctx = 4096;
+    c.keep_alive_secs = 120;
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"lm_studio\",\"model\":\"qwen\"}", 41, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_str_eq(stub_agent_set_provider_name, "openai");
+    ck_assert_str_eq(stub_agent_set_provider_base_url, "http://localhost:11434");
+    ck_assert_int_eq(stub_agent_set_provider_num_ctx, 4096);
+    ck_assert_int_eq(stub_agent_set_provider_keep_alive, 120);
+    ck_assert_str_eq(stub_agent_set_model_name, "qwen");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_same_provider)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"ollama\",\"model\":\"llama3\"}", 40, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_str_eq(stub_agent_set_provider_name, "ollama");
+    ck_assert_str_eq(stub_agent_set_model_name, "llama3");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_failure_sends_error)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    c.base_url = "http://localhost:11434";
+    stub_agent_set_provider_result = -1;
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"openai\",\"model\":\"gpt-4o\"}", 37, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_str_eq(stub_agent_set_provider_name, "openai");
+    ck_assert(strstr(captured_ws_json, "provider switch failed: openai"));
+    ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
+    ck_assert_str_eq(stub_agent_set_model_name, "gpt-4o");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_model_only)
+{
+    /* A config message without a provider field is not a valid handshake:
+     * the handler falls through to "missing type". The FE always sends
+     * provider + model together. */
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"model\":\"qwen\"}", 16, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 0);
+    ck_assert(strstr(captured_ws_json, "missing type"));
     reset_capture();
 }
 END_TEST
@@ -1347,11 +1525,12 @@ Suite *routes_ws_suite(void)
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_ask_user_cb");
-    tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_ask_user_cb_null_ctx);
     tcase_add_test(tc, test_ask_user_cb_null_ws);
     tcase_add_test(tc, test_ask_user_cb_with_answer);
     tcase_add_test(tc, test_ask_user_cb_null_question);
+    tcase_add_test(tc, test_ask_user_cb_times_out_without_response);
+    tcase_add_test(tc, test_ask_user_cb_default_timeout_never_nulls);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_chat_on_message");
@@ -1367,6 +1546,10 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_ask_user_response);
     tcase_add_test(tc, test_on_message_ask_user_empty_answer);
     tcase_add_test(tc, test_on_message_provider_config);
+    tcase_add_test(tc, test_on_message_provider_config_switches_provider);
+    tcase_add_test(tc, test_on_message_provider_config_same_provider);
+    tcase_add_test(tc, test_on_message_provider_config_failure_sends_error);
+    tcase_add_test(tc, test_on_message_provider_config_model_only);
     tcase_add_test(tc, test_on_message_message_simple);
     tcase_add_test(tc, test_on_message_rejects_expired_auth_generation);
     tcase_add_test(tc, test_on_message_message_null_resp);

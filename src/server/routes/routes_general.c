@@ -8,6 +8,7 @@
 #include "routes.h"
 #include "routes_general.h"
 #include "../middleware.h"
+#include "../../config/config.h"
 #include "../../session/session_manager.h"
 #include "../../utils/logging.h"
 #include "../../utils/string_utils.h"
@@ -167,17 +168,88 @@ static size_t models_write_cb(void *contents, size_t size, size_t nmemb, void *u
     return total;
 }
 
+/* Emit {"models":[...]}; takes ownership of arr. */
+static void models_response(Client *client, cJSON *arr)
+{
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddItemToObject(resp, "models", arr);
+    char *str = cJSON_PrintUnformatted(resp);
+    server_response_json(client, 200, str);
+    free(str);
+    cJSON_Delete(resp);
+}
+
 void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
-    (void)req;
-    (void)ctx;
     cJSON *arr = cJSON_CreateArray();
+
+    /* Provider from the query string. The FE sends it on every model
+     * refetch; when absent we default to ollama (the FE also calls
+     * this without a provider on first load). */
+    char provider[64] = "ollama";
+    const char *q = req ? req->query : NULL;
+    if (q)
+    {
+        const char *p = strstr(q, "provider=");
+        if (p)
+        {
+            p += 9;
+            size_t plen = 0;
+            while (p[plen] != '\0' && p[plen] != '&' && plen < sizeof(provider) - 1)
+                plen++;
+            if (plen > 0)
+            {
+                memcpy(provider, p, plen);
+                provider[plen] = '\0';
+                /* FE spelling is lm_studio; canonical name is openai. */
+                if (strcmp(provider, "lm_studio") == 0)
+                    snprintf(provider, sizeof(provider), "openai");
+            }
+        }
+    }
+
+    const char *base_url = NULL;
+    const char *default_base = NULL;
+    const char *path = NULL;
+    const char *list_key = "models";
+    const char *name_key = "name";
+    if (strcmp(provider, "openai") == 0)
+    {
+        /* OpenAI-compatible endpoint (LM Studio, vLLM, ...). */
+        base_url = ctx && ctx->conf ? conf_get(ctx->conf, "openai.base_url") : NULL;
+        default_base = "https://api.openai.com";
+        path = "/v1/models";
+        list_key = "data";
+        name_key = "id";
+    }
+    else if (strcmp(provider, "ollama") == 0)
+    {
+        base_url = ctx && ctx->conf ? conf_get(ctx->conf, "ollama.base_url") : NULL;
+        default_base = "http://localhost:11434";
+        path = "/api/tags";
+    }
+    else
+    {
+        /* Unsupported provider (openai/anthropic): nothing to list. */
+        models_response(client, arr);
+        return;
+    }
+
+    char url[1024];
+    int url_len = snprintf(url, sizeof(url), "%s%s",
+                           base_url ? base_url : default_base, path);
+    if (url_len < 0 || (size_t)url_len >= sizeof(url))
+    {
+        /* Truncated URL can't be queried; return an empty list. */
+        models_response(client, arr);
+        return;
+    }
 
     CURL *curl = curl_easy_init();
     if (curl)
     {
         ModelsBuf buf = {0};
-        curl_easy_setopt(curl, CURLOPT_URL, "http://localhost:11434/api/tags");
+        curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, models_write_cb);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
@@ -187,14 +259,14 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
             cJSON *root = cJSON_Parse(buf.data);
             if (root)
             {
-                cJSON *models = cJSON_GetObjectItem(root, "models");
-                if (models && cJSON_IsArray(models))
+                cJSON *list = cJSON_GetObjectItem(root, list_key);
+                if (list && cJSON_IsArray(list))
                 {
-                    int count = cJSON_GetArraySize(models);
+                    int count = cJSON_GetArraySize(list);
                     for (int i = 0; i < count; i++)
                     {
-                        cJSON *m = cJSON_GetArrayItem(models, i);
-                        cJSON *name = m ? cJSON_GetObjectItem(m, "name") : NULL;
+                        cJSON *m = cJSON_GetArrayItem(list, i);
+                        cJSON *name = m ? cJSON_GetObjectItem(m, name_key) : NULL;
                         if (name && cJSON_IsString(name))
                             cJSON_AddItemToArray(arr, cJSON_CreateString(cJSON_GetStringValue(name)));
                     }
@@ -206,12 +278,7 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
         curl_easy_cleanup(curl);
     }
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddItemToObject(resp, "models", arr);
-    char *str = cJSON_PrintUnformatted(resp);
-    server_response_json(client, 200, str);
-    free(str);
-    cJSON_Delete(resp);
+    models_response(client, arr);
 }
 
 void handle_preferences_get(HTTPRequest *req, Client *client, ServerContext *ctx)

@@ -27,6 +27,7 @@ add_test(NAME test_routes_session_handlers COMMAND test_routes_session_handlers)
 
 add_executable(test_routes_general
     ../../src/server/routes/routes_general.c
+    ../../src/config/config.c
     ../../src/utils/string_utils.c
     test_routes_general.c
 )
@@ -55,6 +56,7 @@ add_test(NAME test_routes_chat COMMAND test_routes_chat)
 add_executable(test_routes_ws
     ../../src/server/routes/routes_ws.c
     ../../src/server/routes/routes.c
+    ../../src/config/config.c
     ../../src/utils/string_utils.c
     test_routes_ws.c
 )
