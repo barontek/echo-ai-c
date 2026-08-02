@@ -9,6 +9,7 @@
 #include "routes_general.h"
 #include "../middleware.h"
 #include "../../config/config.h"
+#include "../../llm/provider.h"
 #include "../../session/session_manager.h"
 #include "../../utils/logging.h"
 #include "../../utils/string_utils.h"
@@ -215,10 +216,30 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
     const char *name_key = "name";
     if (strcmp(provider, "openai") == 0)
     {
-        /* OpenAI-compatible endpoint (LM Studio, vLLM, ...). */
+        /* Real OpenAI service. */
         base_url = ctx && ctx->conf ? conf_get(ctx->conf, "openai.base_url") : NULL;
         default_base = "https://api.openai.com";
         path = "/v1/models";
+        list_key = "data";
+        name_key = "id";
+    }
+    else if (strcmp(provider, "openai_compatible") == 0)
+    {
+        /* OpenAI-compatible endpoint (LM Studio, vLLM, ...). */
+        base_url = ctx && ctx->conf
+            ? conf_get(ctx->conf, "openai_compatible.base_url") : NULL;
+        default_base = "http://localhost:1234";
+        path = "/v1/models";
+        list_key = "data";
+        name_key = "id";
+    }
+    else if (strcmp(provider, "opencode_zen") == 0)
+    {
+        /* OpenCode Zen: OpenAI-compatible endpoint at opencode.ai/zen/v1. */
+        base_url = ctx && ctx->conf
+            ? conf_get(ctx->conf, "opencode_zen.base_url") : NULL;
+        default_base = "https://opencode.ai/zen/v1";
+        path = "/models";  /* base_url already includes /v1 */
         list_key = "data";
         name_key = "id";
     }
@@ -230,7 +251,7 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
     }
     else
     {
-        /* Unsupported provider (openai/anthropic): nothing to list. */
+        /* Unsupported provider (anthropic): nothing to list. */
         models_response(client, arr);
         return;
     }
@@ -249,6 +270,28 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
     if (curl)
     {
         ModelsBuf buf = {0};
+        struct curl_slist *headers = NULL;
+        const char *api_token = ctx && ctx->conf
+            ? conf_provider_token(ctx->conf, provider) : NULL;
+        if (api_token && api_token[0])
+        {
+            char *auth = NULL;
+            if (asprintf(&auth, "Authorization: Bearer %s", api_token) < 0)
+            {
+                curl_easy_cleanup(curl);
+                models_response(client, arr);
+                return;
+            }
+            headers = curl_slist_append(NULL, auth);
+            free(auth);
+            if (!headers)
+            {
+                curl_easy_cleanup(curl);
+                models_response(client, arr);
+                return;
+            }
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        }
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, models_write_cb);
@@ -275,10 +318,31 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
             }
         }
         free(buf.data);
+        curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
     }
 
     models_response(client, arr);
+}
+
+void handle_providers(HTTPRequest *req, Client *client, ServerContext *ctx)
+{
+    (void)req;
+    (void)ctx;
+    cJSON *json = cJSON_CreateObject();
+    cJSON *arr = cJSON_CreateArray();
+    if (json && arr)
+    {
+        int count = 0;
+        const char *const *names = provider_names_available(&count);
+        for (int i = 0; i < count; i++)
+            cJSON_AddItemToArray(arr, cJSON_CreateString(names[i]));
+        cJSON_AddItemToObject(json, "providers", arr);
+    }
+    char *str = json ? cJSON_PrintUnformatted(json) : NULL;
+    server_response_json(client, 200, str ? str : "{\"providers\":[]}");
+    free(str);
+    cJSON_Delete(json);
 }
 
 void handle_preferences_get(HTTPRequest *req, Client *client, ServerContext *ctx)

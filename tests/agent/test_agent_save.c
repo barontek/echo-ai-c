@@ -24,15 +24,16 @@ void agent_save_session(Agent *agent);
 Tool *registry_get(const char *name) { (void)name; return NULL; }
 char *registry_schemas_json(void) { return str_dup("[]"); }
 int registry_get_delegate_config(const char **a, const char **b, const char **c,
-                                  int *d, int *e, double *f, int *g, int *h)
+                                  const char **d, int *e, int *f, double *g,
+                                  int *h, int *i)
 {
-    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h;
+    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i;
     return 0;
 }
 void registry_set_delegate_config(const char *a, const char *b, const char *c,
-                                   int d, int e, double f, int g, int h)
+                                   const char *d, int e, int f, double g, int h, int i)
 {
-    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h;
+    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i;
 }
 void registry_set_session_manager(SessionManager *sm) { (void)sm; }
 void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *u)
@@ -62,9 +63,10 @@ static LLMResponse *mock_chat_streaming(LLMProvider *self, Message *messages, in
 static void mock_destroy(LLMProvider *self) { free(self); }
 
 LLMProvider *get_provider(const char *name, const char *model, const char *base_url,
-                           int num_ctx, int keep_alive_secs)
+                           const char *api_token, int num_ctx, int keep_alive_secs)
 {
-    (void)name; (void)model; (void)base_url; (void)num_ctx; (void)keep_alive_secs;
+    (void)name; (void)model; (void)base_url; (void)api_token;
+    (void)num_ctx; (void)keep_alive_secs;
     MockProvider *mock = calloc(1, sizeof(MockProvider));
     if (!mock) return NULL;
     mock->provider.chat = mock_chat;

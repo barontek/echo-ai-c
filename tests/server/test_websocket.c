@@ -49,6 +49,31 @@ void log_msg(LogLevel level, const char *file, int line, const char *message, ..
     (void)message;
 }
 
+/* ---- libuv stubs for ws_do_handshake (never touch real uv internals) ---- */
+
+int uv_read_stop(uv_stream_t *stream) { (void)stream; return 0; }
+
+int uv_read_start(uv_stream_t *stream, uv_alloc_cb alloc_cb, uv_read_cb read_cb)
+{
+    (void)stream;
+    (void)alloc_cb;
+    (void)read_cb;
+    return 0;
+}
+
+uv_loop_t *uv_handle_get_loop(const uv_handle_t *handle) { (void)handle; return (uv_loop_t *)1; }
+
+int uv_timer_init(uv_loop_t *loop, uv_timer_t *timer) { (void)loop; (void)timer; return 0; }
+
+int uv_timer_start(uv_timer_t *timer, uv_timer_cb cb, uint64_t timeout, uint64_t repeat)
+{
+    (void)timer;
+    (void)cb;
+    (void)timeout;
+    (void)repeat;
+    return 0;
+}
+
 static void reset_capture(void)
 {
     captured_req = NULL;
@@ -110,6 +135,43 @@ START_TEST(test_protocol_is_selected_only_when_offered)
 }
 END_TEST
 
+START_TEST(test_handshake_upgrades_with_valid_key)
+{
+    /* Regression: an unconditional `{ return -1; }` after building the 101
+     * response made ws_do_handshake reject every connection with 400. */
+    reset_capture();
+    uv_tcp_t fake_client = {0};  /* Client is opaque; handshake casts it to uv_stream_t */
+    ServerContext ctx = {0};
+    HTTPRequest req = {0};
+    req.client = (Client *)&fake_client;
+    snprintf(req.headers, sizeof(req.headers),
+             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n");
+
+    ck_assert_int_eq(ws_do_handshake(&req, (Client *)&fake_client, &ctx), 0);
+    ck_assert_ptr_nonnull(captured_base);
+    static const char expect[] = "HTTP/1.1 101 Switching Protocols\r\n";
+    ck_assert(strncmp(captured_base, expect, sizeof(expect) - 1) == 0);
+    /* RFC 6455 §4.2.2 sample: key above + WS_MAGIC -> this accept value. */
+    ck_assert(strstr(captured_base, "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != NULL);
+    captured_cb(captured_req, 0);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_handshake_rejects_missing_key)
+{
+    reset_capture();
+    uv_tcp_t fake_client = {0};
+    ServerContext ctx = {0};
+    HTTPRequest req = {0};
+    req.client = (Client *)&fake_client;
+    snprintf(req.headers, sizeof(req.headers), "Host: localhost\r\n");
+
+    ck_assert_int_eq(ws_do_handshake(&req, (Client *)&fake_client, &ctx), -1);
+    reset_capture();
+}
+END_TEST
+
 int main(void)
 {
     Suite *suite = suite_create("WebSocket");
@@ -118,7 +180,10 @@ int main(void)
     tcase_add_test(tc, test_close_frame_encodes_requested_code);
     tcase_add_test(tc, test_control_frame_submission_failure_is_reported);
     tcase_add_test(tc, test_protocol_is_selected_only_when_offered);
-    suite_add_tcase(suite, tc);
+    TCase *tc_handshake = tcase_create("Handshake");
+    tcase_add_test(tc_handshake, test_handshake_upgrades_with_valid_key);
+    tcase_add_test(tc_handshake, test_handshake_rejects_missing_key);
+    suite_add_tcase(suite, tc_handshake);
     SRunner *runner = srunner_create(suite);
     srunner_run_all(runner, CK_NORMAL);
     int failed = srunner_ntests_failed(runner);

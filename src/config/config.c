@@ -169,6 +169,80 @@ int conf_get_int(const Conf *conf, const char *key, int def)
     return (int)result;
 }
 
+#define PROVIDERS_PREFIX "providers."
+
+int conf_provider_tokens_alloc(const Conf *conf, ConfToken **out, int *out_count)
+{
+    if (!conf || !out || !out_count) return -1;
+    *out = NULL;
+    *out_count = 0;
+
+    /* Count [providers] entries to size the array in one pass. */
+    int n = 0;
+    for (int i = 0; i < conf->count; i++)
+    {
+        if (strncmp(conf->entries[i].key, PROVIDERS_PREFIX,
+                    sizeof(PROVIDERS_PREFIX) - 1) == 0) n++;
+    }
+    if (n == 0) return 0;
+
+    ConfToken *tokens = calloc((size_t)n, sizeof(ConfToken));
+    if (!tokens) return -1;
+
+    int idx = 0;
+    for (int i = 0; i < conf->count && idx < n; i++)
+    {
+        const char *key = conf->entries[i].key;
+        if (strncmp(key, PROVIDERS_PREFIX, sizeof(PROVIDERS_PREFIX) - 1) != 0)
+            continue;
+        const char *name = key + sizeof(PROVIDERS_PREFIX) - 1;
+        if (name[0] == '\0') continue;  /* bare "providers." key, no provider name */
+
+        char *provider = str_dup(name);
+        char *token = str_dup(conf->entries[i].value);
+        if (!provider || !token)
+        {
+            free(provider);
+            free(token);
+            conf_token_list_free(tokens, idx);
+            return -1;
+        }
+        tokens[idx].provider = provider;
+        tokens[idx].token = token;
+        idx++;
+    }
+
+    *out = tokens;
+    *out_count = idx;
+    return 0;
+}
+
+void conf_token_list_free(ConfToken *tokens, int count)
+{
+    if (!tokens) return;
+    for (int i = 0; i < count; i++)
+    {
+        free(tokens[i].provider);
+        free(tokens[i].token);
+    }
+    free(tokens);
+}
+
+const char *conf_provider_token(const Conf *conf, const char *provider)
+{
+    if (!conf || !provider) return NULL;
+
+    /* OpenCode Zen and any future OpenCode-branded provider (OpenCode Go)
+     * share one token, so the key in [providers] is "opencode". */
+    const char *key_name = strcmp(provider, "opencode_zen") == 0
+                               ? "opencode" : provider;
+
+    char key[96];
+    int len = snprintf(key, sizeof(key), "%s%s", PROVIDERS_PREFIX, key_name);
+    if (len < 0 || (size_t)len >= sizeof(key)) return NULL;
+    return conf_get(conf, key);
+}
+
 void conf_free(Conf *conf)
 {
     if (!conf) return;

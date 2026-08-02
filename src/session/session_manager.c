@@ -236,14 +236,21 @@ SessionManager *session_manager_create(const char *data_dir, const char *passwor
 
     pthread_mutex_init(&sm->lock, NULL);
 
+    /* mkdir_p must run before init_encryption: the salt file is written
+     * into data_dir, which doesn't exist yet on a fresh HOME. */
+    if (mkdir_p(data_dir) != 0 && errno != EEXIST)
+    {
+        log_error("failed to create data dir", "path", data_dir, NULL);
+        session_manager_free(sm);
+        return NULL;
+    }
+
     if (init_encryption(sm, password) != 0)
     {
         log_error("failed to initialize encryption", NULL);
         session_manager_free(sm);
         return NULL;
     }
-
-    mkdir_p(data_dir);
 
     char *db_path = NULL;
     if (asprintf(&db_path, "%s/%s", sm->data_dir, DB_FILE) < 0)

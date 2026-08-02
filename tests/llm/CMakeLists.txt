@@ -19,6 +19,8 @@ add_executable(test_factory
     ../../src/llm/factory.c
     ../../src/llm/ollama.c
     ../../src/llm/openai.c
+    ../../src/llm/openai_compatible.c
+    ../../src/llm/opencode_zen.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
@@ -28,14 +30,14 @@ target_include_directories(test_factory PRIVATE ../../src)
 target_link_libraries(test_factory PRIVATE echo_ai_test_deps)
 add_test(NAME test_factory COMMAND test_factory)
 
-add_executable(test_openai
-    ../../src/llm/openai.c
+add_executable(test_openai_compatible
+    ../../src/llm/openai_compatible.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
-    test_openai.c
+    test_openai_compatible.c
 )
-target_compile_definitions(test_openai PRIVATE OPENAI_TEST=1)
-target_include_directories(test_openai PRIVATE ../../src)
-target_link_libraries(test_openai PRIVATE echo_ai_test_deps)
-add_test(NAME test_openai COMMAND test_openai)
+target_compile_definitions(test_openai_compatible PRIVATE OPENAI_COMPATIBLE_TEST=1)
+target_include_directories(test_openai_compatible PRIVATE ../../src)
+target_link_libraries(test_openai_compatible PRIVATE echo_ai_test_deps)
+add_test(NAME test_openai_compatible COMMAND test_openai_compatible)

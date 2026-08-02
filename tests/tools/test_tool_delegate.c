@@ -12,11 +12,13 @@ extern void tool_delegate_test_set_alloc_fail(int nth_allocation);
 
 /* Mock registry functions — avoid linking the whole registry.c tool chain */
 int registry_get_delegate_config(const char **provider_name, const char **base_url,
-                                  const char **model, int *num_ctx, int *keep_alive_secs,
+                                  const char **api_token, const char **model,
+                                  int *num_ctx, int *keep_alive_secs,
                                   double *temperature, int *timeout, int *max_iterations)
 {
     if (provider_name) *provider_name = "mock";
     if (base_url) *base_url = "http://localhost";
+    if (api_token) *api_token = "mock-token";
     if (model) *model = "mock-model";
     if (num_ctx) *num_ctx = 4096;
     if (keep_alive_secs) *keep_alive_secs = 120;
@@ -91,9 +93,11 @@ static LLMResponse *mock_chat(LLMProvider *self, Message *messages, int count,
 static void mock_destroy(LLMProvider *self) { free(self); }
 
 LLMProvider *td_test_get_provider(const char *name, const char *model,
-                                   const char *base_url, int num_ctx, int keep_alive_secs)
+                                   const char *base_url, const char *api_token,
+                                   int num_ctx, int keep_alive_secs)
 {
-    (void)name; (void)model; (void)base_url; (void)num_ctx; (void)keep_alive_secs;
+    (void)name; (void)model; (void)base_url; (void)api_token;
+    (void)num_ctx; (void)keep_alive_secs;
     LLMProvider *p = calloc(1, sizeof(LLMProvider));
     if (p)
     {

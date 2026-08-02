@@ -70,8 +70,6 @@ void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
     if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0)
     { free(password); server_response_error(client, 500, "out of memory"); return; }
 
-    mkdir(data_dir, 0755);
-
     SessionManager *sm = session_manager_create(data_dir, password);
     free(data_dir);
 

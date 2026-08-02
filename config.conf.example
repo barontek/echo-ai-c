@@ -89,12 +89,22 @@ num_ctx = 4096
 keep_alive_secs = 120
 
 [openai]
-# Base URL of the OpenAI-compatible endpoint (default: https://api.openai.com).
-# This also covers LM Studio and other local OpenAI-compatible servers —
-# point it at your local server, e.g. http://localhost:1234 (LM Studio).
-# Note: no API-key support yet, so the real OpenAI service will reject
-# requests with 401 until that lands.
+# Real OpenAI endpoint. Requires a token in the [providers] section
+# (openai = sk-...), otherwise the service rejects with 401.
 base_url = https://api.openai.com
+
+[openai_compatible]
+# OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp server, ...).
+# Set agent.provider = openai_compatible to use it. A token is optional
+# and read from the [providers] section if present.
+base_url = http://localhost:1234
+
+[opencode_zen]
+# OpenCode Zen: OpenAI-compatible gateway at opencode.ai (curated models,
+# pay-per-use, a few free ones). Set agent.provider = opencode_zen to use it.
+# Requires the shared "opencode" token in the [providers] section (see below),
+# issued at https://opencode.ai/auth; otherwise the service rejects with 401.
+base_url = https://opencode.ai/zen/v1
 
 [safety]
 # Restrict file operations to this directory (default: current dir)
@@ -133,6 +143,16 @@ provider = brave
 
 # API key for Brave or Tavily (not needed for DuckDuckGo)
 api_key = your-api-key-here
+
+[providers]
+# API tokens for LLM providers that need authentication.
+# Format: provider_name = token
+# The token is sent as a Bearer Authorization header by the openai and
+# openai_compatible clients. Providers not requiring a token can be omitted.
+# openai = your-openai-api-key
+# opencode = your-opencode-key  (shared by opencode_zen and any future
+#                                 OpenCode-branded provider, e.g. OpenCode Go)
+# anthropic = your-anthropic-api-key
 
 [server]
 # HTTP server port (default: 8080)

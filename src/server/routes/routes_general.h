@@ -11,6 +11,7 @@ void handle_undo(HTTPRequest *req, Client *client, ServerContext *ctx);
 void handle_redo(HTTPRequest *req, Client *client, ServerContext *ctx);
 void handle_health_detailed(HTTPRequest *req, Client *client, ServerContext *ctx);
 void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx);
+void handle_providers(HTTPRequest *req, Client *client, ServerContext *ctx);
 void handle_preferences_get(HTTPRequest *req, Client *client, ServerContext *ctx);
 void handle_preferences_set(HTTPRequest *req, Client *client, ServerContext *ctx);
 

@@ -11,6 +11,32 @@ function debugLog(action: string, data?: unknown) {
   }
 }
 
+type ChatPreferences = {
+  model?: string;
+  provider?: string;
+  models?: Record<string, string>;
+};
+
+const CHAT_PREFERENCES_KEY = 'echo-ai-chat-preferences';
+
+function readChatPreferences(): ChatPreferences {
+  try {
+    const raw = localStorage.getItem(CHAT_PREFERENCES_KEY);
+    if (!raw) return {};
+    const value = JSON.parse(raw) as ChatPreferences;
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeChatPreferences(preferences: ChatPreferences): void {
+  try {
+    localStorage.setItem(CHAT_PREFERENCES_KEY, JSON.stringify(preferences));
+  } catch {
+  }
+}
+
 function combineAssistantMessages(
   messages: ChatContextValue['messages']
 ): ChatContextValue['messages'] {
@@ -59,11 +85,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState<string>('');
   const [currentProvider, setCurrentProvider] = useState<string>('ollama');
+  const [modelByProvider, setModelByProvider] = useState<Record<string, string>>({});
   const [models, setModels] = useState<string[]>([]);
-  /* openai = any OpenAI-compatible endpoint (LM Studio, vLLM, ...);
-   * the backend's openai.base_url config points it at the local
-   * server. anthropic stays listed but is not implemented server-side. */
-  const [providers] = useState<string[]>(['ollama', 'openai', 'anthropic']);
+  /* Provider list comes from the backend (/api/providers); the fallback
+   * below only covers the window before the fetch resolves. */
+  const FALLBACK_PROVIDERS = ['ollama', 'openai', 'openai_compatible', 'opencode_zen'];
+  const [providers, setProviders] = useState<string[]>(FALLBACK_PROVIDERS);
   const [messages, setMessages] = useState<ChatContextValue['messages']>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [isConnected, setIsConnected] = useState(false);
@@ -564,42 +591,59 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const loadData = async () => {
       try {
         debugLog('loadData:start');
-        const [sessionsData, modelsData, prefsData] = await Promise.all([
+        const [providersData, sessionsData, prefsData] = await Promise.all([
+          api.getProviders(),
           api.getSessions(),
-          api.getModels(),
           api.getPreferences(),
         ]);
+        const storedPrefs = readChatPreferences();
+        const savedModels = {
+          ...(prefsData.models || {}),
+          ...(storedPrefs.models || {}),
+        };
+        if (prefsData.provider && prefsData.model && !savedModels[prefsData.provider]) {
+          savedModels[prefsData.provider] = prefsData.model;
+        }
         debugLog('loadData:sessions', sessionsData.length);
-        debugLog('loadData:models', modelsData.length);
         debugLog('loadData:prefs', prefsData);
+        const availableProviders =
+          providersData.length > 0 ? providersData : FALLBACK_PROVIDERS;
+        setProviders(availableProviders);
         setSessions(sessionsData);
-        setModels(modelsData);
 
         // Validate saved provider; fall back to first available
         const savedProvider =
-          prefsData.provider && providers.includes(prefsData.provider)
-            ? prefsData.provider
-            : providers[0];
+          (storedPrefs.provider || prefsData.provider) &&
+          availableProviders.includes(storedPrefs.provider || prefsData.provider || '')
+            ? storedPrefs.provider || prefsData.provider || availableProviders[0]
+            : availableProviders[0];
         setCurrentProvider(savedProvider);
+        const legacyModel = storedPrefs.model || prefsData.model;
+        if (legacyModel && !savedModels[savedProvider]) {
+          savedModels[savedProvider] = legacyModel;
+        }
 
-        // Validate saved model; fall back to first available model
+        const modelsData = await api.getModels(savedProvider);
+        setModels(modelsData);
+
         const savedModel =
-          prefsData.model && modelsData.includes(prefsData.model)
-            ? prefsData.model
+          savedModels[savedProvider] && modelsData.includes(savedModels[savedProvider])
+            ? savedModels[savedProvider]
             : modelsData[0] || '';
         setCurrentModel(savedModel);
+        savedModels[savedProvider] = savedModel;
+        setModelByProvider(savedModels);
 
-        // Persist resolved values to overwrite any stale data (e.g. "new-model" from a test)
-        if (savedProvider !== prefsData.provider || savedModel !== prefsData.model) {
-          api.setPreferences({ model: savedModel, provider: savedProvider }).catch(console.error);
-        }
+        const resolvedPrefs = { provider: savedProvider, model: savedModel, models: savedModels };
+        writeChatPreferences(resolvedPrefs);
+        api.setPreferences(resolvedPrefs).catch(console.error);
       } catch (err) {
         console.error('[Chat] Failed to load data:', err);
       }
     };
 
     loadData();
-  }, [providers]);
+  }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -688,22 +732,37 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     (model: string) => {
       debugLog('selectModel', model);
       setCurrentModel(model);
-      api.setPreferences({ model, provider: currentProvider }).catch(console.error);
+      const models = { ...modelByProvider, [currentProvider]: model };
+      setModelByProvider(models);
+      const preferences = { model, provider: currentProvider, models };
+      writeChatPreferences(preferences);
+      api.setPreferences(preferences).catch(console.error);
       // The useEffect on connect() will detect the model change and reconnect
     },
-    [currentProvider]
+    [currentProvider, modelByProvider]
   );
 
   const selectProvider = useCallback(
     (provider: string) => {
       debugLog('selectProvider', provider);
       setCurrentProvider(provider);
-      api.setPreferences({ model: currentModel, provider }).catch(console.error);
-      // Refetch models for the new provider
-      api.getModels(provider).then(setModels).catch(console.error);
+      const preferredModel = modelByProvider[provider] || '';
+      setCurrentModel(preferredModel);
+      api.getModels(provider).then((nextModels) => {
+        setModels(nextModels);
+        const model = preferredModel && nextModels.includes(preferredModel)
+          ? preferredModel
+          : nextModels[0] || '';
+        setCurrentModel(model);
+        const models = { ...modelByProvider, [provider]: model };
+        setModelByProvider(models);
+        const preferences = { model, provider, models };
+        writeChatPreferences(preferences);
+        api.setPreferences(preferences).catch(console.error);
+      }).catch(console.error);
       // The useEffect on connect() will detect the provider change and reconnect
     },
-    [currentModel]
+    [modelByProvider]
   );
 
   const retryMessage = useCallback(

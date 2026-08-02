@@ -53,18 +53,24 @@ static AgentConfig *load_agent_config(Conf *conf)
     if (!v) { log_error("agent.model required in config", NULL); free(cfg); return NULL; }
     cfg->model = v;
 
-    if (strcmp(cfg->provider, "openai") == 0)
+    /* Per-provider base URL: [<provider>.base_url] override, else the
+     * provider's canonical default (single source of truth in
+     * factory.c's provider_default_base_url — same mapping the WS
+     * provider-switch path uses). */
+    char provider_key[64];
+    snprintf(provider_key, sizeof(provider_key), "%s.base_url", cfg->provider);
+    v = conf_get(conf, provider_key);
+    cfg->base_url = v ? v : provider_default_base_url(cfg->provider);
+    if (!cfg->base_url)
     {
-        /* OpenAI-compatible provider (also covers LM Studio etc. via a
-         * local openai.base_url). */
-        v = conf_get(conf, "openai.base_url");
-        cfg->base_url = v ? v : "https://api.openai.com";
+        log_error("unknown provider in config", "provider", cfg->provider, NULL);
+        free(cfg);
+        return NULL;
     }
-    else
-    {
-        v = conf_get(conf, "ollama.base_url");
-        cfg->base_url = v ? v : "http://localhost:11434";
-    }
+
+    /* Optional per-provider API token from the [providers] section.
+     * opencode_zen reads the shared "opencode" key. */
+    cfg->api_token = conf_provider_token(conf, cfg->provider);
 
     v = conf_get(conf, "agent.system_prompt");
     cfg->system_prompt = v ? v : "You are a helpful AI assistant.";
@@ -96,8 +102,6 @@ static SessionManager *init_session_manager(Conf *conf)
 
     char *data_dir = NULL;
     if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0) return NULL;
-
-    mkdir(data_dir, 0755);
 
     char *password = encryption_resolve_password();
     if (!password)
@@ -165,7 +169,7 @@ static void run_chat(Conf *conf)
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
     agent_set_safety(agent, safety);
 
-    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
+    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
                                   cfg->num_ctx, cfg->keep_alive_secs,
                                   cfg->temperature, cfg->timeout, cfg->max_iterations);
     free(cfg);
@@ -253,7 +257,7 @@ static void run_cli(Conf *conf)
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
     agent_set_safety(agent, safety);
 
-    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
+    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
                                   cfg->num_ctx, cfg->keep_alive_secs,
                                   cfg->temperature, cfg->timeout, cfg->max_iterations);
 
@@ -494,7 +498,7 @@ static void run_web(Conf *conf, const char *config_path)
     if (!agent) { log_error("failed to create agent", NULL); free(cfg); registry_destroy(); safety_config_free(safety); return; }
     agent_set_safety(agent, safety);
 
-    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->model,
+    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
                                   cfg->num_ctx, cfg->keep_alive_secs,
                                   cfg->temperature, cfg->timeout, cfg->max_iterations);
     /* D2: copy before freeing cfg; assign to ctx later once it's declared. */

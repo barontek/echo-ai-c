@@ -58,6 +58,7 @@ add_executable(test_routes_ws
     ../../src/server/routes/routes.c
     ../../src/config/config.c
     ../../src/utils/string_utils.c
+    ../../src/llm/factory.c
     test_routes_ws.c
 )
 target_include_directories(test_routes_ws PRIVATE ../../src)

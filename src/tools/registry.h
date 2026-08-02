@@ -19,10 +19,12 @@ SearchProvider *registry_get_search_provider(void);
 void registry_set_session_manager(SessionManager *sm);
 SessionManager *registry_get_session_manager(void);
 void registry_set_delegate_config(const char *provider_name, const char *base_url,
-                                   const char *model, int num_ctx, int keep_alive_secs,
+                                   const char *api_token, const char *model,
+                                   int num_ctx, int keep_alive_secs,
                                    double temperature, int timeout, int max_iterations);
 int registry_get_delegate_config(const char **provider_name, const char **base_url,
-                                  const char **model, int *num_ctx, int *keep_alive_secs,
+                                  const char **api_token, const char **model,
+                                  int *num_ctx, int *keep_alive_secs,
                                   double *temperature, int *timeout, int *max_iterations);
 void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *userdata);
 char *registry_invoke_ask_user(const char *question);

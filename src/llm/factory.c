@@ -2,13 +2,14 @@
 #include <stdlib.h>
 
 #include "provider.h"
+#include "openai.h"
+#include "openai_compatible.h"
 
 LLMProvider *get_provider(const char *name, const char *model,
-                          const char *base_url, int num_ctx, int keep_alive_secs)
+                          const char *base_url, const char *api_token,
+                          int num_ctx, int keep_alive_secs)
 {
     (void)model;
-    (void)num_ctx;
-    (void)keep_alive_secs;
 
     if (strcmp(name, "ollama") == 0)
     {
@@ -16,19 +17,56 @@ LLMProvider *get_provider(const char *name, const char *model,
         return ollama_provider_create(base_url, num_ctx, keep_alive_secs);
     }
 
+    if (strcmp(name, "openai_compatible") == 0)
+    {
+        return openai_compatible_provider_create(base_url, api_token);
+    }
+
     if (strcmp(name, "lmstudio") == 0)
     {
-        /* Back-compat alias: lmstudio is the same OpenAI-compatible
-         * client as openai, just pointed at a local server. */
-        extern LLMProvider *openai_provider_create(const char *);
-        return openai_provider_create(base_url);
+        /* Back-compat alias: lmstudio is the OpenAI-compatible client
+         * pointed at a local server. */
+        return openai_compatible_provider_create(base_url, api_token);
     }
 
     if (strcmp(name, "openai") == 0)
     {
-        extern LLMProvider *openai_provider_create(const char *);
-        return openai_provider_create(base_url);
+        return openai_provider_create(base_url, api_token);
     }
 
+    if (strcmp(name, "opencode_zen") == 0)
+    {
+        extern LLMProvider *opencode_zen_provider_create(const char *, const char *);
+        return opencode_zen_provider_create(base_url, api_token);
+    }
+
+    return NULL;
+}
+
+static const char *const AVAILABLE_PROVIDERS[] = {
+    "ollama",
+    "openai",
+    "openai_compatible",
+    "opencode_zen",
+};
+
+const char *const *provider_names_available(int *count)
+{
+    if (count)
+        *count = (int)(sizeof(AVAILABLE_PROVIDERS) / sizeof(AVAILABLE_PROVIDERS[0]));
+    return AVAILABLE_PROVIDERS;
+}
+
+const char *provider_default_base_url(const char *name)
+{
+    if (!name) return NULL;
+    if (strcmp(name, "ollama") == 0)
+        return "http://localhost:11434";
+    if (strcmp(name, "openai") == 0)
+        return "https://api.openai.com";
+    if (strcmp(name, "openai_compatible") == 0)
+        return "http://localhost:1234";
+    if (strcmp(name, "opencode_zen") == 0)
+        return "https://opencode.ai/zen/v1";
     return NULL;
 }

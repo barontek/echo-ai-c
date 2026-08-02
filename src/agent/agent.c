@@ -30,7 +30,8 @@ Agent *agent_create(const AgentConfig *cfg)
     if (!agent) return NULL;
 
     agent->provider = get_provider(cfg->provider, cfg->model,
-                                   cfg->base_url, cfg->num_ctx, cfg->keep_alive_secs);
+                                   cfg->base_url, cfg->api_token,
+                                   cfg->num_ctx, cfg->keep_alive_secs);
     if (!agent->provider)
     {
         log_error("failed to create provider", "name", cfg->provider, NULL);
@@ -42,6 +43,14 @@ Agent *agent_create(const AgentConfig *cfg)
     if (!agent->provider_name)
     {
         log_error("agent_create: str_dup failed", "field", "provider_name", NULL);
+        agent_destroy(agent);
+        return NULL;
+    }
+
+    agent->provider_token = str_dup(cfg->api_token ? cfg->api_token : "");
+    if (!agent->provider_token)
+    {
+        log_error("agent_create: str_dup failed", "field", "provider_token", NULL);
         agent_destroy(agent);
         return NULL;
     }
@@ -84,6 +93,7 @@ void agent_destroy(Agent *agent)
     }
     free(agent->model);
     free(agent->provider_name);
+    free(agent->provider_token);
     free(agent->system_prompt);
     free(agent->session_id);
     free(agent->context_summary);
@@ -953,7 +963,7 @@ void agent_set_model(Agent *agent, const char *model)
 }
 
 int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
-                       int num_ctx, int keep_alive_secs)
+                       const char *api_token, int num_ctx, int keep_alive_secs)
 {
     if (!agent || !provider || !provider[0]) return -1;
 
@@ -966,7 +976,8 @@ int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
      * untouched and the connection usable. */
     LLMProvider *replacement = get_provider(provider,
                                             agent->model ? agent->model : "",
-                                            base_url, num_ctx, keep_alive_secs);
+                                            base_url, api_token,
+                                            num_ctx, keep_alive_secs);
     if (!replacement)
     {
         log_error("failed to create provider", "name", provider, NULL);
@@ -978,11 +989,20 @@ int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
         replacement->destroy(replacement);
         return -1;
     }
+    char *new_token = str_dup(api_token ? api_token : "");
+    if (!new_token)
+    {
+        free(new_name);
+        replacement->destroy(replacement);
+        return -1;
+    }
 
     if (agent->provider)
         agent->provider->destroy(agent->provider);
     agent->provider = replacement;
     free(agent->provider_name);
     agent->provider_name = new_name;
+    free(agent->provider_token);
+    agent->provider_token = new_token;
     return 0;
 }

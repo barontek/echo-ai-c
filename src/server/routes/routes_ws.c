@@ -9,6 +9,7 @@
 #include "routes_ws.h"
 #include "../websocket.h"
 #include "../../agent/agent.h"
+#include "../../llm/provider.h"
 #include "../../safety/safety.h"
 #include "../../session/session_manager.h"
 #include "../../utils/logging.h"
@@ -45,8 +46,9 @@ typedef struct {
     int ask_user_timeout;
     /* Provider-switch params copied from ServerContext; base_url aliases
      * ctx->agent_cfg (ServerContext outlives every connection, so there is
-     * no ownership transfer). */
+     * no ownership transfer). api_token aliases ctx->conf. */
     const char *base_url;
+    const char *api_token;
     int num_ctx;
     int keep_alive_secs;
     int active_runs;
@@ -305,7 +307,41 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                 if (strcmp(pname, "lm_studio") == 0)
                     pname = "openai";
 
-                if (agent_set_provider(c->agent, pname, c->base_url,
+                /* Resolve the per-provider token from [providers]; a
+                 * provider switched mid-session may have its own key.
+                 * opencode_zen reads the shared "opencode" key. */
+                const char *api_token = c->api_token;
+                if (c->server_ctx && c->server_ctx->conf)
+                {
+                    const char *t = conf_provider_token(c->server_ctx->conf, pname);
+                    if (t) api_token = t;
+                }
+
+                /* Resolve the per-provider base URL the same way startup
+                 * does (main.c): [<provider>.base_url] override, else the
+                 * provider's canonical default. Never reuse the startup
+                 * provider's URL — switching from ollama to opencode_zen
+                 * used to keep pointing at localhost:11434, so Zen chats
+                 * silently hit the wrong server and returned empty. */
+                /* Resolve the per-provider base URL the same way startup
+                 * does (main.c): [<provider>.base_url] override, else the
+                 * provider's canonical default. Never reuse the startup
+                 * provider's URL — switching from ollama to opencode_zen
+                 * used to keep pointing at localhost:11434, so Zen chats
+                 * silently hit the wrong server and returned empty. */
+                const char *base_url = NULL;
+                if (c->server_ctx && c->server_ctx->conf)
+                {
+                    char provider_key[64];
+                    snprintf(provider_key, sizeof(provider_key), "%s.base_url",
+                             pname);
+                    const char *v = conf_get(c->server_ctx->conf, provider_key);
+                    if (v) base_url = v;
+                }
+                if (!base_url) base_url = provider_default_base_url(pname);
+
+                if (agent_set_provider(c->agent, pname, base_url,
+                                       api_token,
                                        c->num_ctx, c->keep_alive_secs) != 0)
                 {
                     char msg[128];
@@ -698,6 +734,7 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     /* Copy the provider-creation params so the config handshake can
      * rebuild the provider when the client switches it mid-session. */
     c->base_url = ctx->agent_cfg.base_url;
+    c->api_token = ctx->agent_cfg.api_token;
     c->num_ctx = ctx->agent_cfg.num_ctx;
     c->keep_alive_secs = ctx->agent_cfg.keep_alive_secs;
 

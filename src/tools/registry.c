@@ -43,6 +43,7 @@ static SessionManager *session_manager_global = NULL;
 typedef struct {
     char *provider_name;
     char *base_url;
+    char *api_token;
     char *model;
     int num_ctx;
     int keep_alive_secs;
@@ -226,21 +227,26 @@ SessionManager *registry_get_session_manager(void)
 }
 
 void registry_set_delegate_config(const char *provider_name, const char *base_url,
-                                   const char *model, int num_ctx, int keep_alive_secs,
+                                   const char *api_token, const char *model,
+                                   int num_ctx, int keep_alive_secs,
                                    double temperature, int timeout, int max_iterations)
 {
     char *pn = provider_name ? str_dup(provider_name) : NULL;
     char *bu = base_url ? str_dup(base_url) : NULL;
+    char *tk = api_token ? str_dup(api_token) : NULL;
     char *md = model ? str_dup(model) : NULL;
-    if ((provider_name && !pn) || (base_url && !bu) || (model && !md))
+    if ((provider_name && !pn) || (base_url && !bu) ||
+        (api_token && !tk) || (model && !md))
     {
-        free(pn); free(bu); free(md); return;
+        free(pn); free(bu); free(tk); free(md); return;
     }
     free(delegate_config.provider_name);
     free(delegate_config.base_url);
+    free(delegate_config.api_token);
     free(delegate_config.model);
     delegate_config.provider_name = pn;
     delegate_config.base_url = bu;
+    delegate_config.api_token = tk;
     delegate_config.model = md;
     delegate_config.num_ctx = num_ctx;
     delegate_config.keep_alive_secs = keep_alive_secs;
@@ -250,12 +256,14 @@ void registry_set_delegate_config(const char *provider_name, const char *base_ur
 }
 
 int registry_get_delegate_config(const char **provider_name, const char **base_url,
-                                  const char **model, int *num_ctx, int *keep_alive_secs,
+                                  const char **api_token, const char **model,
+                                  int *num_ctx, int *keep_alive_secs,
                                   double *temperature, int *timeout, int *max_iterations)
 {
     if (!delegate_config.provider_name) return -1;
     if (provider_name) *provider_name = delegate_config.provider_name;
     if (base_url) *base_url = delegate_config.base_url;
+    if (api_token) *api_token = delegate_config.api_token;
     if (model) *model = delegate_config.model;
     if (num_ctx) *num_ctx = delegate_config.num_ctx;
     if (keep_alive_secs) *keep_alive_secs = delegate_config.keep_alive_secs;

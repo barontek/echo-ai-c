@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
+#define _DARWIN_C_SOURCE
 #include <check.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <stdarg.h>
 #include <cjson/cJSON.h>
@@ -24,12 +26,19 @@ static void *captured_writedata = NULL;
 static size_t (*captured_writefunc)(void *, size_t, size_t, void *) = NULL;
 static const char *stub_models_json = NULL;
 static char captured_curl_url[256] = {0};
+static char captured_auth_header[256] = {0};
 static int captured_status = 0;
 static char *captured_body = NULL;
+
+struct curl_slist {
+    char *data;
+    struct curl_slist *next;
+};
 
 static void reset_capture(void)
 {
     captured_status = 0;
+    memset(captured_auth_header, 0, sizeof(captured_auth_header));
     free(captured_body);
     captured_body = NULL;
 }
@@ -135,7 +144,8 @@ typedef void CURL;
 typedef int CURLcode;
 enum { CURLE_OK = 0, CURLE_UNKNOWN_OPTION = 1, CURLE_URL_MALFORMAT = 3,
        CURLOPT_URL = 10002, CURLOPT_TIMEOUT = 13,
-       CURLOPT_WRITEFUNCTION = 20011, CURLOPT_WRITEDATA = 10001 };
+       CURLOPT_WRITEFUNCTION = 20011, CURLOPT_WRITEDATA = 10001,
+       CURLOPT_HTTPHEADER = 10023 };
 
 CURL *curl_easy_init(void)
 {
@@ -155,6 +165,12 @@ CURLcode curl_easy_setopt(CURL *c, int option, ...)
         const char *u = va_arg(args, const char *);
         snprintf(captured_curl_url, sizeof(captured_curl_url), "%s", u);
     }
+    else if (option == CURLOPT_HTTPHEADER)
+    {
+        struct curl_slist *headers = va_arg(args, struct curl_slist *);
+        if (headers && headers->data)
+            snprintf(captured_auth_header, sizeof(captured_auth_header), "%s", headers->data);
+    }
     va_end(args);
     (void)c;
     return CURLE_OK;
@@ -170,6 +186,44 @@ CURLcode curl_easy_perform(CURL *c)
 }
 
 void curl_easy_cleanup(CURL *c) { (void)c; }
+
+struct curl_slist *curl_slist_append(struct curl_slist *list, const char *data)
+{
+    struct curl_slist *item = calloc(1, sizeof(*item));
+    if (!item) return NULL;
+    item->data = data ? str_dup(data) : NULL;
+    if (data && !item->data) { free(item); return NULL; }
+    if (!list) return item;
+    struct curl_slist *tail = list;
+    while (tail->next) tail = tail->next;
+    tail->next = item;
+    return list;
+}
+
+void curl_slist_free_all(struct curl_slist *list)
+{
+    while (list)
+    {
+        struct curl_slist *next = list->next;
+        free(list->data);
+        free(list);
+        list = next;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Stub provider list (factory.c is not linked into this test binary)
+ * --------------------------------------------------------------------------- */
+
+static const char *const stub_provider_names[] = {
+    "ollama", "openai", "openai_compatible", "opencode_zen",
+};
+
+const char *const *provider_names_available(int *count)
+{
+    *count = (int)(sizeof(stub_provider_names) / sizeof(stub_provider_names[0]));
+    return stub_provider_names;
+}
 
 /* ---------------------------------------------------------------------------
  * handle_health
@@ -217,6 +271,25 @@ START_TEST(test_handle_preferences_set_ok)
     handle_preferences_set(&req, NULL, &ctx);
     ck_assert_int_eq(captured_status, 200);
     ck_assert(strstr(captured_body, "\"saved\":true"));
+
+    reset_stubs();
+}
+END_TEST
+
+/* ---------------------------------------------------------------------------
+ * handle_providers
+ * --------------------------------------------------------------------------- */
+
+START_TEST(test_handle_providers_lists_available_providers)
+{
+    ServerContext ctx = {0};
+    HTTPRequest req = {0};
+
+    handle_providers(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_body, "\"providers\":["));
+    ck_assert(strstr(captured_body, "\"opencode_zen\""));
+    ck_assert(strstr(captured_body, "\"ollama\""));
 
     reset_stubs();
 }
@@ -655,6 +728,42 @@ START_TEST(test_handle_models_openai_url_and_parse)
 }
 END_TEST
 
+START_TEST(test_handle_models_openai_sends_provider_token)
+{
+    stub_curl_init_nonnull = 1;
+    stub_curl_perform_code = CURLE_OK;
+    stub_models_json = "{\"data\":[{\"id\":\"gpt-4o-mini\"}]}";
+
+    char tmpdir[] = "/tmp/test_models_token_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    char conf_path[512];
+    snprintf(conf_path, sizeof(conf_path), "%s/test.conf", tmpdir);
+    FILE *f = fopen(conf_path, "w");
+    ck_assert_ptr_nonnull(f);
+    fprintf(f, "[providers]\nopenai = sk-model-test\n");
+    fclose(f);
+
+    Conf *conf = conf_load(conf_path);
+    ck_assert_ptr_nonnull(conf);
+    ServerContext ctx = {0};
+    ctx.conf = conf;
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=openai");
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert_str_eq(captured_auth_header, "Authorization: Bearer sk-model-test");
+    ck_assert(strstr(captured_body, "gpt-4o-mini"));
+
+    conf_free(conf);
+    char rm[512];
+    snprintf(rm, sizeof(rm), "rm -rf %s", tmpdir);
+    int syst = system(rm);
+    (void)syst;
+    reset_stubs();
+}
+END_TEST
+
 START_TEST(test_handle_models_lm_studio_alias_uses_openai)
 {
     /* lm_studio is an alias for the openai endpoint in the query too. */
@@ -699,6 +808,43 @@ START_TEST(test_handle_models_openai_custom_base_url)
     handle_models(&req, NULL, &ctx);
     ck_assert_int_eq(captured_status, 200);
     ck_assert(strstr(captured_curl_url, "http://localhost:1234/v1/models"));
+    ck_assert(strstr(captured_body, "local-model"));
+
+    conf_free(conf);
+    char rm[512];
+    snprintf(rm, sizeof(rm), "rm -rf %s", tmpdir);
+    int syst = system(rm);
+    (void)syst;
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_models_openai_compatible_uses_own_base_url)
+{
+    /* openai_compatible resolves its own base_url key, not openai's. */
+    stub_curl_init_nonnull = 1;
+    stub_curl_perform_code = CURLE_OK;
+    stub_models_json = "{\"data\":[{\"id\":\"local-model\"}]}";
+
+    char tmpdir[] = "/tmp/test_models_conf_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    char conf_path[512];
+    snprintf(conf_path, sizeof(conf_path), "%s/test.conf", tmpdir);
+    FILE *f = fopen(conf_path, "w");
+    ck_assert_ptr_nonnull(f);
+    fprintf(f, "[openai_compatible]\nbase_url = http://localhost:4321\n");
+    fclose(f);
+
+    Conf *conf = conf_load(conf_path);
+    ck_assert_ptr_nonnull(conf);
+    ServerContext ctx = {0};
+    ctx.conf = conf;
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=openai_compatible");
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_curl_url, "http://localhost:4321/v1/models"));
     ck_assert(strstr(captured_body, "local-model"));
 
     conf_free(conf);
@@ -799,9 +945,16 @@ Suite *routes_general_suite(void)
     tcase_add_test(tc, test_handle_models_ollama_default_url);
     tcase_add_test(tc, test_handle_models_ollama_explicit_query);
     tcase_add_test(tc, test_handle_models_openai_url_and_parse);
+    tcase_add_test(tc, test_handle_models_openai_sends_provider_token);
     tcase_add_test(tc, test_handle_models_lm_studio_alias_uses_openai);
     tcase_add_test(tc, test_handle_models_openai_custom_base_url);
+    tcase_add_test(tc, test_handle_models_openai_compatible_uses_own_base_url);
     tcase_add_test(tc, test_handle_models_unknown_provider_empty_no_curl);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("handle_providers");
+    tcase_add_checked_fixture(tc, setup, teardown);
+    tcase_add_test(tc, test_handle_providers_lists_available_providers);
     suite_add_tcase(s, tc);
 
     return s;

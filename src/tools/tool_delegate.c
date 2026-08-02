@@ -32,7 +32,8 @@ static char *td_test_strdup(const char *s)
 #define str_dup td_test_strdup
 
 LLMProvider *td_test_get_provider(const char *name, const char *model,
-                                   const char *base_url, int num_ctx, int keep_alive_secs);
+                                   const char *base_url, const char *api_token,
+                                   int num_ctx, int keep_alive_secs);
 #define get_provider td_test_get_provider
 #endif
 
@@ -62,8 +63,9 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
     double temperature = 0.7;
     int timeout = 120;
     int max_iterations = 10;
+    const char *api_token = NULL;
 
-    if (registry_get_delegate_config(&provider_name, &base_url, &model,
+    if (registry_get_delegate_config(&provider_name, &base_url, &api_token, &model,
                                       &num_ctx, &keep_alive_secs,
                                       &temperature, &timeout, &max_iterations) != 0)
     {
@@ -91,7 +93,8 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
     if (!task_str) return tool_result_error("oom", "execution_error");
 
     LLMProvider *provider = get_provider(provider_name, model,
-                                          base_url, num_ctx, keep_alive_secs);
+                                          base_url, api_token,
+                                          num_ctx, keep_alive_secs);
     if (!provider)
     {
         free(task_str);

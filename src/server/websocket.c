@@ -295,7 +295,6 @@ int ws_do_handshake(HTTPRequest *req, Client *client, ServerContext *ctx)
         "Sec-WebSocket-Accept: %s\r\n"
         "\r\n", protocol_header, b64) < 0)
     { return -1; }
-    { return -1; }
 
     size_t resp_len = strlen(resp);
     uv_buf_t uvresp = {.base = resp, .len = resp_len};

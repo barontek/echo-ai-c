@@ -705,6 +705,28 @@ START_TEST(test_save_aborts_when_encrypt_fails_preserves_row)
 }
 END_TEST
 
+START_TEST(test_create_creates_missing_parent_dirs)
+{
+    /* Regression: session_manager_create used to mkdir the data dir only
+     * AFTER init_encryption, so a fresh HOME without ~/.config failed with
+     * "failed to create salt file". Data dir must work when every parent
+     * level is missing. */
+    char parent[] = "/tmp/test_sm_mkdir_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(parent));
+
+    char data_dir[4096];
+    snprintf(data_dir, sizeof(data_dir), "%s/missing/sub/echo-ai", parent);
+
+    SessionManager *sm = session_manager_create(data_dir, "pw");
+    ck_assert_ptr_nonnull(sm);
+    session_manager_free(sm);
+
+    char salt_path[4096];
+    snprintf(salt_path, sizeof(salt_path), "%s/salt", data_dir);
+    ck_assert_int_eq(access(salt_path, F_OK), 0);
+}
+END_TEST
+
 Suite *session_mgr_suite(void)
 {
     Suite *s = suite_create("SessionManager");
@@ -727,6 +749,7 @@ Suite *session_mgr_suite(void)
     tcase_add_test(tc_crud, test_session_list_alloc_fail_mid);
     tcase_add_test(tc_crud, test_session_list_realloc_failures_are_safe);
     tcase_add_test(tc_crud, test_import_rejects_duplicate_id_preserves_existing);
+    tcase_add_test(tc_crud, test_create_creates_missing_parent_dirs);
     suite_add_tcase(s, tc_crud);
 
     return s;

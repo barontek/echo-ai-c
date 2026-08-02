@@ -87,6 +87,11 @@ class ApiClient {
     return res.data.models || [];
   }
 
+  async getProviders(): Promise<string[]> {
+    const res = await this.client.get<{ providers: string[] }>('/api/providers');
+    return res.data.providers || [];
+  }
+
   async getConfig(): Promise<Config> {
     const res = await this.client.get<{ config: Config }>('/api/config');
     return res.data.config;
@@ -123,12 +128,25 @@ class ApiClient {
     await this.client.post('/api/sessions/rename', { session_id: sessionId, new_title: newTitle });
   }
 
-  async getPreferences(): Promise<{ model?: string; provider?: string }> {
-    const res = await this.client.get<{ model?: string; provider?: string }>('/api/preferences');
-    return res.data;
+  async getPreferences(): Promise<{
+    model?: string;
+    provider?: string;
+    models?: Record<string, string>;
+  }> {
+    const res = await this.client.get<{
+      model?: string;
+      provider?: string;
+      models?: Record<string, string>;
+      preferences?: { model?: string; provider?: string; models?: Record<string, string> };
+    }>('/api/preferences');
+    return res.data.preferences || res.data;
   }
 
-  async setPreferences(prefs: { model: string; provider?: string }): Promise<void> {
+  async setPreferences(prefs: {
+    model: string;
+    provider?: string;
+    models?: Record<string, string>;
+  }): Promise<void> {
     await this.client.post('/api/preferences', prefs);
   }
 

@@ -29,6 +29,7 @@ describe('API Client', () => {
     expect(api).toBeDefined();
     expect(typeof api.getSessions).toBe('function');
     expect(typeof api.getModels).toBe('function');
+    expect(typeof api.getProviders).toBe('function');
     expect(typeof api.createSession).toBe('function');
     expect(typeof api.loadSession).toBe('function');
     expect(typeof api.deleteSession).toBe('function');

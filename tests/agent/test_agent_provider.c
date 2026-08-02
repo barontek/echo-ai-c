@@ -21,15 +21,16 @@
 Tool *registry_get(const char *name) { (void)name; return NULL; }
 char *registry_schemas_json(void) { return str_dup("[]"); }
 int registry_get_delegate_config(const char **a, const char **b, const char **c,
-                                  int *d, int *e, double *f, int *g, int *h)
+                                  const char **d, int *e, int *f, double *g,
+                                  int *h, int *i)
 {
-    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h;
+    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i;
     return 0;
 }
 void registry_set_delegate_config(const char *a, const char *b, const char *c,
-                                   int d, int e, double f, int g, int h)
+                                   const char *d, int e, int f, double g, int h, int i)
 {
-    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h;
+    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i;
 }
 void registry_set_session_manager(SessionManager *sm) { (void)sm; }
 void registry_set_ask_user_callback(char *(*cb)(const char *, void *),
@@ -92,6 +93,7 @@ static int mock_get_provider_fail_next = 0;
 static int mock_get_provider_calls = 0;
 static const char *mock_last_name = NULL;
 static const char *mock_last_base_url = NULL;
+static const char *mock_last_token = NULL;
 static int mock_last_num_ctx = 0;
 static int mock_last_keep_alive = 0;
 static int mock_generation = 0;
@@ -124,12 +126,13 @@ static void mock_destroy(LLMProvider *self)
  * linked). Records the last request so tests can assert what the agent
  * passed through, and can force a failure to exercise the error path. */
 LLMProvider *get_provider(const char *name, const char *model, const char *base_url,
-                           int num_ctx, int keep_alive_secs)
+                           const char *api_token, int num_ctx, int keep_alive_secs)
 {
     (void)model;
     mock_get_provider_calls++;
     mock_last_name = name;
     mock_last_base_url = base_url;
+    mock_last_token = api_token;
     mock_last_num_ctx = num_ctx;
     mock_last_keep_alive = keep_alive_secs;
     if (mock_get_provider_fail_next)
@@ -152,6 +155,7 @@ static void reset_mock(void)
     mock_get_provider_calls = 0;
     mock_last_name = NULL;
     mock_last_base_url = NULL;
+    mock_last_token = NULL;
     mock_last_num_ctx = 0;
     mock_last_keep_alive = 0;
     mock_generation = 0;
@@ -171,6 +175,7 @@ static AgentConfig make_cfg(const char *provider, const char *model)
     cfg.provider = provider;
     cfg.model = model;
     cfg.base_url = "http://localhost:11434";
+    cfg.api_token = "sk-initial-token";
     cfg.system_prompt = "You are a helpful assistant.";
     cfg.temperature = 0.7;
     cfg.timeout = 120;
@@ -190,16 +195,19 @@ START_TEST(test_set_provider_swaps_provider)
     Agent *agent = agent_create(&cfg);
     ck_assert_ptr_nonnull(agent);
     ck_assert_str_eq(agent->provider_name, "ollama");
+    ck_assert_str_eq(agent->provider_token, "sk-initial-token");
     int gen_before = provider_generation(agent);
 
     int rc = agent_set_provider(agent, "openai", "http://localhost:1234",
-                                2048, 30);
+                                "sk-switch-1", 2048, 30);
     ck_assert_int_eq(rc, 0);
     ck_assert(provider_generation(agent) != gen_before);
     ck_assert_str_eq(agent->provider_name, "openai");
+    ck_assert_str_eq(agent->provider_token, "sk-switch-1");
     ck_assert_int_eq(mock_get_provider_calls, 2);
     ck_assert_str_eq(mock_last_name, "openai");
     ck_assert_str_eq(mock_last_base_url, "http://localhost:1234");
+    ck_assert_str_eq(mock_last_token, "sk-switch-1");
     ck_assert_int_eq(mock_last_num_ctx, 2048);
     ck_assert_int_eq(mock_last_keep_alive, 30);
     ck_assert_int_eq(mock_destroy_count, 1);
@@ -217,7 +225,7 @@ START_TEST(test_set_provider_same_name_is_noop)
     ck_assert_ptr_nonnull(agent);
     LLMProvider *p_before = agent->provider;
 
-    int rc = agent_set_provider(agent, "ollama", "http://other:9999", 1, 1);
+    int rc = agent_set_provider(agent, "ollama", "http://other:9999", NULL, 1, 1);
     ck_assert_int_eq(rc, 0);
     ck_assert(agent->provider == p_before);
     ck_assert_int_eq(mock_get_provider_calls, 1);
@@ -237,7 +245,7 @@ START_TEST(test_set_provider_failure_keeps_old_provider)
 
     mock_get_provider_fail_next = 1;
     int rc = agent_set_provider(agent, "openai", "http://localhost:1234",
-                                2048, 30);
+                                "sk-switch-1", 2048, 30);
     ck_assert_int_eq(rc, -1);
     ck_assert(agent->provider == p_before);
     ck_assert_str_eq(agent->provider_name, "ollama");
@@ -257,9 +265,9 @@ START_TEST(test_set_provider_rejects_null_args)
     ck_assert_ptr_nonnull(agent);
     LLMProvider *p_before = agent->provider;
 
-    ck_assert_int_eq(agent_set_provider(agent, NULL, "http://x", 1, 1), -1);
-    ck_assert_int_eq(agent_set_provider(agent, "", "http://x", 1, 1), -1);
-    ck_assert_int_eq(agent_set_provider(NULL, "ollama", "http://x", 1, 1), -1);
+    ck_assert_int_eq(agent_set_provider(agent, NULL, "http://x", NULL, 1, 1), -1);
+    ck_assert_int_eq(agent_set_provider(agent, "", "http://x", NULL, 1, 1), -1);
+    ck_assert_int_eq(agent_set_provider(NULL, "ollama", "http://x", NULL, 1, 1), -1);
     ck_assert(agent->provider == p_before);
     ck_assert_int_eq(mock_get_provider_calls, 1);
 
@@ -274,8 +282,9 @@ START_TEST(test_set_provider_model_unchanged_by_switch)
     Agent *agent = agent_create(&cfg);
     ck_assert_ptr_nonnull(agent);
 
-    ck_assert_int_eq(agent_set_provider(agent, "openai", NULL, 4096, 120), 0);
+    ck_assert_int_eq(agent_set_provider(agent, "openai", NULL, "sk-switch-2", 4096, 120), 0);
     ck_assert_str_eq(agent->model, "llama3");
+    ck_assert_str_eq(mock_last_token, "sk-switch-2");
 
     agent_destroy(agent);
 }

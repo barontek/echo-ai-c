@@ -24,6 +24,8 @@ add_executable(echo-ai
     src/agent/context.c
     src/llm/ollama.c
     src/llm/openai.c
+    src/llm/openai_compatible.c
+    src/llm/opencode_zen.c
     src/llm/factory.c
     src/tools/tool.c
     src/tools/registry.c

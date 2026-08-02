@@ -10,6 +10,7 @@ const { mockApi, wsCalls } = vi.hoisted(() => ({
       { id: 'session-2', title: 'Second Chat', created_at: '2024-01-02' },
     ]),
     getModels: vi.fn().mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']),
+    getProviders: vi.fn().mockResolvedValue(['ollama', 'openai', 'opencode_zen']),
     createSession: vi.fn().mockResolvedValue({ session_id: 'new-session-456' }),
     loadSession: vi.fn().mockResolvedValue({
       session_id: 'session-1',
@@ -84,6 +85,7 @@ vi.stubGlobal(
 describe('Session History Bug Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    if (typeof localStorage !== 'undefined') localStorage.clear();
     wsCalls.length = 0;
     mockApi.getSessions.mockResolvedValue([
       { id: 'session-1', title: 'First Chat', created_at: '2024-01-01' },
@@ -396,7 +398,55 @@ describe('Session History Bug Tests', () => {
       await userEvent.click(screen.getByText('Use GPT-4'));
 
       await waitFor(() => {
-        expect(mockApi.setPreferences).toHaveBeenCalledWith({ model: 'gpt-4', provider: 'ollama' });
+        expect(mockApi.setPreferences).toHaveBeenCalledWith({
+          model: 'gpt-4',
+          provider: 'ollama',
+          models: { ollama: 'gpt-4' },
+        });
+      });
+    });
+
+    it('should restore the last model for each provider', async () => {
+      mockApi.getProviders.mockResolvedValueOnce(['ollama', 'openai']);
+      mockApi.getPreferences.mockResolvedValueOnce({
+        provider: 'ollama',
+        model: 'qwen3:4b-instruct',
+        models: { ollama: 'qwen3:4b-instruct', openai: 'gpt-4o-mini' },
+      });
+      mockApi.getModels.mockImplementation((provider?: string) =>
+        Promise.resolve(provider === 'openai' ? ['gpt-4o-mini', 'gpt-4o'] : ['qwen3:4b-instruct', 'llama3.2:latest'])
+      );
+
+      function TestComponent() {
+        const { currentProvider, currentModel, selectProvider } = useChat();
+        return (
+          <>
+            <span data-testid="selected-provider">{currentProvider}</span>
+            <span data-testid="selected-model">{currentModel}</span>
+            <button onClick={() => selectProvider('openai')}>OpenAI</button>
+            <button onClick={() => selectProvider('ollama')}>Ollama</button>
+          </>
+        );
+      }
+
+      render(
+        <ChatProvider>
+          <TestComponent />
+        </ChatProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('selected-model').textContent).toBe('qwen3:4b-instruct');
+      });
+      await userEvent.click(screen.getByText('OpenAI'));
+      await waitFor(() => {
+        expect(screen.getByTestId('selected-provider').textContent).toBe('openai');
+        expect(screen.getByTestId('selected-model').textContent).toBe('gpt-4o-mini');
+      });
+      await userEvent.click(screen.getByText('Ollama'));
+      await waitFor(() => {
+        expect(screen.getByTestId('selected-provider').textContent).toBe('ollama');
+        expect(screen.getByTestId('selected-model').textContent).toBe('qwen3:4b-instruct');
       });
     });
 
