@@ -26,6 +26,7 @@ typedef struct {
      * (single-threaded per libuv request). Stored by value so its inner
      * string pointers alias Conf strings (which outlive the server). */
     AgentConfig agent_cfg;
+    OpenAIOAuth *openai_oauth;
     SessionManager *sm;
     SafetyConfig *safety;
     char *config_path;

@@ -29,6 +29,7 @@ add_executable(test_routes_general
     ../../src/server/routes/routes_general.c
     ../../src/config/config.c
     ../../src/utils/string_utils.c
+    openai_oauth_stub.c
     test_routes_general.c
 )
 target_include_directories(test_routes_general PRIVATE ../../src)
@@ -38,6 +39,7 @@ add_test(NAME test_routes_general COMMAND test_routes_general)
 add_executable(test_routes_auth
     ../../src/server/routes/routes_auth.c
     ../../src/utils/string_utils.c
+    openai_oauth_stub.c
     test_routes_auth.c
 )
 target_include_directories(test_routes_auth PRIVATE ../../src)

@@ -10,6 +10,7 @@
 #include "../middleware.h"
 #include "../../config/config.h"
 #include "../../llm/provider.h"
+#include "../../llm/openai_oauth.h"
 #include "../../session/session_manager.h"
 #include "../../utils/logging.h"
 #include "../../utils/string_utils.h"
@@ -216,14 +217,24 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
     const char *name_key = "name";
     if (strcmp(provider, "openai") == 0)
     {
-        /* Real OpenAI service. */
-        base_url = ctx && ctx->conf ? conf_get(ctx->conf, "openai.base_url") : NULL;
-        default_base = "https://api.openai.com";
-        path = "/v1/models";
-        list_key = "data";
-        name_key = "id";
+        /* ChatGPT OAuth uses the Codex backend, which does not expose the
+         * public /v1/models endpoint. Keep the catalog local and only expose
+         * it after OAuth succeeds. */
+        if (!ctx || !ctx->openai_oauth ||
+            openai_oauth_status(ctx->openai_oauth, NULL, NULL, NULL) != OPENAI_OAUTH_SIGNED_IN)
+        {
+            models_response(client, arr);
+            return;
+        }
+        static const char *const oauth_models[] = {
+            "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"
+        };
+        for (size_t i = 0; i < sizeof(oauth_models) / sizeof(oauth_models[0]); i++)
+            cJSON_AddItemToArray(arr, cJSON_CreateString(oauth_models[i]));
+        models_response(client, arr);
+        return;
     }
-    else if (strcmp(provider, "openai_compatible") == 0)
+    if (strcmp(provider, "openai_compatible") == 0)
     {
         /* OpenAI-compatible endpoint (LM Studio, vLLM, ...). */
         base_url = ctx && ctx->conf

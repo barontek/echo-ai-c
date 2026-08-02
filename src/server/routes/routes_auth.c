@@ -91,6 +91,7 @@ void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
     ctx->sm = sm;
+    if (ctx->openai_oauth) openai_oauth_attach_session(ctx->openai_oauth, sm);
     registry_set_session_manager(sm);
     if (ctx->agent) agent_set_session_manager(ctx->agent, sm);
     free(ctx->unlock_token);
@@ -206,6 +207,7 @@ void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
             if (sm)
             {
                 ctx->sm = sm;
+                if (ctx->openai_oauth) openai_oauth_attach_session(ctx->openai_oauth, sm);
                 registry_set_session_manager(sm);
                 if (ctx->agent) agent_set_session_manager(ctx->agent, sm);
             }

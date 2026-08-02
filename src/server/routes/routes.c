@@ -4,6 +4,7 @@
 #include "routes.h"
 #ifndef ROUTES_TEST
 #include "routes_auth.h"
+#include "routes_openai_auth.h"
 #include "routes_session.h"
 #include "routes_chat.h"
 #include "routes_general.h"
@@ -67,6 +68,9 @@ const Route routes[] = {
     {"PUT",  "/api/sessions/",            1, 1, 0, handle_session_update},
     {"POST", "/api/sessions/import",      0, 1, 0, handle_session_import},
     {"POST", "/api/change-password",      0, 1, 0, handle_change_password},
+    {"GET",  "/api/auth/openai/status",    0, 1, 0, handle_openai_oauth_status},
+    {"POST", "/api/auth/openai/start",     0, 1, 0, handle_openai_oauth_start},
+    {"POST", "/api/auth/openai/logout",    0, 1, 0, handle_openai_oauth_logout},
     {"POST", "/api/chat",                 0, 1, 0, handle_chat},
     {"GET",  "/api/stream",               0, 1, 1, handle_sse_stream},
     {"GET",  "/api/metrics",              0, 0, 0, handle_metrics},

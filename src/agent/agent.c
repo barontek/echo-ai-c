@@ -29,9 +29,16 @@ Agent *agent_create(const AgentConfig *cfg)
     Agent *agent = calloc(1, sizeof(Agent));
     if (!agent) return NULL;
 
-    agent->provider = get_provider(cfg->provider, cfg->model,
-                                   cfg->base_url, cfg->api_token,
-                                   cfg->num_ctx, cfg->keep_alive_secs);
+    agent->openai_auth = cfg->openai_auth;
+    if (cfg->openai_auth && strcmp(cfg->provider, "openai") == 0)
+        agent->provider = get_provider_with_auth(cfg->provider, cfg->model,
+                                                 cfg->base_url, cfg->api_token,
+                                                 cfg->num_ctx, cfg->keep_alive_secs,
+                                                 cfg->openai_auth);
+    else
+        agent->provider = get_provider(cfg->provider, cfg->model,
+                                       cfg->base_url, cfg->api_token,
+                                       cfg->num_ctx, cfg->keep_alive_secs);
     if (!agent->provider)
     {
         log_error("failed to create provider", "name", cfg->provider, NULL);
@@ -974,10 +981,15 @@ int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
 
     /* Build the replacement first so a failure leaves the old provider
      * untouched and the connection usable. */
-    LLMProvider *replacement = get_provider(provider,
-                                            agent->model ? agent->model : "",
-                                            base_url, api_token,
-                                            num_ctx, keep_alive_secs);
+    LLMProvider *replacement = NULL;
+    if (agent->openai_auth && strcmp(provider, "openai") == 0)
+        replacement = get_provider_with_auth(provider,
+                                             agent->model ? agent->model : "",
+                                             base_url, api_token, num_ctx,
+                                             keep_alive_secs, agent->openai_auth);
+    else
+        replacement = get_provider(provider, agent->model ? agent->model : "",
+                                   base_url, api_token, num_ctx, keep_alive_secs);
     if (!replacement)
     {
         log_error("failed to create provider", "name", provider, NULL);

@@ -1,5 +1,6 @@
 import { memo, useState, useEffect, useRef } from 'react';
 import { useChat } from '../context';
+import { api } from '../api/client';
 
 export const Sidebar = memo(function Sidebar() {
   const {
@@ -24,6 +25,8 @@ export const Sidebar = memo(function Sidebar() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [openAIAuthBusy, setOpenAIAuthBusy] = useState(false);
+  const [openAIAuthError, setOpenAIAuthError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const filteredSessions = !searchTerm
@@ -56,6 +59,51 @@ export const Sidebar = memo(function Sidebar() {
     }
     setRenamingId(null);
     setRenameValue('');
+  };
+
+  const handleSelectProvider = async (provider: string) => {
+    if (provider !== 'openai') {
+      selectProvider(provider);
+      setShowProviderDropdown(false);
+      return;
+    }
+
+    setOpenAIAuthError(null);
+    setOpenAIAuthBusy(true);
+    setShowProviderDropdown(false);
+    const loginWindow = window.open('about:blank', 'echo-ai-openai-login');
+    try {
+      const status = await api.getOpenAIOAuthStatus();
+      if (status.state === 'signed_in') {
+        loginWindow?.close();
+        selectProvider(provider);
+        return;
+      }
+
+      const login = await api.startOpenAIOAuth();
+      if (loginWindow) loginWindow.location.href = login.authorization_url;
+      else window.location.href = login.authorization_url;
+
+      const deadline = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        const next = await api.getOpenAIOAuthStatus();
+        if (next.state === 'signed_in') {
+          loginWindow?.close();
+          selectProvider(provider);
+          return;
+        }
+        if (next.state === 'signed_out' && next.error) {
+          throw new Error(next.error);
+        }
+      }
+      throw new Error('OpenAI login timed out');
+    } catch (err: unknown) {
+      loginWindow?.close();
+      setOpenAIAuthError(err instanceof Error ? err.message : 'OpenAI login failed');
+    } finally {
+      setOpenAIAuthBusy(false);
+    }
   };
 
   const handleRenameKeyDown = (e: React.KeyboardEvent) => {
@@ -144,8 +192,7 @@ export const Sidebar = memo(function Sidebar() {
                   aria-selected={p === currentProvider}
                   className={`model-option ${p === currentProvider ? 'active' : ''}`}
                   onClick={() => {
-                    selectProvider(p);
-                    setShowProviderDropdown(false);
+                    void handleSelectProvider(p);
                   }}
                 >
                   {p}
@@ -154,6 +201,17 @@ export const Sidebar = memo(function Sidebar() {
             </div>
           )}
         </div>
+
+        {openAIAuthBusy && (
+          <div className="provider-auth-notice" role="status">
+            Complete the OpenAI login in your browser...
+          </div>
+        )}
+        {openAIAuthError && (
+          <div className="provider-auth-error" role="alert">
+            {openAIAuthError}
+          </div>
+        )}
 
         <button className="new-chat-button" onClick={createSession}>
           <span>+</span> New Chat

@@ -163,10 +163,112 @@ static int init_db(sqlite3 *db)
         return -1;
     }
 
+    const char *oauth_sql = "CREATE TABLE IF NOT EXISTS provider_oauth ("
+                            "provider TEXT PRIMARY KEY,"
+                            "data_encrypted BLOB NOT NULL"
+                            ");";
+    if (sqlite3_exec(db, oauth_sql, NULL, NULL, &err) != SQLITE_OK)
+    {
+        log_error("sqlite create provider_oauth table", "err", err, NULL);
+        sqlite3_free(err);
+        return -1;
+    }
+
     sqlite3_exec(db, "PRAGMA journal_mode=DELETE", NULL, NULL, NULL);
     sqlite3_exec(db, "PRAGMA synchronous=FULL", NULL, NULL, NULL);
 
     return 0;
+}
+
+int session_manager_save_provider_oauth(SessionManager *sm,
+                                        const char *provider_name,
+                                        const char *data)
+{
+    if (!sm || !provider_name || !provider_name[0] || !data) return -1;
+
+    int data_len = 0;
+    unsigned char *encrypted = encryption_encrypt(&sm->enc_key,
+                                                  (const unsigned char *)data,
+                                                  (int)strlen(data), &data_len);
+    if (!encrypted) return -1;
+
+    int result = -1;
+    session_manager_lock(sm);
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "INSERT INTO provider_oauth(provider, data_encrypted) "
+                      "VALUES(?, ?) ON CONFLICT(provider) DO UPDATE SET "
+                      "data_encrypted=excluded.data_encrypted";
+    if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) == SQLITE_OK &&
+        sqlite3_bind_text(stmt, 1, provider_name, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+        sqlite3_bind_blob(stmt, 2, encrypted, data_len, SQLITE_TRANSIENT) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_DONE)
+    {
+        result = 0;
+    }
+    else
+    {
+        log_error("sqlite save provider oauth", "provider", provider_name, NULL);
+    }
+    if (stmt) sqlite3_finalize(stmt);
+    session_manager_unlock(sm);
+    memset(encrypted, 0, (size_t)data_len);
+    free(encrypted);
+    return result;
+}
+
+char *session_manager_load_provider_oauth(SessionManager *sm,
+                                          const char *provider_name)
+{
+    if (!sm || !provider_name || !provider_name[0]) return NULL;
+
+    char *result = NULL;
+    session_manager_lock(sm);
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "SELECT data_encrypted FROM provider_oauth WHERE provider = ?";
+    if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) == SQLITE_OK &&
+        sqlite3_bind_text(stmt, 1, provider_name, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW)
+    {
+        const void *blob = sqlite3_column_blob(stmt, 0);
+        int blob_len = sqlite3_column_bytes(stmt, 0);
+        int plain_len = 0;
+        unsigned char *plain = encryption_decrypt(&sm->enc_key, blob, blob_len,
+                                                  &plain_len);
+        if (plain)
+        {
+            result = malloc((size_t)plain_len + 1);
+            if (result)
+            {
+                memcpy(result, plain, (size_t)plain_len);
+                result[plain_len] = '\0';
+            }
+            memset(plain, 0, (size_t)plain_len);
+            free(plain);
+        }
+    }
+    if (stmt) sqlite3_finalize(stmt);
+    session_manager_unlock(sm);
+    return result;
+}
+
+int session_manager_delete_provider_oauth(SessionManager *sm,
+                                          const char *provider_name)
+{
+    if (!sm || !provider_name || !provider_name[0]) return -1;
+
+    int result = -1;
+    session_manager_lock(sm);
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "DELETE FROM provider_oauth WHERE provider = ?";
+    if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) == SQLITE_OK &&
+        sqlite3_bind_text(stmt, 1, provider_name, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_DONE)
+        result = 0;
+    else
+        log_error("sqlite delete provider oauth", "provider", provider_name, NULL);
+    if (stmt) sqlite3_finalize(stmt);
+    session_manager_unlock(sm);
+    return result;
 }
 
 static int init_encryption(SessionManager *sm, const char *password)

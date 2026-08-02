@@ -41,6 +41,7 @@ add_executable(test_agent_save
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
     ../../src/tools/tool.c
+    provider_auth_stub.c
     test_agent_save.c
 )
 target_compile_definitions(test_agent_save PRIVATE AGENT_TEST=1)
@@ -59,6 +60,7 @@ add_executable(test_agent_provider
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
     ../../src/tools/tool.c
+    provider_auth_stub.c
     test_agent_provider.c
 )
 target_include_directories(test_agent_provider PRIVATE ../../src)

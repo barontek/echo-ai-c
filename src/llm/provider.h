@@ -3,6 +3,8 @@
 
 #include "../agent/message.h"
 
+typedef struct OpenAIOAuth OpenAIOAuth;
+
 typedef struct LLMProvider LLMProvider;
 
 struct LLMProvider {
@@ -22,8 +24,13 @@ struct LLMProvider {
 };
 
 LLMProvider *get_provider(const char *name, const char *model,
-                          const char *base_url, const char *api_token,
-                          int num_ctx, int keep_alive_secs);
+                           const char *base_url, const char *api_token,
+                           int num_ctx, int keep_alive_secs);
+
+LLMProvider *get_provider_with_auth(const char *name, const char *model,
+                                    const char *base_url, const char *api_token,
+                                    int num_ctx, int keep_alive_secs,
+                                    OpenAIOAuth *openai_auth);
 
 /* Returns the canonical list of providers get_provider can construct,
  * as a static array (caller must not free). Aliases like "lmstudio"

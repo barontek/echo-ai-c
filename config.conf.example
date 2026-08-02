@@ -89,9 +89,8 @@ num_ctx = 4096
 keep_alive_secs = 120
 
 [openai]
-# Real OpenAI endpoint. Requires a token in the [providers] section
-# (openai = sk-...), otherwise the service rejects with 401.
-base_url = https://api.openai.com
+# ChatGPT Plus/Pro OAuth provider. Sign in from the web UI by selecting
+# OpenAI in the provider menu. API keys are not accepted for this provider.
 
 [openai_compatible]
 # OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp server, ...).
@@ -145,11 +144,10 @@ provider = brave
 api_key = your-api-key-here
 
 [providers]
-# API tokens for LLM providers that need authentication.
+# API tokens for OpenAI-compatible LLM providers that need authentication.
 # Format: provider_name = token
-# The token is sent as a Bearer Authorization header by the openai and
-# openai_compatible clients. Providers not requiring a token can be omitted.
-# openai = your-openai-api-key
+# The token is sent as a Bearer Authorization header by compatible clients.
+# The openai provider is OAuth-only and must not be configured here.
 # opencode = your-opencode-key  (shared by opencode_zen and any future
 #                                 OpenCode-branded provider, e.g. OpenCode Go)
 # anthropic = your-anthropic-api-key

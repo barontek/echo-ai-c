@@ -24,6 +24,7 @@ add_executable(test_factory
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
+    openai_oauth_stub.c
     test_factory.c
 )
 target_include_directories(test_factory PRIVATE ../../src)

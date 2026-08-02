@@ -24,6 +24,7 @@ add_executable(echo-ai
     src/agent/context.c
     src/llm/ollama.c
     src/llm/openai.c
+    src/llm/openai_oauth.c
     src/llm/openai_compatible.c
     src/llm/opencode_zen.c
     src/llm/factory.c
@@ -70,6 +71,7 @@ add_executable(echo-ai
     src/server/websocket.c
     src/server/routes/routes.c
     src/server/routes/routes_auth.c
+    src/server/routes/routes_openai_auth.c
     src/server/routes/routes_session.c
     src/server/routes/routes_chat.c
     src/server/routes/routes_general.c

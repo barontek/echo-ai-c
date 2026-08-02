@@ -3,6 +3,7 @@
 
 #include "message.h"
 #include "../llm/provider.h"
+#include "../llm/openai_oauth.h"
 #include "../session/session_manager.h"
 #include "../safety/safety.h"
 #include "../utils/circuit_breaker.h"
@@ -14,6 +15,7 @@ typedef struct {
     const char *model;
     const char *base_url;
     const char *api_token;
+    OpenAIOAuth *openai_auth;
     const char *system_prompt;
     double temperature;
     int timeout;
@@ -36,6 +38,7 @@ typedef struct {
     LLMProvider *provider;
     char *provider_name; /* canonical factory name of provider ("ollama"/"openai") */
     char *provider_token; /* API token for the current provider, owned by the agent */
+    OpenAIOAuth *openai_auth; /* borrowed shared OAuth state */
     Message *messages;
     int messages_count;
     char *model;

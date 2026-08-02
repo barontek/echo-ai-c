@@ -92,6 +92,32 @@ class ApiClient {
     return res.data.providers || [];
   }
 
+  async getOpenAIOAuthStatus(): Promise<{
+    state: 'signed_out' | 'pending' | 'signed_in';
+    account_id?: string;
+    plan_type?: string;
+    error?: string;
+  }> {
+    const res = await this.client.get<{
+      state: 'signed_out' | 'pending' | 'signed_in';
+      account_id?: string;
+      plan_type?: string;
+      error?: string;
+    }>('/api/auth/openai/status');
+    return res.data;
+  }
+
+  async startOpenAIOAuth(): Promise<{ authorization_url: string; login_id: string }> {
+    const res = await this.client.post<{ authorization_url: string; login_id: string }>(
+      '/api/auth/openai/start'
+    );
+    return res.data;
+  }
+
+  async logoutOpenAIOAuth(): Promise<void> {
+    await this.client.post('/api/auth/openai/logout');
+  }
+
   async getConfig(): Promise<Config> {
     const res = await this.client.get<{ config: Config }>('/api/config');
     return res.data.config;

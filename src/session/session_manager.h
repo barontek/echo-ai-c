@@ -43,6 +43,21 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days);
 int session_manager_log_event(SessionManager *sm, const char *session_id,
                                const char *event_type, const char *data);
 
+/* Saves encrypted provider credentials under provider_name. The caller retains
+ * ownership of data; returns -1 on invalid input, encryption, SQL, or OOM. */
+int session_manager_save_provider_oauth(SessionManager *sm,
+                                        const char *provider_name,
+                                        const char *data);
+
+/* Loads and decrypts provider credentials. The returned string is owned by the
+ * caller and must be freed; NULL means missing data or an error. */
+char *session_manager_load_provider_oauth(SessionManager *sm,
+                                          const char *provider_name);
+
+/* Deletes stored provider credentials and returns 0 on success, -1 on error. */
+int session_manager_delete_provider_oauth(SessionManager *sm,
+                                          const char *provider_name);
+
 int migration_change_password(SessionManager *sm, const char *new_password);
 
 /* C10: Public mutex acquire/release so callers in other TUs (agent.c,
