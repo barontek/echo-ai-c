@@ -34,6 +34,7 @@
 #define OPENAI_DEVICE_VERIFICATION_URL "https://auth.openai.com/codex/device"
 #define OPENAI_PROVIDER_NAME "openai"
 #define OAUTH_LOGIN_TIMEOUT_SECONDS 300
+#define OAUTH_POLL_SLICE_MS 1000
 #define OAUTH_CLIENT_TIMEOUT_SECONDS 10
 #define OAUTH_REFRESH_SKEW_SECONDS 300
 #define OAUTH_REQUEST_MAX 8192
@@ -1193,17 +1194,24 @@ static int wait_for_callback_client(OpenAIOAuth *auth, uint64_t generation, int 
                                     time_t deadline, int *timed_out)
 {
     struct pollfd descriptor = {.fd = fd, .events = POLLIN, .revents = 0};
-    time_t now = time(NULL);
-    if (now == (time_t)-1 || now >= deadline)
-    { *timed_out = 1; return -1; }
-    time_t remaining = deadline - now;
-    int timeout_ms = remaining > INT_MAX / 1000 ? INT_MAX : (int)remaining * 1000;
-    int selected = -1;
-    do { selected = poll(&descriptor, 1, timeout_ms); }
-    while (selected < 0 && errno == EINTR && callback_still_active(auth, generation));
-    if (selected == 0) *timed_out = 1;
-    if (selected <= 0 || !callback_still_active(auth, generation)) return -1;
-    return accept(fd, NULL, NULL);
+    for (;;)
+    {
+        time_t now = time(NULL);
+        if (now == (time_t)-1 || now >= deadline)
+        { *timed_out = 1; return -1; }
+        time_t remaining = deadline - now;
+        int timeout_ms = remaining > INT_MAX / 1000 ? INT_MAX : (int)remaining * 1000;
+        /* Bound each poll slice so cancellation is noticed promptly even on
+         * platforms where shutdown() does not wake poll() on a listening
+         * socket; an unbounded wait would block join/cancel for the whole
+         * login timeout. */
+        if (timeout_ms > OAUTH_POLL_SLICE_MS) timeout_ms = OAUTH_POLL_SLICE_MS;
+        int selected = poll(&descriptor, 1, timeout_ms);
+        if (selected > 0 && callback_still_active(auth, generation))
+            return accept(fd, NULL, NULL);
+        if (!callback_still_active(auth, generation)) return -1;
+        if (selected < 0 && errno != EINTR) return -1;
+    }
 }
 
 static void untrack_socket(OpenAIOAuth *auth, int fd, int client_socket)
