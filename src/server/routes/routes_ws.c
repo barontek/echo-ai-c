@@ -9,6 +9,7 @@
 #include "routes_ws.h"
 #include "../websocket.h"
 #include "../../agent/agent.h"
+#include "../../llm/openai.h"
 #include "../../llm/provider.h"
 #include "../../safety/safety.h"
 #include "../../session/session_manager.h"
@@ -46,11 +47,14 @@ typedef struct WSChatCtx {
     int ask_user_timeout;
     /* Provider-switch params copied from ServerContext; base_url aliases
      * ctx->agent_cfg (ServerContext outlives every connection, so there is
-     * no ownership transfer). api_token aliases ctx->conf. */
+     * no ownership transfer). api_token aliases ctx->conf. effort is the
+     * exception: it is owned because a config-message effort override may
+     * replace it mid-connection. */
     const char *base_url;
     const char *api_token;
     int num_ctx;
     int keep_alive_secs;
+    char *effort;
     int active_runs;
     int closing;
     ServerContext *server_ctx;
@@ -74,6 +78,7 @@ static void ws_chat_ctx_destroy(WSChatCtx *c)
     free(c->pending_request_id);
     free(c->active_session_id);
     free(c->ask_user_response);
+    free(c->effort);
     QueuedMsg *q = c->msg_queue;
     while (q)
     {
@@ -332,6 +337,44 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                 if (strcmp(pname, "lm_studio") == 0)
                     pname = "openai_compatible";
 
+                /* Optional reasoning-effort override. Empty string clears
+                 * the configured value back to the API default. The new
+                 * value is applied below via agent_set_provider, which
+                 * rebuilds the provider when it differs from the current
+                 * one. Invalid values are rejected loudly instead of being
+                 * forwarded to the provider. */
+                cJSON *effort_item = cJSON_GetObjectItem(json, "effort");
+                if (effort_item)
+                {
+                    if (cJSON_IsString(effort_item) &&
+                        openai_reasoning_effort_valid(effort_item->valuestring))
+                    {
+                        if (effort_item->valuestring[0] == '\0')
+                        {
+                            /* Empty string clears back to the API default. */
+                            free(c->effort);
+                            c->effort = NULL;
+                        }
+                        else
+                        {
+                            char *copy = str_dup(effort_item->valuestring);
+                            if (!copy)
+                            {
+                                ws_send_json(ws, "{\"type\":\"error\",\"content\":\"out of memory applying effort\"}");
+                            }
+                            else
+                            {
+                                free(c->effort);
+                                c->effort = copy;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"invalid effort value\"}");
+                    }
+                }
+
                 /* Resolve the per-provider token from [providers]; a
                  * provider switched mid-session may have its own key.
                  * opencode_zen reads the shared "opencode" key. */
@@ -367,7 +410,8 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
 
                 if (agent_set_provider(c->agent, pname, base_url,
                                        api_token,
-                                       c->num_ctx, c->keep_alive_secs) != 0)
+                                       c->num_ctx, c->keep_alive_secs,
+                                       c->effort) != 0)
                 {
                     char msg[128];
                     snprintf(msg, sizeof(msg), "provider switch failed: %s",
@@ -764,6 +808,9 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     c->api_token = ctx->agent_cfg.api_token;
     c->num_ctx = ctx->agent_cfg.num_ctx;
     c->keep_alive_secs = ctx->agent_cfg.keep_alive_secs;
+    c->effort = ctx->agent_cfg.effort ? str_dup(ctx->agent_cfg.effort) : NULL;
+    if (ctx->agent_cfg.effort && !c->effort)
+        log_error("ws_chat_init: effort copy failed; using API default", NULL);
 
     ws->on_message = ws_chat_on_message;
     ws->on_close = ws_chat_on_close;

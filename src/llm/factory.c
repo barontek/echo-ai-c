@@ -8,15 +8,17 @@
 
 LLMProvider *get_provider(const char *name, const char *model,
                           const char *base_url, const char *api_token,
-                          int num_ctx, int keep_alive_secs)
+                          int num_ctx, int keep_alive_secs,
+                          const char *effort)
 {
     return get_provider_with_auth(name, model, base_url, api_token,
-                                  num_ctx, keep_alive_secs, NULL);
+                                  num_ctx, keep_alive_secs, effort, NULL);
 }
 
 LLMProvider *get_provider_with_auth(const char *name, const char *model,
                                     const char *base_url, const char *api_token,
                                     int num_ctx, int keep_alive_secs,
+                                    const char *effort,
                                     OpenAIOAuth *openai_auth)
 {
     (void)model;
@@ -42,7 +44,7 @@ LLMProvider *get_provider_with_auth(const char *name, const char *model,
     if (strcmp(name, "openai") == 0)
     {
         if (!openai_auth) return NULL;
-        return openai_provider_create(base_url, api_token, openai_auth);
+        return openai_provider_create(base_url, api_token, effort, openai_auth);
     }
 
     if (strcmp(name, "opencode_zen") == 0)
@@ -80,4 +82,12 @@ const char *provider_default_base_url(const char *name)
     if (strcmp(name, "opencode_zen") == 0)
         return "https://opencode.ai/zen/v1";
     return NULL;
+}
+
+int provider_supports_effort(const char *name)
+{
+    if (!name) return 0;
+    if (strcmp(name, "openai") == 0)
+        return 1;
+    return 0;
 }

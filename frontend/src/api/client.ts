@@ -87,9 +87,15 @@ class ApiClient {
     return res.data.models || [];
   }
 
-  async getProviders(): Promise<string[]> {
-    const res = await this.client.get<{ providers: string[] }>('/api/providers');
-    return res.data.providers || [];
+  async getProviders(): Promise<{ providers: string[]; effortSupported: string[] }> {
+    const res = await this.client.get<{
+      providers: string[];
+      effort_supported?: string[];
+    }>('/api/providers');
+    return {
+      providers: res.data.providers || [],
+      effortSupported: res.data.effort_supported || [],
+    };
   }
 
   async getOpenAIOAuthStatus(

@@ -118,10 +118,10 @@ static void mock_destroy(LLMProvider *self) { free(self); }
 LLMProvider *td_test_get_provider_with_auth(
     const char *name, const char *model, const char *base_url,
     const char *api_token, int num_ctx, int keep_alive_secs,
-    OpenAIOAuth *openai_auth)
+    const char *effort, OpenAIOAuth *openai_auth)
 {
     (void)name; (void)model; (void)base_url; (void)api_token;
-    (void)num_ctx; (void)keep_alive_secs; (void)openai_auth;
+    (void)num_ctx; (void)keep_alive_secs; (void)effort; (void)openai_auth;
     LLMProvider *p = calloc(1, sizeof(LLMProvider));
     if (p)
     {

@@ -87,6 +87,10 @@ static AgentConfig *load_agent_config(Conf *conf)
     cfg->num_ctx = conf_get_int(conf, "ollama.num_ctx", 4096);
     cfg->keep_alive_secs = conf_get_int(conf, "ollama.keep_alive_secs", 120);
 
+    /* Optional reasoning-effort hint for providers that support it
+     * (currently openai); validated by the provider at create time. */
+    cfg->effort = conf_get(conf, "agent.effort");
+
     return cfg;
 }
 

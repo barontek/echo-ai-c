@@ -10,7 +10,7 @@
 
 START_TEST(test_get_provider_ollama_returns_valid_provider)
 {
-    LLMProvider *p = get_provider("ollama", "model", "http://localhost:11434", NULL, 4096, 120);
+    LLMProvider *p = get_provider("ollama", "model", "http://localhost:11434", NULL, 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
     ck_assert(p->chat != NULL);
     ck_assert(p->chat_streaming != NULL);
@@ -24,7 +24,7 @@ START_TEST(test_get_provider_openai_returns_valid_provider)
 {
     OpenAIOAuth *auth = (OpenAIOAuth *)1;
     LLMProvider *p = get_provider_with_auth("openai", "model", NULL,
-                                            "ignored", 0, 0, auth);
+                                            "ignored", 0, 0, NULL, auth);
     ck_assert_ptr_ne(p, NULL);
     ck_assert(p->chat != NULL);
     ck_assert(p->chat_streaming != NULL);
@@ -34,9 +34,28 @@ START_TEST(test_get_provider_openai_returns_valid_provider)
 }
 END_TEST
 
+START_TEST(test_get_provider_openai_with_effort_returns_valid_provider)
+{
+    OpenAIOAuth *auth = (OpenAIOAuth *)1;
+    LLMProvider *p = get_provider_with_auth("openai", "model", NULL,
+                                            "ignored", 0, 0, "high", auth);
+    ck_assert_ptr_ne(p, NULL);
+    p->destroy(p);
+}
+END_TEST
+
+START_TEST(test_get_provider_openai_with_invalid_effort_returns_null)
+{
+    OpenAIOAuth *auth = (OpenAIOAuth *)1;
+    LLMProvider *p = get_provider_with_auth("openai", "model", NULL,
+                                            "ignored", 0, 0, "extreme", auth);
+    ck_assert_ptr_null(p);
+}
+END_TEST
+
 START_TEST(test_get_provider_openai_without_oauth_returns_null)
 {
-    LLMProvider *p = get_provider("openai", "model", "https://api.openai.com", NULL, 0, 0);
+    LLMProvider *p = get_provider("openai", "model", "https://api.openai.com", NULL, 0, 0, NULL);
     ck_assert_ptr_null(p);
 }
 END_TEST
@@ -44,7 +63,7 @@ END_TEST
 START_TEST(test_get_provider_openai_compatible_returns_valid_provider)
 {
     LLMProvider *p = get_provider("openai_compatible", "model",
-                                  "http://localhost:1234", "optional-token", 0, 0);
+                                  "http://localhost:1234", "optional-token", 0, 0, NULL);
     ck_assert_ptr_ne(p, NULL);
     ck_assert(p->chat != NULL);
     ck_assert(p->chat_streaming != NULL);
@@ -57,7 +76,7 @@ END_TEST
 START_TEST(test_get_provider_lmstudio_alias_returns_valid_provider)
 {
     /* Back-compat alias: lmstudio maps to the openai-compatible client. */
-    LLMProvider *p = get_provider("lmstudio", "model", "http://localhost:1234", NULL, 0, 0);
+    LLMProvider *p = get_provider("lmstudio", "model", "http://localhost:1234", NULL, 0, 0, NULL);
     ck_assert_ptr_ne(p, NULL);
     ck_assert(p->chat != NULL);
     p->destroy(p);
@@ -67,7 +86,7 @@ END_TEST
 START_TEST(test_get_provider_opencode_zen_returns_valid_provider)
 {
     LLMProvider *p = get_provider("opencode_zen", "model",
-                                  "https://opencode.ai/zen/v1", "zen-test-1", 0, 0);
+                                  "https://opencode.ai/zen/v1", "zen-test-1", 0, 0, NULL);
     ck_assert_ptr_ne(p, NULL);
     ck_assert(p->chat != NULL);
     ck_assert(p->chat_streaming != NULL);
@@ -81,7 +100,7 @@ START_TEST(test_get_provider_opencode_zen_without_token_returns_valid_provider)
 {
     /* Zen without a token is still constructible; the service rejects the
      * request with 401 at request time. */
-    LLMProvider *p = get_provider("opencode_zen", "model", NULL, NULL, 0, 0);
+    LLMProvider *p = get_provider("opencode_zen", "model", NULL, NULL, 0, 0, NULL);
     ck_assert_ptr_ne(p, NULL);
     p->destroy(p);
 }
@@ -89,21 +108,21 @@ END_TEST
 
 START_TEST(test_get_provider_unknown_returns_null)
 {
-    LLMProvider *p = get_provider("unknown_provider", "model", "url", NULL, 0, 0);
+    LLMProvider *p = get_provider("unknown_provider", "model", "url", NULL, 0, 0, NULL);
     ck_assert_ptr_eq(p, NULL);
 }
 END_TEST
 
 START_TEST(test_get_provider_empty_name_returns_null)
 {
-    LLMProvider *p = get_provider("", "model", "url", NULL, 0, 0);
+    LLMProvider *p = get_provider("", "model", "url", NULL, 0, 0, NULL);
     ck_assert_ptr_eq(p, NULL);
 }
 END_TEST
 
 START_TEST(test_get_provider_anthropic_not_implemented)
 {
-    LLMProvider *p = get_provider("anthropic", "model", "url", NULL, 0, 0);
+    LLMProvider *p = get_provider("anthropic", "model", "url", NULL, 0, 0, NULL);
     ck_assert_ptr_eq(p, NULL);
 }
 END_TEST
@@ -131,6 +150,27 @@ START_TEST(test_provider_default_base_url_unknown_returns_null)
 END_TEST
 
 /* ================================================================
+ *  provider_supports_effort tests
+ * ================================================================ */
+
+START_TEST(test_provider_supports_effort_openai_only)
+{
+    ck_assert_int_eq(provider_supports_effort("openai"), 1);
+    ck_assert_int_eq(provider_supports_effort("ollama"), 0);
+    ck_assert_int_eq(provider_supports_effort("openai_compatible"), 0);
+    ck_assert_int_eq(provider_supports_effort("opencode_zen"), 0);
+}
+END_TEST
+
+START_TEST(test_provider_supports_effort_unknown_returns_zero)
+{
+    ck_assert_int_eq(provider_supports_effort("anthropic"), 0);
+    ck_assert_int_eq(provider_supports_effort(""), 0);
+    ck_assert_int_eq(provider_supports_effort(NULL), 0);
+}
+END_TEST
+
+/* ================================================================
  *  Suite
  * ================================================================ */
 
@@ -141,6 +181,8 @@ Suite *factory_suite(void)
     TCase *tc = tcase_create("GetProvider");
     tcase_add_test(tc, test_get_provider_ollama_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_openai_returns_valid_provider);
+    tcase_add_test(tc, test_get_provider_openai_with_effort_returns_valid_provider);
+    tcase_add_test(tc, test_get_provider_openai_with_invalid_effort_returns_null);
     tcase_add_test(tc, test_get_provider_openai_without_oauth_returns_null);
     tcase_add_test(tc, test_get_provider_openai_compatible_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_lmstudio_alias_returns_valid_provider);
@@ -154,6 +196,8 @@ Suite *factory_suite(void)
     TCase *tc_url = tcase_create("DefaultBaseUrl");
     tcase_add_test(tc_url, test_provider_default_base_url_known_providers);
     tcase_add_test(tc_url, test_provider_default_base_url_unknown_returns_null);
+    tcase_add_test(tc_url, test_provider_supports_effort_openai_only);
+    tcase_add_test(tc_url, test_provider_supports_effort_unknown_returns_zero);
     suite_add_tcase(s, tc_url);
 
     return s;

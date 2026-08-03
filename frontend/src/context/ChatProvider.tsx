@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
-import { ChatContext, type ChatContextValue, type ConnectionStatus } from './ChatContext';
+import {
+  ChatContext,
+  EFFORT_OPTIONS,
+  type ChatContextValue,
+  type ConnectionStatus,
+} from './ChatContext';
 import { api } from '../api/client';
 import type { ApprovalRequest, StreamEvent } from '../types';
 
@@ -15,6 +20,7 @@ type ChatPreferences = {
   model?: string;
   provider?: string;
   models?: Record<string, string>;
+  effort?: string;
 };
 
 const CHAT_PREFERENCES_KEY = 'echo-ai-chat-preferences';
@@ -96,6 +102,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   /* Provider list comes from the backend (/api/providers); the fallback
    * below only covers the window before the fetch resolves. */
   const [providers, setProviders] = useState<string[]>(FALLBACK_PROVIDERS);
+  /* Providers whose backend accepts a reasoning-effort hint; the effort
+   * selector in the chat input is gated on the current provider being in
+   * this list. Empty until /api/providers resolves. */
+  const [effortSupportedProviders, setEffortSupportedProviders] = useState<string[]>([]);
+  /* '' means "provider default"; otherwise one of EFFORT_OPTIONS. */
+  const [currentEffort, setCurrentEffort] = useState<string>('');
   const [messages, setMessages] = useState<ChatContextValue['messages']>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [isConnected, setIsConnected] = useState(false);
@@ -124,7 +136,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    /* Guard against a null ws explicitly: `wsRef.current?.readyState ===
+     * WebSocket.OPEN` would be `undefined === undefined` when OPEN is
+     * unavailable (e.g. a test shim without statics), silently making
+     * every connect a no-op. */
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       debugLog('connect', 'already connected');
       return;
     }
@@ -150,8 +166,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setIsConnected(true);
         setConnectionStatus('connected');
         // Send config to initialize
-        const configMsg = JSON.stringify({ provider: currentProvider, model: currentModel });
-        debugLog('ws:send', { type: 'config', provider: currentProvider, model: currentModel });
+        const configMsg = JSON.stringify({
+          provider: currentProvider,
+          model: currentModel,
+          // undefined drops the key; the backend then uses the config
+          // default effort
+          effort: currentEffort || undefined,
+        });
+        debugLog('ws:send', { type: 'config', provider: currentProvider, model: currentModel, effort: currentEffort });
         ws.send(configMsg);
       };
 
@@ -468,7 +490,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('[Chat] Failed to connect:', err);
     }
-  }, [currentModel, currentProvider]);
+  }, [currentModel, currentProvider, currentEffort]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -618,9 +640,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
         debugLog('loadData:sessions', sessionsData.length);
         debugLog('loadData:prefs', prefsData);
-        const availableProviders = providersData.length > 0 ? providersData : FALLBACK_PROVIDERS;
+        const availableProviders = providersData.providers.length > 0
+          ? providersData.providers
+          : FALLBACK_PROVIDERS;
         if (!isMounted()) return;
         setProviders(availableProviders);
+        setEffortSupportedProviders(providersData.effortSupported);
         setSessions(sessionsData);
         if (!providerSelectionUnchanged()) return;
 
@@ -674,7 +699,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         savedModels[savedProvider] = savedModel;
         setModelByProvider(savedModels);
 
-        const resolvedPrefs = { provider: savedProvider, model: savedModel, models: savedModels };
+        /* Restore the saved effort hint; anything outside EFFORT_OPTIONS is
+         * dropped so a stale localStorage value can never reach the wire. */
+        const savedEffort = EFFORT_OPTIONS.some((e) => e === storedPrefs.effort)
+          ? (storedPrefs.effort as string)
+          : '';
+        setCurrentEffort(savedEffort);
+
+        const resolvedPrefs: ChatPreferences = {
+          provider: savedProvider,
+          model: savedModel,
+          models: savedModels,
+          effort: savedEffort || undefined,
+        };
         writeChatPreferences(resolvedPrefs);
         api.setPreferences(resolvedPrefs).catch(console.error);
       } catch (err) {
@@ -786,6 +823,33 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [currentProvider, modelByProvider]
   );
 
+  const selectEffort = useCallback(
+    (effort: string) => {
+      debugLog('selectEffort', effort);
+      setCurrentEffort(effort);
+      /* Merge into whatever prefs already exist so the effort change never
+       * clobbers provider/model state that was written elsewhere. */
+      const preferences = { ...readChatPreferences(), effort: effort || undefined };
+      writeChatPreferences(preferences);
+      void api.setPreferences(preferences).catch(console.error);
+      /* Resend the config over the live socket so the change applies
+       * immediately; the backend rebuilds the provider when the effort
+       * differs. Fresh connections pick it up from the initial config
+       * message instead. */
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            provider: currentProvider,
+            model: currentModel,
+            effort: effort || undefined,
+          })
+        );
+      }
+    },
+    [currentProvider, currentModel]
+  );
+
   const selectProvider = useCallback(
     async (provider: string, prefetchedModels?: string[]) => {
       debugLog('selectProvider', provider);
@@ -840,6 +904,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [messages, sendMessage]
   );
 
+  const supportsEffort = effortSupportedProviders.includes(currentProvider);
+
   const value = useMemo<ChatContextValue>(
     () => ({
       sessions,
@@ -848,6 +914,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       currentProvider,
       models,
       providers,
+      currentEffort,
+      selectEffort,
+      supportsEffort,
       messages,
       connectionStatus,
       isConnected,
@@ -878,6 +947,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       currentProvider,
       models,
       providers,
+      currentEffort,
+      selectEffort,
+      supportsEffort,
       messages,
       connectionStatus,
       isConnected,

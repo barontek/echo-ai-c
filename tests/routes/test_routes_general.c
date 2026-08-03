@@ -267,6 +267,13 @@ const char *const *provider_names_available(int *count)
     return stub_provider_names;
 }
 
+/* Mirrors factory.c's capability map (factory.c is not linked here); the
+ * real function is covered in test_factory.c. */
+int provider_supports_effort(const char *name)
+{
+    return name && strcmp(name, "openai") == 0;
+}
+
 /* ---------------------------------------------------------------------------
  * handle_health
  * --------------------------------------------------------------------------- */
@@ -332,6 +339,7 @@ START_TEST(test_handle_providers_lists_available_providers)
     ck_assert(strstr(captured_body, "\"providers\":["));
     ck_assert(strstr(captured_body, "\"opencode_zen\""));
     ck_assert(strstr(captured_body, "\"ollama\""));
+    ck_assert(strstr(captured_body, "\"effort_supported\":[\"openai\"]"));
 
     reset_stubs();
 }

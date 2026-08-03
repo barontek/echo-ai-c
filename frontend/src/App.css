@@ -1216,6 +1216,45 @@ body {
   cursor: not-allowed;
 }
 
+.effort-selector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.effort-select {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 6px;
+  cursor: pointer;
+  outline: none;
+  transition:
+    border-color 0.2s,
+    background-color 0.2s;
+  max-width: 110px;
+}
+
+.effort-select:hover:not(:disabled) {
+  border-color: var(--border-light);
+  background: var(--bg-primary);
+}
+
+.effort-select:focus-visible {
+  border-color: var(--accent);
+}
+
+.effort-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

@@ -25,6 +25,9 @@ typedef struct {
     int num_ctx;
     int keep_alive_secs;
     int parallel_tool_exec;
+    /* Reasoning-effort hint for providers that support it ("minimal"/
+     * "low"/"medium"/"high"); NULL = provider default. Borrowed from conf. */
+    const char *effort;
 } AgentConfig;
 
 typedef void (*title_callback)(const char *session_id, const char *title, void *userdata);
@@ -50,6 +53,7 @@ typedef struct {
     int max_context_messages;
     int max_context_chars;
     int parallel_tool_exec;
+    char *effort; /* owned; NULL = provider default */
     volatile int cancel_requested;
     SessionManager *sm;
     CircuitBreaker *cb;
@@ -90,10 +94,12 @@ void agent_set_callback_manager(Agent *agent, CallbackManager *mgr);
 void agent_set_model(Agent *agent, const char *model);
 
 /* Switch the live LLM provider. base_url/api_token/num_ctx/keep_alive_secs
- * are passed to get_provider; on failure returns -1 and the old provider is
- * kept and still owned by the agent. The caller keeps no ownership of
- * anything. */
+ * are passed to get_provider; effort is a borrowed reasoning-effort hint
+ * passed the same way (NULL = provider default). On failure returns -1 and
+ * the old provider is kept and still owned by the agent. The caller keeps
+ * no ownership of anything. */
 int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
-                       const char *api_token, int num_ctx, int keep_alive_secs);
+                       const char *api_token, int num_ctx, int keep_alive_secs,
+                       const char *effort);
 
 #endif

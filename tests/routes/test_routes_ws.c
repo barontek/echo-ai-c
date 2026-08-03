@@ -27,6 +27,7 @@ typedef struct WSChatCtx {
     int ask_user_timeout;
     const char *base_url; const char *api_token;
     int num_ctx; int keep_alive_secs;
+    char *effort;
     int active_runs; int closing;
     ServerContext *server_ctx; unsigned long auth_generation;
     struct WSChatCtx *next;
@@ -75,6 +76,7 @@ static const char *stub_agent_set_provider_base_url = NULL;
 static const char *stub_agent_set_provider_token = NULL;
 static int stub_agent_set_provider_num_ctx = 0;
 static int stub_agent_set_provider_keep_alive = 0;
+static const char *stub_agent_set_provider_effort = NULL;
 static const char *stub_agent_set_model_name = NULL;
 static int stub_agent_cancel_calls = 0;
 static int stub_agent_clear_sm_calls = 0;
@@ -114,6 +116,8 @@ static void setup(void)
     stub_agent_set_provider_token = NULL;
     stub_agent_set_provider_num_ctx = 0;
     stub_agent_set_provider_keep_alive = 0;
+    free((char *)stub_agent_set_provider_effort);
+    stub_agent_set_provider_effort = NULL;
     stub_agent_cancel_calls = 0;
     stub_agent_clear_sm_calls = 0;
     stub_session_manager_free_calls = 0;
@@ -161,6 +165,17 @@ static void setup(void)
 static void teardown(void) { reset_capture(); }
 
 /* ---- STUBS ---- */
+
+/* Mirrors src/llm/openai.c's validator (openai.c is not linked into this
+ * binary); the real function is covered in test_openai.c. */
+int openai_reasoning_effort_valid(const char *effort)
+{
+    if (!effort || !effort[0]) return 1;
+    return strcmp(effort, "minimal") == 0 ||
+           strcmp(effort, "low") == 0 ||
+           strcmp(effort, "medium") == 0 ||
+           strcmp(effort, "high") == 0;
+}
 
 int ws_send_json(WSClient *ws, const char *json)
 {
@@ -254,18 +269,21 @@ void agent_set_safety(Agent *a, SafetyConfig *s) { (void)a; (void)s; }
 void agent_set_metrics(Agent *a, Metrics *m) { (void)a; (void)m; }
 
 int agent_set_provider(Agent *a, const char *provider, const char *base_url,
-                       const char *api_token, int num_ctx, int keep_alive_secs)
+                       const char *api_token, int num_ctx, int keep_alive_secs,
+                       const char *effort)
 {
     (void)a;
     stub_agent_set_provider_calls++;
     free((char *)stub_agent_set_provider_name);
     free((char *)stub_agent_set_provider_base_url);
     free((char *)stub_agent_set_provider_token);
+    free((char *)stub_agent_set_provider_effort);
     stub_agent_set_provider_name = str_dup(provider);
     stub_agent_set_provider_base_url = str_dup(base_url);
     stub_agent_set_provider_token = str_dup(api_token);
     stub_agent_set_provider_num_ctx = num_ctx;
     stub_agent_set_provider_keep_alive = keep_alive_secs;
+    stub_agent_set_provider_effort = effort ? str_dup(effort) : NULL;
     return stub_agent_set_provider_result;
 }
 
@@ -285,8 +303,9 @@ LLMProvider *ollama_provider_create(const char *b, int n, int k)
 { (void)b; (void)n; (void)k; return NULL; }
 LLMProvider *openai_compatible_provider_create(const char *b, const char *t)
 { (void)b; (void)t; return NULL; }
-LLMProvider *openai_provider_create(const char *b, const char *t, OpenAIOAuth *auth)
-{ (void)b; (void)t; (void)auth; return NULL; }
+LLMProvider *openai_provider_create(const char *b, const char *t, const char *e,
+                                    OpenAIOAuth *auth)
+{ (void)b; (void)t; (void)e; (void)auth; return NULL; }
 LLMProvider *opencode_zen_provider_create(const char *b, const char *t)
 { (void)b; (void)t; return NULL; }
 
@@ -1095,6 +1114,7 @@ START_TEST(test_on_message_provider_config_switches_provider)
     c.base_url = "http://localhost:11434";
     c.num_ctx = 4096;
     c.keep_alive_secs = 120;
+    c.effort = str_dup("high");
     char dummy_ws = 0;
     ws_chat_on_message((WSClient *)&dummy_ws,
         "{\"provider\":\"lm_studio\",\"model\":\"qwen\"}", 41, &c);
@@ -1104,8 +1124,62 @@ START_TEST(test_on_message_provider_config_switches_provider)
                      "http://localhost:1234");
     ck_assert_int_eq(stub_agent_set_provider_num_ctx, 4096);
     ck_assert_int_eq(stub_agent_set_provider_keep_alive, 120);
+    ck_assert_str_eq(stub_agent_set_provider_effort, "high");
     ck_assert_str_eq(stub_agent_set_model_name, "qwen");
     ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    free(c.effort);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_applies_effort_override)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"ollama\",\"model\":\"llama3\",\"effort\":\"low\"}", 53, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_str_eq(stub_agent_set_provider_effort, "low");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    ck_assert_ptr_null(strstr(captured_ws_json, "\"type\":\"error\""));
+    free(c.effort);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_empty_effort_clears)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    c.effort = str_dup("high");
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"ollama\",\"effort\":\"\"}", 30, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_ptr_null(stub_agent_set_provider_effort);
+    ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    free(c.effort);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_rejects_invalid_effort)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    c.effort = str_dup("high");
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"ollama\",\"effort\":\"extreme\"}", 36, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_str_eq(stub_agent_set_provider_effort, "high");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
+    ck_assert(strstr(captured_ws_json, "invalid effort value"));
+    free(c.effort);
     reset_capture();
 }
 END_TEST
@@ -1691,6 +1765,9 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_ask_user_empty_answer);
     tcase_add_test(tc, test_on_message_provider_config);
     tcase_add_test(tc, test_on_message_provider_config_switches_provider);
+    tcase_add_test(tc, test_on_message_provider_config_applies_effort_override);
+    tcase_add_test(tc, test_on_message_provider_config_empty_effort_clears);
+    tcase_add_test(tc, test_on_message_provider_config_rejects_invalid_effort);
     tcase_add_test(tc, test_on_message_provider_config_resolves_token_from_conf);
     tcase_add_test(tc, test_on_message_provider_switch_uses_target_default_base_url);
     tcase_add_test(tc, test_on_message_provider_switch_uses_conf_base_url_override);

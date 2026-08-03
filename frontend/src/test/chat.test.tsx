@@ -3,14 +3,14 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { ChatProvider, useChat } from '../context';
 
-const { mockApi, wsCalls } = vi.hoisted(() => ({
+const { mockApi, wsCalls, wsOnOpenTimers } = vi.hoisted(() => ({
   mockApi: {
     getSessions: vi.fn().mockResolvedValue([
       { id: 'session-1', title: 'First Chat', created_at: '2024-01-01' },
       { id: 'session-2', title: 'Second Chat', created_at: '2024-01-02' },
     ]),
     getModels: vi.fn().mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']),
-    getProviders: vi.fn().mockResolvedValue(['ollama', 'openai', 'opencode_zen']),
+    getProviders: vi.fn().mockResolvedValue({ providers: ['ollama', 'openai', 'opencode_zen'], effortSupported: ['openai'] }),
     getOpenAIOAuthStatus: vi.fn().mockResolvedValue({ state: 'signed_out' }),
     createSession: vi.fn().mockResolvedValue({ session_id: 'new-session-456' }),
     loadSession: vi.fn().mockResolvedValue({
@@ -36,56 +36,78 @@ const { mockApi, wsCalls } = vi.hoisted(() => ({
     healthCheck: vi.fn().mockResolvedValue({ status: 'healthy', version: '0.1.0' }),
   },
   wsCalls: [] as string[],
+  /* Pending onopen timers across all mock ws instances: a timer scheduled
+   * by one test can otherwise fire into the next test's wsCalls. */
+  wsOnOpenTimers: [] as ReturnType<typeof setTimeout>[],
 }));
 
 vi.mock('../api/client', () => ({
   api: mockApi,
 }));
 
-vi.stubGlobal(
-  'WebSocket',
-  vi.fn(() => {
-    const handlers: Record<string, ((...args: unknown[]) => unknown) | null | undefined> = {};
-    return {
-      send: vi.fn((data: string) => {
-        wsCalls.push(data);
+const MOCK_WS_STATICS = { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 };
+
+function installPrimaryWebSocketMock(): void {
+  vi.stubGlobal(
+    'WebSocket',
+    Object.assign(
+      /* Regular function (not an arrow) so `new WebSocket(...)` works;
+       * the returned object replaces `this`, mimicking the real API. */
+      vi.fn(function () {
+        const handlers: Record<string, ((...args: unknown[]) => unknown) | null | undefined> = {};
+        return {
+          send: vi.fn((data: string) => {
+            wsCalls.push(data);
+          }),
+          close: vi.fn(),
+          readyState: 1,
+          get onopen() {
+            return handlers.onopen;
+          },
+          set onopen(fn: ((...args: unknown[]) => unknown) | null | undefined) {
+            handlers.onopen = fn;
+            if (fn) {
+              wsOnOpenTimers.push(setTimeout(() => fn(), 0));
+            }
+          },
+          get onclose() {
+            return handlers.onclose;
+          },
+          set onclose(fn: ((...args: unknown[]) => unknown) | null | undefined) {
+            handlers.onclose = fn;
+          },
+          get onmessage() {
+            return handlers.onmessage;
+          },
+          set onmessage(fn: ((...args: unknown[]) => unknown) | null | undefined) {
+            handlers.onmessage = fn;
+          },
+          get onerror() {
+            return handlers.onerror;
+          },
+          set onerror(fn: ((...args: unknown[]) => unknown) | null | undefined) {
+            handlers.onerror = fn;
+          },
+        };
       }),
-      close: vi.fn(),
-      readyState: 1,
-      get onopen() {
-        return handlers.onopen;
-      },
-      set onopen(fn: ((...args: unknown[]) => unknown) | null | undefined) {
-        handlers.onopen = fn;
-        if (fn) {
-          setTimeout(() => fn(), 0);
-        }
-      },
-      get onclose() {
-        return handlers.onclose;
-      },
-      set onclose(fn: ((...args: unknown[]) => unknown) | null | undefined) {
-        handlers.onclose = fn;
-      },
-      get onmessage() {
-        return handlers.onmessage;
-      },
-      set onmessage(fn: ((...args: unknown[]) => unknown) | null | undefined) {
-        handlers.onmessage = fn;
-      },
-      get onerror() {
-        return handlers.onerror;
-      },
-      set onerror(fn: ((...args: unknown[]) => unknown) | null | undefined) {
-        handlers.onerror = fn;
-      },
-    };
-  })
-);
+      MOCK_WS_STATICS
+    )
+  );
+}
+
+installPrimaryWebSocketMock();
 
 describe('Session History Bug Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    /* Drop stale ws-open timers from earlier tests before re-installing
+     * the primary WebSocket mock, so a previous test's onopen can't
+     * append to this test's wsCalls. */
+    wsOnOpenTimers.splice(0).forEach(clearTimeout);
+    /* Re-install the primary WebSocket mock: individual tests may have
+     * stubbed the global themselves, and stubGlobal leaves the last
+     * stub in place for later tests. */
+    installPrimaryWebSocketMock();
     if (typeof localStorage !== 'undefined') localStorage.clear();
     wsCalls.length = 0;
     mockApi.getSessions.mockResolvedValue([
@@ -100,7 +122,10 @@ describe('Session History Bug Tests', () => {
         { role: 'assistant', content: 'Hi there!', timestamp: '10:01' },
       ],
     });
-    mockApi.getProviders.mockResolvedValue(['ollama', 'openai', 'opencode_zen']);
+    mockApi.getProviders.mockResolvedValue({
+      providers: ['ollama', 'openai', 'opencode_zen'],
+      effortSupported: ['openai'],
+    });
     mockApi.getModels.mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']);
     mockApi.getPreferences.mockResolvedValue({});
     mockApi.setPreferences.mockResolvedValue(undefined);
@@ -413,7 +438,7 @@ describe('Session History Bug Tests', () => {
     });
 
     it('should restore the last model for each provider', async () => {
-      mockApi.getProviders.mockResolvedValueOnce(['ollama', 'openai']);
+      mockApi.getProviders.mockResolvedValueOnce({ providers: ['ollama', 'openai'], effortSupported: ['openai'] });
       mockApi.getPreferences.mockResolvedValueOnce({
         provider: 'ollama',
         model: 'qwen3:4b-instruct',
@@ -465,7 +490,7 @@ describe('Session History Bug Tests', () => {
           models: { openai: 'gpt-5-codex' },
         })
       );
-      mockApi.getProviders.mockResolvedValueOnce(['ollama', 'openai']);
+      mockApi.getProviders.mockResolvedValueOnce({ providers: ['ollama', 'openai'], effortSupported: ['openai'] });
       mockApi.getOpenAIOAuthStatus.mockResolvedValueOnce({ state: 'signed_out' });
 
       function TestComponent() {
@@ -558,10 +583,13 @@ describe('Session History Bug Tests', () => {
     });
 
     it('keeps startup sessions and providers when a provider is selected early', async () => {
-      let resolveProviders: ((providers: string[]) => void) | undefined;
+      let resolveProviders: ((providers: {
+        providers: string[];
+        effortSupported: string[];
+      }) => void) | undefined;
       mockApi.getProviders.mockImplementationOnce(
         () =>
-          new Promise<string[]>((resolve) => {
+          new Promise<{ providers: string[]; effortSupported: string[] }>((resolve) => {
             resolveProviders = resolve;
           })
       );
@@ -592,7 +620,7 @@ describe('Session History Bug Tests', () => {
       );
 
       await act(async () => {
-        resolveProviders?.(['ollama', 'openai', 'opencode_zen']);
+        resolveProviders?.({ providers: ['ollama', 'openai', 'opencode_zen'], effortSupported: ['openai'] });
       });
       await waitFor(() =>
         expect(screen.getByTestId('startup-session-count').textContent).toBe('2')
@@ -781,7 +809,7 @@ describe('Session History Bug Tests', () => {
 
       vi.stubGlobal(
         'WebSocket',
-        vi.fn(() => mockWs)
+        Object.assign(vi.fn(() => mockWs), MOCK_WS_STATICS)
       );
 
       function TestComponent() {
@@ -816,6 +844,165 @@ describe('Session History Bug Tests', () => {
       await waitFor(() => {
         expect(mockApi.getSessions).toHaveBeenCalled();
       });
+    });
+  });
+});
+
+describe('Reasoning effort setting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    /* Same hygiene as the main describe: drop stale ws-open timers and
+     * re-install the primary WebSocket mock, since earlier tests stub the
+     * global themselves and leave the last stub in place. */
+    wsOnOpenTimers.splice(0).forEach(clearTimeout);
+    installPrimaryWebSocketMock();
+    if (typeof localStorage !== 'undefined') localStorage.clear();
+    wsCalls.length = 0;
+    mockApi.getProviders.mockResolvedValue({
+      providers: ['ollama', 'openai', 'opencode_zen'],
+      effortSupported: ['openai'],
+    });
+    mockApi.getModels.mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']);
+    mockApi.getPreferences.mockResolvedValue({});
+    mockApi.setPreferences.mockResolvedValue(undefined);
+    mockApi.getOpenAIOAuthStatus.mockResolvedValue({ state: 'signed_out' });
+    mockApi.getSessions.mockResolvedValue([]);
+    mockApi.loadSession.mockResolvedValue({ session_id: 's', title: 't', messages: [] });
+  });
+
+  it('shows the effort selector only when the current provider supports it', async () => {
+    const { ChatInput } = await import('../components/ChatInput');
+    function TestComponent() {
+      const { currentProvider, selectProvider, supportsEffort } = useChat();
+      return (
+        <>
+          <span data-testid="provider">{currentProvider}</span>
+          <span data-testid="supports">{String(supportsEffort)}</span>
+          <button onClick={() => void selectProvider('openai')}>OpenAI</button>
+          <ChatInput />
+        </>
+      );
+    }
+    render(
+      <ChatProvider>
+        <TestComponent />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider').textContent).toBe('ollama');
+    });
+    expect(screen.getByTestId('supports').textContent).toBe('false');
+    expect(screen.queryByRole('combobox', { name: 'Reasoning effort' })).toBeNull();
+
+    await userEvent.click(screen.getByText('OpenAI'));
+    await waitFor(() => {
+      expect(screen.getByTestId('supports').textContent).toBe('true');
+    });
+    expect(screen.getByRole('combobox', { name: 'Reasoning effort' })).toBeDefined();
+  });
+
+  it('selecting an effort persists it and resends the config over the live socket', async () => {
+    function TestComponent() {
+      const { currentEffort, selectProvider, selectEffort } = useChat();
+      return (
+        <>
+          <span data-testid="effort">{currentEffort}</span>
+          <button onClick={() => void selectProvider('openai')}>OpenAI</button>
+          <button onClick={() => selectEffort('low')}>Effort low</button>
+          <button onClick={() => selectEffort('')}>Effort default</button>
+        </>
+      );
+    }
+    render(
+      <ChatProvider>
+        <TestComponent />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('effort').textContent).toBe('');
+    });
+    await userEvent.click(screen.getByText('OpenAI'));
+    await waitFor(() => {
+      expect(mockApi.getModels).toHaveBeenCalledWith('openai', expect.anything());
+    });
+    wsCalls.length = 0;
+    await userEvent.click(screen.getByText('Effort low'));
+    expect(screen.getByTestId('effort').textContent).toBe('low');
+    await waitFor(() => {
+      expect(mockApi.setPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ effort: 'low' })
+      );
+    });
+    expect(
+      wsCalls.some((c) => c.includes('"provider":"openai"') && c.includes('"effort":"low"'))
+    ).toBe(true);
+
+    wsCalls.length = 0;
+    await userEvent.click(screen.getByText('Effort default'));
+    expect(screen.getByTestId('effort').textContent).toBe('');
+    await waitFor(() => {
+      expect(mockApi.setPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ effort: undefined })
+      );
+    });
+    expect(wsCalls.some((c) => c.includes('"effort":'))).toBe(false);
+  });
+
+  it('restores a saved effort and sends it in the initial config message', async () => {
+    localStorage.setItem(
+      'echo-ai-chat-preferences',
+      JSON.stringify({
+        provider: 'ollama',
+        model: 'qwen3:4b-instruct',
+        models: { ollama: 'qwen3:4b-instruct' },
+        effort: 'high',
+      })
+    );
+    function TestComponent() {
+      const { currentEffort } = useChat();
+      return <span data-testid="effort">{currentEffort}</span>;
+    }
+    render(
+      <ChatProvider>
+        <TestComponent />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('effort').textContent).toBe('high');
+    });
+    await waitFor(() => {
+      expect(wsCalls.some((c) => c.includes('"effort":"high"'))).toBe(true);
+    });
+  });
+
+  it('drops an invalid saved effort instead of sending it', async () => {
+    localStorage.setItem(
+      'echo-ai-chat-preferences',
+      JSON.stringify({
+        provider: 'ollama',
+        model: 'qwen3:4b-instruct',
+        models: { ollama: 'qwen3:4b-instruct' },
+        effort: 'extreme',
+      })
+    );
+    function TestComponent() {
+      const { currentEffort } = useChat();
+      return <span data-testid="effort">{currentEffort}</span>;
+    }
+    render(
+      <ChatProvider>
+        <TestComponent />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('effort').textContent).toBe('');
+    });
+    await waitFor(() => {
+      expect(wsCalls.some((c) => c.includes('"effort"'))).toBe(false);
     });
   });
 });

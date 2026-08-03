@@ -3,6 +3,9 @@ import type { ApprovalRequest, ToolCall } from '../types';
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
 
+export const EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high'] as const;
+export type EffortOption = (typeof EFFORT_OPTIONS)[number];
+
 export interface ChatContextValue {
   sessions: Array<{ id: string; title: string; created_at: string }>;
   activeSessionId: string | null;
@@ -10,6 +13,9 @@ export interface ChatContextValue {
   currentProvider: string;
   models: string[];
   providers: string[];
+  currentEffort: string;
+  selectEffort: (effort: string) => void;
+  supportsEffort: boolean;
   messages: Array<{
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;

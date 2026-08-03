@@ -108,7 +108,7 @@ START_TEST(test_request_converts_messages_tools_and_tool_outputs)
         "\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}},"
         "\"strict\":true}}]";
     char *body = openai_test_build_request_body(messages, 5, "gpt-5-codex",
-                                                 0.4, 1, tools, NULL);
+                                                 0.4, 1, tools, NULL, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
     ck_assert_str_eq(cJSON_GetStringValue(cJSON_GetObjectItem(root, "model")),
@@ -165,7 +165,7 @@ START_TEST(test_request_allows_empty_tool_list)
 {
     Message user = {.role = "user", .content = "hello"};
     char *body = openai_test_build_request_body(
-        &user, 1, "gpt-5-codex", 0.7, 1, "[]", NULL);
+        &user, 1, "gpt-5-codex", 0.7, 1, "[]", NULL, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
     ck_assert_ptr_null(cJSON_GetObjectItem(root, "tools"));
@@ -186,7 +186,7 @@ START_TEST(test_request_replays_encrypted_reasoning_before_tool_calls)
         {.role = "tool", .content = "done", .tool_call_id = "call-1"}
     };
     char *body = openai_test_build_request_body(
-        messages, 2, "gpt-5-codex", 0.7, 1, NULL, NULL);
+        messages, 2, "gpt-5-codex", 0.7, 1, NULL, NULL, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
     cJSON *input = cJSON_GetObjectItem(root, "input");
@@ -205,20 +205,20 @@ START_TEST(test_request_rejects_invalid_roles_tools_and_tool_outputs)
 {
     Message invalid_role = {.role = "moderator", .content = "no"};
     ck_assert_ptr_null(openai_test_build_request_body(
-        &invalid_role, 1, "gpt-5-codex", 0.7, 0, NULL, NULL));
+        &invalid_role, 1, "gpt-5-codex", 0.7, 0, NULL, NULL, NULL));
 
     Message orphan_output = {.role = "tool", .content = "result",
                              .tool_call_id = "missing"};
     ck_assert_ptr_null(openai_test_build_request_body(
-        &orphan_output, 1, "gpt-5-codex", 0.7, 0, NULL, NULL));
+        &orphan_output, 1, "gpt-5-codex", 0.7, 0, NULL, NULL, NULL));
 
     Message user = {.role = "user", .content = "hello"};
     ck_assert_ptr_null(openai_test_build_request_body(
         &user, 1, "gpt-5-codex", 0.7, 0,
         "[{\"type\":\"function\",\"function\":{\"name\":\"bad\","
-        "\"parameters\":\"not-an-object\"}}]", NULL));
+        "\"parameters\":\"not-an-object\"}}]", NULL, NULL));
     ck_assert_ptr_null(openai_test_build_request_body(
-        &user, 1, "gpt-5-codex", -0.1, 0, NULL, NULL));
+        &user, 1, "gpt-5-codex", -0.1, 0, NULL, NULL, NULL));
 }
 END_TEST
 
@@ -229,7 +229,7 @@ START_TEST(test_request_translates_structured_output_schema)
         "{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":"
         "\"string\"}},\"required\":[\"answer\"],\"additionalProperties\":false}";
     char *body = openai_test_build_request_body(&user, 1, "gpt-5-codex",
-                                                 0.2, 0, NULL, schema);
+                                                 0.2, 0, NULL, schema, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
     cJSON *text = cJSON_GetObjectItem(root, "text");
@@ -244,7 +244,7 @@ START_TEST(test_request_translates_structured_output_schema)
     cJSON_Delete(root);
     free(body);
     ck_assert_ptr_null(openai_test_build_request_body(
-        &user, 1, "gpt-5-codex", 0.2, 0, NULL, "[]"));
+        &user, 1, "gpt-5-codex", 0.2, 0, NULL, "[]", NULL));
 }
 END_TEST
 
@@ -263,7 +263,7 @@ START_TEST(test_request_cleans_up_each_cjson_allocation_failure)
             &user, 1, "gpt-5-codex", 0.2, 0,
             "[{\"type\":\"function\",\"function\":{\"name\":\"lookup\","
             "\"parameters\":{\"type\":\"object\"}}}]",
-            "{\"type\":\"object\"}");
+            "{\"type\":\"object\"}", NULL);
         cJSON_InitHooks(NULL);
         if (body)
         {
@@ -533,15 +533,80 @@ START_TEST(test_provider_ignores_static_configuration_and_requires_oauth_for_req
 {
     OpenAIOAuth auth = {0};
     LLMProvider *signed_out = openai_provider_create(
-        "https://api.openai.com/v1", "static-api-key", NULL);
+        "https://api.openai.com/v1", "static-api-key", NULL, NULL);
     ck_assert_ptr_null(signed_out);
     LLMProvider *provider = openai_provider_create(
-        "https://api.openai.com/v1", "static-api-key", &auth);
+        "https://api.openai.com/v1", "static-api-key", NULL, &auth);
     ck_assert_ptr_nonnull(provider);
     ck_assert(provider->chat != NULL);
     ck_assert(provider->chat_streaming != NULL);
     ck_assert(provider->extract_structured != NULL);
     provider->destroy(provider);
+}
+END_TEST
+
+START_TEST(test_provider_accepts_valid_effort_values)
+{
+    OpenAIOAuth auth = {0};
+    const char *valid[] = {"minimal", "low", "medium", "high"};
+    for (size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++)
+    {
+        LLMProvider *provider = openai_provider_create(
+            NULL, NULL, valid[i], &auth);
+        ck_assert_ptr_nonnull(provider);
+        provider->destroy(provider);
+    }
+}
+END_TEST
+
+START_TEST(test_provider_rejects_invalid_effort)
+{
+    OpenAIOAuth auth = {0};
+    LLMProvider *provider = openai_provider_create(
+        NULL, NULL, "extreme", &auth);
+    ck_assert_ptr_null(provider);
+    provider = openai_provider_create(
+        NULL, NULL, "high-effort", &auth);
+    ck_assert_ptr_null(provider);
+}
+END_TEST
+
+START_TEST(test_request_sends_reasoning_effort_when_configured)
+{
+    Message user = {.role = "user", .content = "hello"};
+    char *body = openai_test_build_request_body(
+        &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, "high");
+    ck_assert_ptr_nonnull(body);
+    cJSON *root = parse_json_or_fail(body);
+    cJSON *reasoning = cJSON_GetObjectItem(root, "reasoning");
+    ck_assert(cJSON_IsObject(reasoning));
+    ck_assert_str_eq(cJSON_GetStringValue(
+                         cJSON_GetObjectItem(reasoning, "effort")), "high");
+    cJSON_Delete(root);
+    free(body);
+}
+END_TEST
+
+START_TEST(test_request_omits_reasoning_when_effort_unset)
+{
+    Message user = {.role = "user", .content = "hello"};
+    char *body = openai_test_build_request_body(
+        &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, NULL);
+    ck_assert_ptr_nonnull(body);
+    cJSON *root = parse_json_or_fail(body);
+    ck_assert_ptr_null(cJSON_GetObjectItem(root, "reasoning"));
+    cJSON_Delete(root);
+    free(body);
+}
+END_TEST
+
+START_TEST(test_request_rejects_invalid_effort)
+{
+    Message user = {.role = "user", .content = "hello"};
+    ck_assert_ptr_null(openai_test_build_request_body(
+        &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, "extreme"));
+    ck_assert_ptr_null(openai_test_build_request_body(
+        &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, "MEDIUM"));
 }
 END_TEST
 
@@ -555,6 +620,9 @@ int main(void)
     tcase_add_test(request, test_request_allows_empty_tool_list);
     tcase_add_test(request,
                    test_request_replays_encrypted_reasoning_before_tool_calls);
+    tcase_add_test(request, test_request_sends_reasoning_effort_when_configured);
+    tcase_add_test(request, test_request_omits_reasoning_when_effort_unset);
+    tcase_add_test(request, test_request_rejects_invalid_effort);
     tcase_add_test(request, test_request_cleans_up_each_cjson_allocation_failure);
     suite_add_tcase(suite, request);
 
@@ -580,6 +648,8 @@ int main(void)
     tcase_add_test(transport, test_request_metadata_uses_codex_endpoint_headers_and_timeout);
     tcase_add_test(transport, test_unauthorized_refresh_uses_rejected_token_and_new_credentials);
     tcase_add_test(transport, test_provider_ignores_static_configuration_and_requires_oauth_for_requests);
+    tcase_add_test(transport, test_provider_accepts_valid_effort_values);
+    tcase_add_test(transport, test_provider_rejects_invalid_effort);
     suite_add_tcase(suite, transport);
 
     SRunner *runner = srunner_create(suite);

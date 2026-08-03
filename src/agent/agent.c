@@ -34,11 +34,13 @@ Agent *agent_create(const AgentConfig *cfg)
         agent->provider = get_provider_with_auth(cfg->provider, cfg->model,
                                                  cfg->base_url, cfg->api_token,
                                                  cfg->num_ctx, cfg->keep_alive_secs,
+                                                 cfg->effort,
                                                  cfg->openai_auth);
     else
         agent->provider = get_provider(cfg->provider, cfg->model,
                                        cfg->base_url, cfg->api_token,
-                                       cfg->num_ctx, cfg->keep_alive_secs);
+                                       cfg->num_ctx, cfg->keep_alive_secs,
+                                       cfg->effort);
     if (!agent->provider)
     {
         log_error("failed to create provider", "name", cfg->provider, NULL);
@@ -58,6 +60,14 @@ Agent *agent_create(const AgentConfig *cfg)
     if (!agent->provider_token)
     {
         log_error("agent_create: str_dup failed", "field", "provider_token", NULL);
+        agent_destroy(agent);
+        return NULL;
+    }
+
+    agent->effort = cfg->effort && cfg->effort[0] ? str_dup(cfg->effort) : NULL;
+    if (cfg->effort && cfg->effort[0] && !agent->effort)
+    {
+        log_error("agent_create: str_dup failed", "field", "effort", NULL);
         agent_destroy(agent);
         return NULL;
     }
@@ -104,6 +114,7 @@ void agent_destroy(Agent *agent)
     free(agent->system_prompt);
     free(agent->session_id);
     free(agent->context_summary);
+    free(agent->effort);
     cb_destroy(agent->cb);
     free(agent);
 }
@@ -1006,14 +1017,22 @@ void agent_set_model(Agent *agent, const char *model)
 }
 
 int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
-                       const char *api_token, int num_ctx, int keep_alive_secs)
+                       const char *api_token, int num_ctx, int keep_alive_secs,
+                       const char *effort)
 {
     if (!agent || !provider || !provider[0]) return -1;
 
-    /* Same provider: nothing to rebuild; the model is switched separately
-     * via agent_set_model. */
+    /* Same provider AND same effort: nothing to rebuild; the model is
+     * switched separately via agent_set_model. An effort change must
+     * rebuild the provider because effort is baked in at creation time
+     * (the OpenAI provider embeds it in every request body). */
     if (agent->provider_name && strcmp(agent->provider_name, provider) == 0)
-        return 0;
+    {
+        const char *cur = agent->effort ? agent->effort : "";
+        const char *wanted = effort ? effort : "";
+        if (strcmp(cur, wanted) == 0)
+            return 0;
+    }
 
     /* Build the replacement first so a failure leaves the old provider
      * untouched and the connection usable. */
@@ -1022,10 +1041,12 @@ int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
         replacement = get_provider_with_auth(provider,
                                              agent->model ? agent->model : "",
                                              base_url, api_token, num_ctx,
-                                             keep_alive_secs, agent->openai_auth);
+                                             keep_alive_secs, effort,
+                                             agent->openai_auth);
     else
         replacement = get_provider(provider, agent->model ? agent->model : "",
-                                   base_url, api_token, num_ctx, keep_alive_secs);
+                                   base_url, api_token, num_ctx, keep_alive_secs,
+                                   effort);
     if (!replacement)
     {
         log_error("failed to create provider", "name", provider, NULL);
@@ -1044,6 +1065,14 @@ int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
         replacement->destroy(replacement);
         return -1;
     }
+    char *new_effort = effort && effort[0] ? str_dup(effort) : NULL;
+    if (effort && effort[0] && !new_effort)
+    {
+        free(new_name);
+        free(new_token);
+        replacement->destroy(replacement);
+        return -1;
+    }
 
     if (agent->provider)
         agent->provider->destroy(agent->provider);
@@ -1052,5 +1081,7 @@ int agent_set_provider(Agent *agent, const char *provider, const char *base_url,
     agent->provider_name = new_name;
     free(agent->provider_token);
     agent->provider_token = new_token;
+    free(agent->effort);
+    agent->effort = new_effort;
     return 0;
 }

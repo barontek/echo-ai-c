@@ -96,6 +96,7 @@ static const char *mock_last_base_url = NULL;
 static const char *mock_last_token = NULL;
 static int mock_last_num_ctx = 0;
 static int mock_last_keep_alive = 0;
+static const char *mock_last_effort = NULL;
 static int mock_generation = 0;
 static int mock_destroy_count = 0;
 
@@ -126,7 +127,8 @@ static void mock_destroy(LLMProvider *self)
  * linked). Records the last request so tests can assert what the agent
  * passed through, and can force a failure to exercise the error path. */
 LLMProvider *get_provider(const char *name, const char *model, const char *base_url,
-                           const char *api_token, int num_ctx, int keep_alive_secs)
+                           const char *api_token, int num_ctx, int keep_alive_secs,
+                           const char *effort)
 {
     (void)model;
     mock_get_provider_calls++;
@@ -135,6 +137,7 @@ LLMProvider *get_provider(const char *name, const char *model, const char *base_
     mock_last_token = api_token;
     mock_last_num_ctx = num_ctx;
     mock_last_keep_alive = keep_alive_secs;
+    mock_last_effort = effort;
     if (mock_get_provider_fail_next)
     {
         mock_get_provider_fail_next = 0;
@@ -158,6 +161,7 @@ static void reset_mock(void)
     mock_last_token = NULL;
     mock_last_num_ctx = 0;
     mock_last_keep_alive = 0;
+    mock_last_effort = NULL;
     mock_generation = 0;
     mock_destroy_count = 0;
 }
@@ -199,7 +203,7 @@ START_TEST(test_set_provider_swaps_provider)
     int gen_before = provider_generation(agent);
 
     int rc = agent_set_provider(agent, "openai", "http://localhost:1234",
-                                "sk-switch-1", 2048, 30);
+                                "sk-switch-1", 2048, 30, "high");
     ck_assert_int_eq(rc, 0);
     ck_assert(provider_generation(agent) != gen_before);
     ck_assert_str_eq(agent->provider_name, "openai");
@@ -210,6 +214,8 @@ START_TEST(test_set_provider_swaps_provider)
     ck_assert_str_eq(mock_last_token, "sk-switch-1");
     ck_assert_int_eq(mock_last_num_ctx, 2048);
     ck_assert_int_eq(mock_last_keep_alive, 30);
+    ck_assert_str_eq(mock_last_effort, "high");
+    ck_assert_str_eq(agent->effort, "high");
     ck_assert_int_eq(mock_destroy_count, 1);
 
     agent_destroy(agent);
@@ -225,13 +231,47 @@ START_TEST(test_set_provider_same_name_is_noop)
     ck_assert_ptr_nonnull(agent);
     LLMProvider *p_before = agent->provider;
 
-    int rc = agent_set_provider(agent, "ollama", "http://other:9999", NULL, 1, 1);
+    int rc = agent_set_provider(agent, "ollama", "http://other:9999", NULL, 1, 1, NULL);
     ck_assert_int_eq(rc, 0);
     ck_assert(agent->provider == p_before);
     ck_assert_int_eq(mock_get_provider_calls, 1);
     ck_assert_int_eq(mock_destroy_count, 0);
+    ck_assert_ptr_null(agent->effort);
 
     agent_destroy(agent);
+}
+END_TEST
+
+START_TEST(test_set_provider_same_name_different_effort_rebuilds)
+{
+    reset_mock();
+    AgentConfig cfg = make_cfg("ollama", "llama3");
+    Agent *agent = agent_create(&cfg);
+    ck_assert_ptr_nonnull(agent);
+    LLMProvider *p_before = agent->provider;
+
+    /* Same provider name, but a new effort: effort is baked into the
+     * provider at creation, so this must rebuild rather than no-op. */
+    int rc = agent_set_provider(agent, "ollama", "http://localhost:11434",
+                                "sk-initial-token", 4096, 120, "low");
+    ck_assert_int_eq(rc, 0);
+    ck_assert(agent->provider != p_before);
+    ck_assert_int_eq(mock_get_provider_calls, 2);
+    ck_assert_int_eq(mock_destroy_count, 1);
+    ck_assert_str_eq(mock_last_effort, "low");
+    ck_assert_str_eq(agent->effort, "low");
+
+    /* And the reverse: same effort again is a no-op. */
+    LLMProvider *p_after = agent->provider;
+    rc = agent_set_provider(agent, "ollama", "http://localhost:11434",
+                            "sk-initial-token", 4096, 120, "low");
+    ck_assert_int_eq(rc, 0);
+    ck_assert(agent->provider == p_after);
+    ck_assert_int_eq(mock_get_provider_calls, 2);
+    ck_assert_int_eq(mock_destroy_count, 1);
+
+    agent_destroy(agent);
+    ck_assert_int_eq(mock_destroy_count, 2);
 }
 END_TEST
 
@@ -245,10 +285,11 @@ START_TEST(test_set_provider_failure_keeps_old_provider)
 
     mock_get_provider_fail_next = 1;
     int rc = agent_set_provider(agent, "openai", "http://localhost:1234",
-                                "sk-switch-1", 2048, 30);
+                                "sk-switch-1", 2048, 30, "low");
     ck_assert_int_eq(rc, -1);
     ck_assert(agent->provider == p_before);
     ck_assert_str_eq(agent->provider_name, "ollama");
+    ck_assert_ptr_null(agent->effort);
     ck_assert_int_eq(mock_destroy_count, 0);
 
     /* Agent still fully usable with the old provider. */
@@ -265,9 +306,9 @@ START_TEST(test_set_provider_rejects_null_args)
     ck_assert_ptr_nonnull(agent);
     LLMProvider *p_before = agent->provider;
 
-    ck_assert_int_eq(agent_set_provider(agent, NULL, "http://x", NULL, 1, 1), -1);
-    ck_assert_int_eq(agent_set_provider(agent, "", "http://x", NULL, 1, 1), -1);
-    ck_assert_int_eq(agent_set_provider(NULL, "ollama", "http://x", NULL, 1, 1), -1);
+    ck_assert_int_eq(agent_set_provider(agent, NULL, "http://x", NULL, 1, 1, NULL), -1);
+    ck_assert_int_eq(agent_set_provider(agent, "", "http://x", NULL, 1, 1, NULL), -1);
+    ck_assert_int_eq(agent_set_provider(NULL, "ollama", "http://x", NULL, 1, 1, NULL), -1);
     ck_assert(agent->provider == p_before);
     ck_assert_int_eq(mock_get_provider_calls, 1);
 
@@ -282,9 +323,38 @@ START_TEST(test_set_provider_model_unchanged_by_switch)
     Agent *agent = agent_create(&cfg);
     ck_assert_ptr_nonnull(agent);
 
-    ck_assert_int_eq(agent_set_provider(agent, "openai", NULL, "sk-switch-2", 4096, 120), 0);
+    ck_assert_int_eq(agent_set_provider(agent, "openai", NULL, "sk-switch-2", 4096, 120, "medium"), 0);
     ck_assert_str_eq(agent->model, "llama3");
     ck_assert_str_eq(mock_last_token, "sk-switch-2");
+    ck_assert_str_eq(mock_last_effort, "medium");
+
+    agent_destroy(agent);
+}
+END_TEST
+
+START_TEST(test_create_passes_effort_to_provider)
+{
+    reset_mock();
+    AgentConfig cfg = make_cfg("ollama", "llama3");
+    cfg.effort = "high";
+    Agent *agent = agent_create(&cfg);
+    ck_assert_ptr_nonnull(agent);
+    ck_assert_str_eq(mock_last_effort, "high");
+    ck_assert_str_eq(agent->effort, "high");
+
+    agent_destroy(agent);
+}
+END_TEST
+
+START_TEST(test_create_effort_null_means_unset)
+{
+    reset_mock();
+    AgentConfig cfg = make_cfg("ollama", "llama3");
+    cfg.effort = NULL;
+    Agent *agent = agent_create(&cfg);
+    ck_assert_ptr_nonnull(agent);
+    ck_assert_ptr_null(mock_last_effort);
+    ck_assert_ptr_null(agent->effort);
 
     agent_destroy(agent);
 }
@@ -297,9 +367,12 @@ Suite *agent_provider_suite(void)
     tcase_set_timeout(tc, 30);
     tcase_add_test(tc, test_set_provider_swaps_provider);
     tcase_add_test(tc, test_set_provider_same_name_is_noop);
+    tcase_add_test(tc, test_set_provider_same_name_different_effort_rebuilds);
     tcase_add_test(tc, test_set_provider_failure_keeps_old_provider);
     tcase_add_test(tc, test_set_provider_rejects_null_args);
     tcase_add_test(tc, test_set_provider_model_unchanged_by_switch);
+    tcase_add_test(tc, test_create_passes_effort_to_provider);
+    tcase_add_test(tc, test_create_effort_null_means_unset);
     suite_add_tcase(s, tc);
     return s;
 }

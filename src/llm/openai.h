@@ -16,10 +16,14 @@ enum {
 
 /* Creates the OAuth-only ChatGPT Codex Responses provider. base_url and
  * api_token are intentionally ignored; auth is borrowed and must outlive the
- * returned provider. Returns NULL when auth is NULL or allocation fails. The caller owns the result and
+ * returned provider. effort is a borrowed reasoning-effort hint: NULL or
+ * empty means the API default; otherwise it must be one of "minimal", "low",
+ * "medium", "high" — anything else is rejected with NULL returned and an
+ * error logged (no silent fallback to a default). Returns NULL when auth is
+ * NULL, effort is invalid, or allocation fails. The caller owns the result and
  * destroys it through destroy(). */
 LLMProvider *openai_provider_create(const char *base_url, const char *api_token,
-                                     OpenAIOAuth *auth);
+                                     const char *effort, OpenAIOAuth *auth);
 
 /* Fetches the caller's visible Codex catalog into a caller-owned string array.
  * Returns OPENAI_MODELS_OK, OPENAI_MODELS_UNAVAILABLE (caller may use a
@@ -30,12 +34,19 @@ int openai_models_fetch_alloc(OpenAIOAuth *auth, char ***models_out,
 /* Frees a catalog returned by openai_models_fetch_alloc(). */
 void openai_models_free(char **models, size_t count);
 
+/* Returns 1 when effort is NULL, empty, or one of the accepted reasoning
+ * effort values ("minimal", "low", "medium", "high"); 0 otherwise. This is
+ * the single validation used for both config-provided and wire-provided
+ * effort strings. */
+int openai_reasoning_effort_valid(const char *effort);
+
 #ifdef OPENAI_TEST
 /* Test hooks return caller-owned values and never perform network I/O. */
 char *openai_test_build_request_body(Message *messages, int count,
                                      const char *model, double temperature,
                                      int stream, const char *tools_json,
-                                     const char *json_schema);
+                                     const char *json_schema,
+                                     const char *effort);
 LLMResponse *openai_test_parse_response(const char *raw);
 LLMResponse *openai_test_stream_fragments(
     const char **fragments, const size_t *lengths, int count,

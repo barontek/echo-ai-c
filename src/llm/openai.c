@@ -38,6 +38,7 @@
 
 typedef struct {
     OpenAIOAuth *auth;
+    char *effort; /* owned; NULL = API default ("minimal"/"low"/"medium"/"high") */
 } OpenAICtx;
 
 typedef struct {
@@ -545,13 +546,38 @@ static int add_reasoning_include(cJSON *root)
     return json_add_item(root, "include", include);
 }
 
+int openai_reasoning_effort_valid(const char *effort)
+{
+    if (!effort || !effort[0]) return 1;
+    return strcmp(effort, "minimal") == 0 ||
+           strcmp(effort, "low") == 0 ||
+           strcmp(effort, "medium") == 0 ||
+           strcmp(effort, "high") == 0;
+}
+
+static int add_reasoning_effort(cJSON *root, const char *effort)
+{
+    if (!effort || !effort[0]) return 0;
+    if (!openai_reasoning_effort_valid(effort)) return -1;
+    cJSON *reasoning = cJSON_CreateObject();
+    if (!reasoning) return -1;
+    if (json_add_string(reasoning, "effort", effort) != 0)
+    {
+        cJSON_Delete(reasoning);
+        return -1;
+    }
+    return json_add_item(root, "reasoning", reasoning);
+}
+
 static char *build_request_body(Message *messages, int count, const char *model,
                                 double temperature, int stream,
                                 const char *tools_json,
-                                const char *json_schema)
+                                const char *json_schema,
+                                const char *effort)
 {
     if ((!messages && count != 0) || count < 0 || !model || !model[0] ||
-        !isfinite(temperature) || temperature < 0.0 || temperature > 2.0)
+        !isfinite(temperature) || temperature < 0.0 || temperature > 2.0 ||
+        (effort && !openai_reasoning_effort_valid(effort)))
         return NULL;
     cJSON *root = cJSON_CreateObject();
     cJSON *input = cJSON_CreateArray();
@@ -565,6 +591,7 @@ static char *build_request_body(Message *messages, int count, const char *model,
         json_add_bool(root, "stream", stream) != 0 ||
         json_add_bool(root, "store", 0) != 0 ||
         add_reasoning_include(root) != 0 ||
+        add_reasoning_effort(root, effort) != 0 ||
         add_input_messages(root, input, messages, count) != 0 ||
         cJSON_GetArraySize(input) == 0)
     {
@@ -1644,7 +1671,7 @@ static LLMResponse *openai_chat(LLMProvider *provider, Message *messages,
     if (!provider || !provider->ctx || timeout <= 0) return NULL;
     OpenAICtx *context = provider->ctx;
     char *body = build_request_body(messages, count, model, temperature, 1,
-                                    tools_json, NULL);
+                                    tools_json, NULL, context->effort);
     if (!body)
     {
         log_error("OpenAI Codex request conversion failed", "operation",
@@ -1665,7 +1692,7 @@ static LLMResponse *openai_stream(LLMProvider *provider, Message *messages,
     if (!provider || !provider->ctx || timeout <= 0) return NULL;
     OpenAICtx *context = provider->ctx;
     char *body = build_request_body(messages, count, model, temperature, 1,
-                                    tools_json, NULL);
+                                    tools_json, NULL, context->effort);
     if (!body)
     {
         log_error("OpenAI Codex request conversion failed", "operation",
@@ -1688,7 +1715,7 @@ static LLMResponse *openai_structured(LLMProvider *provider, Message *messages,
         return NULL;
     OpenAICtx *context = provider->ctx;
     char *body = build_request_body(messages, count, model, temperature, 1,
-                                    NULL, json_schema);
+                                    NULL, json_schema, context->effort);
     if (!body)
     {
         log_error("OpenAI Codex request conversion failed", "operation",
@@ -1703,25 +1730,36 @@ static LLMResponse *openai_structured(LLMProvider *provider, Message *messages,
 static void openai_destroy(LLMProvider *provider)
 {
     if (!provider) return;
-    free(provider->ctx);
+    OpenAICtx *context = provider->ctx;
+    if (context) free(context->effort);
+    free(context);
     free(provider);
 }
 
 LLMProvider *openai_provider_create(const char *base_url, const char *api_token,
-                                    OpenAIOAuth *auth)
+                                    const char *effort, OpenAIOAuth *auth)
 {
     (void)base_url;
     (void)api_token;
     if (!auth) return NULL;
+    if (effort && !openai_reasoning_effort_valid(effort))
+    {
+        log_error("OpenAI provider rejected invalid reasoning effort",
+                  "effort", effort ? effort : "", NULL);
+        return NULL;
+    }
     LLMProvider *provider = calloc(1, sizeof(*provider));
     OpenAICtx *context = calloc(1, sizeof(*context));
-    if (!provider || !context)
+    char *effort_copy = effort && effort[0] ? str_dup(effort) : NULL;
+    if (!provider || !context || (effort && effort[0] && !effort_copy))
     {
         free(provider);
         free(context);
+        free(effort_copy);
         return NULL;
     }
     context->auth = auth;
+    context->effort = effort_copy;
     provider->chat = openai_chat;
     provider->chat_streaming = openai_stream;
     provider->extract_structured = openai_structured;
@@ -1734,10 +1772,11 @@ LLMProvider *openai_provider_create(const char *base_url, const char *api_token,
 char *openai_test_build_request_body(Message *messages, int count,
                                      const char *model, double temperature,
                                      int stream, const char *tools_json,
-                                     const char *json_schema)
+                                     const char *json_schema,
+                                     const char *effort)
 {
     return build_request_body(messages, count, model, temperature, stream,
-                              tools_json, json_schema);
+                              tools_json, json_schema, effort);
 }
 
 LLMResponse *openai_test_parse_response(const char *raw)

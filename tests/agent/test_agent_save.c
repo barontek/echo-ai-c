@@ -63,10 +63,11 @@ static LLMResponse *mock_chat_streaming(LLMProvider *self, Message *messages, in
 static void mock_destroy(LLMProvider *self) { free(self); }
 
 LLMProvider *get_provider(const char *name, const char *model, const char *base_url,
-                           const char *api_token, int num_ctx, int keep_alive_secs)
+                           const char *api_token, int num_ctx, int keep_alive_secs,
+                           const char *effort)
 {
     (void)name; (void)model; (void)base_url; (void)api_token;
-    (void)num_ctx; (void)keep_alive_secs;
+    (void)num_ctx; (void)keep_alive_secs; (void)effort;
     MockProvider *mock = calloc(1, sizeof(MockProvider));
     if (!mock) return NULL;
     mock->provider.chat = mock_chat;

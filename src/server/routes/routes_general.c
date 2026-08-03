@@ -380,14 +380,25 @@ void handle_providers(HTTPRequest *req, Client *client, ServerContext *ctx)
     (void)ctx;
     cJSON *json = cJSON_CreateObject();
     cJSON *arr = cJSON_CreateArray();
+    cJSON *effort_arr = cJSON_CreateArray();
     if (json && arr)
     {
         int count = 0;
         const char *const *names = provider_names_available(&count);
         for (int i = 0; i < count; i++)
+        {
             cJSON_AddItemToArray(arr, cJSON_CreateString(names[i]));
+            /* Tells the UI which providers accept a reasoning-effort hint so
+             * it can gate the effort selector per provider. */
+            if (provider_supports_effort(names[i]))
+                cJSON_AddItemToArray(effort_arr, cJSON_CreateString(names[i]));
+        }
         cJSON_AddItemToObject(json, "providers", arr);
     }
+    if (json && effort_arr)
+        cJSON_AddItemToObject(json, "effort_supported", effort_arr);
+    else
+        cJSON_Delete(effort_arr);
     char *str = json ? cJSON_PrintUnformatted(json) : NULL;
     server_response_json(client, 200, str ? str : "{\"providers\":[]}");
     free(str);

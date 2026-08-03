@@ -1,6 +1,7 @@
 import { memo, useState, useRef, useEffect, type KeyboardEvent, type FormEvent } from 'react';
-import { Square, ArrowUp } from 'lucide-react';
+import { Square, ArrowUp, Gauge } from 'lucide-react';
 import { useChat } from '../context';
+import { EFFORT_OPTIONS } from '../context/ChatContext';
 
 interface ChatInputProps {
   placeholder?: string;
@@ -9,7 +10,15 @@ interface ChatInputProps {
 export const ChatInput = memo(function ChatInput({
   placeholder = 'Type your message...',
 }: ChatInputProps) {
-  const { sendMessage, isConnected, isStreaming, stopGeneration } = useChat();
+  const {
+    sendMessage,
+    isConnected,
+    isStreaming,
+    stopGeneration,
+    currentEffort,
+    selectEffort,
+    supportsEffort,
+  } = useChat();
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -64,6 +73,25 @@ export const ChatInput = memo(function ChatInput({
           disabled={disabled || isStreaming}
           rows={1}
         />
+        {supportsEffort && (
+          <label className="effort-selector" title="Reasoning effort">
+            <Gauge size={16} aria-hidden="true" />
+            <select
+              className="effort-select"
+              value={currentEffort}
+              onChange={(e) => selectEffort(e.target.value)}
+              disabled={disabled || isStreaming}
+              aria-label="Reasoning effort"
+            >
+              <option value="">Default</option>
+              {EFFORT_OPTIONS.map((level) => (
+                <option key={level} value={level}>
+                  {level}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {isStreaming ? (
           <button
             type="button"

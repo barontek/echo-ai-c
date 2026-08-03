@@ -10,7 +10,7 @@ const { mockApi } = vi.hoisted(() => ({
       { id: 'session-2', title: 'Second Chat', created_at: '2024-01-02' },
     ]),
     getModels: vi.fn().mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']),
-    getProviders: vi.fn().mockResolvedValue(['ollama', 'openai', 'opencode_zen']),
+    getProviders: vi.fn().mockResolvedValue({ providers: ['ollama', 'openai', 'opencode_zen'], effortSupported: ['openai'] }),
     createSession: vi.fn().mockResolvedValue({ session_id: 'new-session-456' }),
     loadSession: vi.fn().mockResolvedValue({
       session_id: 'session-1',

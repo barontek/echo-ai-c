@@ -50,7 +50,7 @@ static void *td_test_realloc(void *ptr, size_t size)
 LLMProvider *td_test_get_provider_with_auth(
     const char *name, const char *model, const char *base_url,
     const char *api_token, int num_ctx, int keep_alive_secs,
-    OpenAIOAuth *openai_auth);
+    const char *effort, OpenAIOAuth *openai_auth);
 #define get_provider_with_auth td_test_get_provider_with_auth
 #endif
 
@@ -111,7 +111,7 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
 
     LLMProvider *provider = get_provider_with_auth(
         provider_name, model, base_url, api_token, num_ctx, keep_alive_secs,
-        registry_get_openai_oauth());
+        NULL, registry_get_openai_oauth());
     if (!provider)
     {
         free(task_str);
