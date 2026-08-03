@@ -304,6 +304,37 @@ START_TEST(test_buffered_response_reads_all_content_and_function_calls)
 }
 END_TEST
 
+START_TEST(test_buffered_response_extracts_reasoning_summary_as_thinking)
+{
+    const char *raw =
+        "{\"status\":\"completed\",\"output\":["
+        "{\"type\":\"reasoning\",\"summary\":["
+        "{\"type\":\"summary_text\",\"text\":\"Let me think\"}]},"
+        "{\"type\":\"message\",\"content\":["
+        "{\"type\":\"output_text\",\"text\":\"Answer\"}]}]}";
+    LLMResponse *response = openai_test_parse_response(raw);
+    ck_assert_ptr_nonnull(response);
+    ck_assert_str_eq(response->thinking, "Let me think");
+    ck_assert_str_eq(response->content,
+                     "<think>\nLet me think\n</think>\n\nAnswer");
+    llm_response_free(response);
+}
+END_TEST
+
+START_TEST(test_buffered_response_without_summary_keeps_plain_content)
+{
+    const char *raw =
+        "{\"status\":\"completed\",\"output\":["
+        "{\"type\":\"message\",\"content\":["
+        "{\"type\":\"output_text\",\"text\":\"plain\"}]}]}";
+    LLMResponse *response = openai_test_parse_response(raw);
+    ck_assert_ptr_nonnull(response);
+    ck_assert_ptr_null(response->thinking);
+    ck_assert_str_eq(response->content, "plain");
+    llm_response_free(response);
+}
+END_TEST
+
 START_TEST(test_buffered_response_rejects_errors_and_malformed_calls)
 {
     ck_assert_ptr_null(openai_test_parse_response(
@@ -433,6 +464,137 @@ START_TEST(test_fragmented_stream_maps_interleaved_function_calls)
     ck_assert_ptr_nonnull(response->provider_state);
     ck_assert_ptr_nonnull(strstr(response->provider_state, "ciphertext"));
     ck_assert_str_eq(response->phase, "final_answer");
+    llm_response_free(response);
+}
+END_TEST
+
+START_TEST(test_stream_wraps_reasoning_summary_deltas_in_think_block)
+{
+    const char *stream =
+        "data: {\"type\":\"response.reasoning_summary_text.delta\","
+        "\"delta\":\"Checking docs\",\"summary_index\":0}\n\n"
+        "data: {\"type\":\"response.reasoning_summary_text.delta\","
+        "\"delta\":\" before replying\",\"summary_index\":0}\n\n"
+        "data: {\"type\":\"response.reasoning_summary_text.done\","
+        "\"text\":\"Checking docs before replying\",\"summary_index\":0}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,"
+        "\"item\":{\"type\":\"reasoning\",\"id\":\"reason-1\","
+        "\"summary\":[{\"type\":\"summary_text\","
+        "\"text\":\"Checking docs before replying\"}]}}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Done.\"}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,"
+        "\"item\":{\"type\":\"message\",\"role\":\"assistant\","
+        "\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{"
+        "\"status\":\"completed\"}}";
+    ChunkCapture capture = {0};
+    LLMResponse *response = openai_test_stream_fragments(
+        &stream, NULL, 1, capture_chunk, &capture);
+    ck_assert_ptr_nonnull(response);
+    /* deltas are streamed inside the tags; the .done text is not appended
+     * again because it would duplicate what the deltas already carried */
+    ck_assert_str_eq(response->content,
+                     "<think>\nChecking docs before replying\n</think>\n\nDone.");
+    ck_assert_str_eq(capture.text,
+                     "<think>\nChecking docs before replying\n</think>\n\nDone.");
+    llm_response_free(response);
+}
+END_TEST
+
+START_TEST(test_stream_uses_summary_done_text_when_no_deltas)
+{
+    /* backends using cutoff delivery send only the .done event carrying the
+     * full summary text */
+    const char *stream =
+        "data: {\"type\":\"response.reasoning_summary_text.done\","
+        "\"text\":\"Full summary\",\"summary_index\":0}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,"
+        "\"item\":{\"type\":\"reasoning\",\"id\":\"r1\","
+        "\"summary\":[{\"type\":\"summary_text\",\"text\":\"Full summary\"}]}}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Answer\"}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{"
+        "\"status\":\"completed\"}}";
+    LLMResponse *response = openai_test_stream_fragments(
+        &stream, NULL, 1, NULL, NULL);
+    ck_assert_ptr_nonnull(response);
+    ck_assert_str_eq(response->content,
+                     "<think>\nFull summary\n</think>\n\nAnswer");
+    llm_response_free(response);
+}
+END_TEST
+
+START_TEST(test_stream_falls_back_to_reasoning_item_summary)
+{
+    /* a backend that emits neither delta nor done still carries the final
+     * summary on the reasoning output item itself */
+    const char *stream =
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,"
+        "\"item\":{\"type\":\"reasoning\",\"id\":\"r1\"}}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,"
+        "\"item\":{\"type\":\"reasoning\",\"id\":\"r1\","
+        "\"summary\":[{\"type\":\"summary_text\",\"text\":\"Item summary\"}]}}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Answer\"}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{"
+        "\"status\":\"completed\"}}";
+    LLMResponse *response = openai_test_stream_fragments(
+        &stream, NULL, 1, NULL, NULL);
+    ck_assert_ptr_nonnull(response);
+    ck_assert_str_eq(response->content,
+                     "<think>\nItem summary\n</think>\n\nAnswer");
+    llm_response_free(response);
+}
+END_TEST
+
+START_TEST(test_stream_strips_html_comment_markers_from_summaries)
+{
+    /* codex can elide summaries to a literal <!-- --> placeholder (see
+     * openai/codex#31664); it must never render as an empty think block */
+    const char *stream =
+        "data: {\"type\":\"response.reasoning_summary_text.delta\","
+        "\"delta\":\"<!-- -->\",\"summary_index\":0}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,"
+        "\"item\":{\"type\":\"reasoning\",\"id\":\"r1\","
+        "\"summary\":[{\"type\":\"summary_text\",\"text\":\"<!-- -->\"}]}}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Answer\"}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{"
+        "\"status\":\"completed\"}}";
+    LLMResponse *response = openai_test_stream_fragments(
+        &stream, NULL, 1, NULL, NULL);
+    ck_assert_ptr_nonnull(response);
+    ck_assert_str_eq(response->content, "Answer");
+    llm_response_free(response);
+}
+END_TEST
+
+START_TEST(test_stream_keeps_think_block_open_across_tool_turns)
+{
+    /* a tool-only turn ends with the reasoning block still open; the tag
+     * must be closed so the saved message parses cleanly */
+    const char *stream =
+        "data: {\"type\":\"response.reasoning_summary_text.delta\","
+        "\"delta\":\"Need the file\",\"summary_index\":0}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,"
+        "\"item\":{\"type\":\"reasoning\",\"id\":\"r1\","
+        "\"summary\":[{\"type\":\"summary_text\",\"text\":\"Need the file\"}]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,"
+        "\"item\":{\"type\":\"function_call\",\"id\":\"item-a\","
+        "\"call_id\":\"call-a\",\"name\":\"read_file\",\"arguments\":\"\"}}\n\n"
+        "data: {\"type\":\"response.function_call_arguments.done\","
+        "\"output_index\":1,\"item_id\":\"item-a\","
+        "\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,"
+        "\"item\":{\"type\":\"function_call\",\"id\":\"item-a\","
+        "\"call_id\":\"call-a\",\"name\":\"read_file\","
+        "\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{"
+        "\"status\":\"completed\"}}";
+    LLMResponse *response = openai_test_stream_fragments(
+        &stream, NULL, 1, NULL, NULL);
+    ck_assert_ptr_nonnull(response);
+    ck_assert_str_eq(response->content,
+                     "<think>\nNeed the file\n</think>\n\n");
+    ck_assert_int_eq(response->tool_calls_count, 1);
+    ck_assert_str_eq(response->tool_calls[0].name, "read_file");
     llm_response_free(response);
 }
 END_TEST
@@ -586,19 +748,26 @@ START_TEST(test_request_sends_reasoning_effort_when_configured)
     ck_assert(cJSON_IsObject(reasoning));
     ck_assert_str_eq(cJSON_GetStringValue(
                          cJSON_GetObjectItem(reasoning, "effort")), "high");
+    /* summaries are requested even alongside the effort hint */
+    ck_assert_str_eq(cJSON_GetStringValue(
+                         cJSON_GetObjectItem(reasoning, "summary")), "auto");
     cJSON_Delete(root);
     free(body);
 }
 END_TEST
 
-START_TEST(test_request_omits_reasoning_when_effort_unset)
+START_TEST(test_request_requests_summary_when_effort_unset)
 {
     Message user = {.role = "user", .content = "hello"};
     char *body = openai_test_build_request_body(
         &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
-    ck_assert_ptr_null(cJSON_GetObjectItem(root, "reasoning"));
+    cJSON *reasoning = cJSON_GetObjectItem(root, "reasoning");
+    ck_assert(cJSON_IsObject(reasoning));
+    ck_assert_str_eq(cJSON_GetStringValue(
+                         cJSON_GetObjectItem(reasoning, "summary")), "auto");
+    ck_assert_ptr_null(cJSON_GetObjectItem(reasoning, "effort"));
     cJSON_Delete(root);
     free(body);
 }
@@ -625,13 +794,15 @@ int main(void)
     tcase_add_test(request,
                    test_request_replays_encrypted_reasoning_before_tool_calls);
     tcase_add_test(request, test_request_sends_reasoning_effort_when_configured);
-    tcase_add_test(request, test_request_omits_reasoning_when_effort_unset);
+    tcase_add_test(request, test_request_requests_summary_when_effort_unset);
     tcase_add_test(request, test_request_rejects_invalid_effort);
     tcase_add_test(request, test_request_cleans_up_each_cjson_allocation_failure);
     suite_add_tcase(suite, request);
 
     TCase *buffered = tcase_create("Buffered Responses");
     tcase_add_test(buffered, test_buffered_response_reads_all_content_and_function_calls);
+    tcase_add_test(buffered, test_buffered_response_extracts_reasoning_summary_as_thinking);
+    tcase_add_test(buffered, test_buffered_response_without_summary_keeps_plain_content);
     tcase_add_test(buffered, test_buffered_response_rejects_errors_and_malformed_calls);
     tcase_add_test(buffered,
                    test_models_catalog_keeps_visible_unique_slugs_in_server_order);
@@ -645,6 +816,11 @@ int main(void)
     tcase_add_test(stream, test_stream_accepts_fragmented_done_without_final_newline);
     tcase_add_test(stream,
                    test_stream_rejects_done_without_completed_and_returns_refusals);
+    tcase_add_test(stream, test_stream_wraps_reasoning_summary_deltas_in_think_block);
+    tcase_add_test(stream, test_stream_uses_summary_done_text_when_no_deltas);
+    tcase_add_test(stream, test_stream_falls_back_to_reasoning_item_summary);
+    tcase_add_test(stream, test_stream_strips_html_comment_markers_from_summaries);
+    tcase_add_test(stream, test_stream_keeps_think_block_open_across_tool_turns);
     suite_add_tcase(suite, stream);
 
     TCase *transport = tcase_create("Transport Contract");

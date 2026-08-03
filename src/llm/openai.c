@@ -73,6 +73,8 @@ typedef struct {
     int terminal_seen;
     int completed;
     int failed;
+    int thinking_open;       /* 1 while a <think> block is open in content */
+    int summary_deltas_seen; /* 1 after the first reasoning-summary delta */
 } StreamParser;
 
 typedef struct {
@@ -557,13 +559,18 @@ int openai_reasoning_effort_valid(const char *effort)
            strcmp(effort, "none") == 0;
 }
 
-static int add_reasoning_effort(cJSON *root, const char *effort)
+static int add_reasoning_config(cJSON *root, const char *effort)
 {
-    if (!effort || !effort[0]) return 0;
-    if (!openai_reasoning_effort_valid(effort)) return -1;
+    if (effort && !openai_reasoning_effort_valid(effort)) return -1;
     cJSON *reasoning = cJSON_CreateObject();
     if (!reasoning) return -1;
-    if (json_add_string(reasoning, "effort", effort) != 0)
+    /* The reasoning summary is the only readable form of Codex reasoning
+     * (the chain of thought itself stays encrypted server-side); "auto"
+     * selects the most detailed summary the model supports. Models that
+     * don't support summaries accept and ignore the field. */
+    if (json_add_string(reasoning, "summary", "auto") != 0 ||
+        (effort && effort[0] &&
+         json_add_string(reasoning, "effort", effort) != 0))
     {
         cJSON_Delete(reasoning);
         return -1;
@@ -593,7 +600,7 @@ static char *build_request_body(Message *messages, int count, const char *model,
         json_add_bool(root, "stream", stream) != 0 ||
         json_add_bool(root, "store", 0) != 0 ||
         add_reasoning_include(root) != 0 ||
-        add_reasoning_effort(root, effort) != 0 ||
+        add_reasoning_config(root, effort) != 0 ||
         add_input_messages(root, input, messages, count) != 0 ||
         cJSON_GetArraySize(input) == 0)
     {
@@ -1116,6 +1123,10 @@ static int response_status_ok(const cJSON *root)
 }
 
 #ifdef OPENAI_TEST
+/* defined below parse_response; declared here so the buffered parse can
+ * reuse the streaming path's summary extraction */
+static char *reasoning_summary_join(const cJSON *item);
+
 static LLMResponse *parse_response(const char *raw)
 {
     cJSON *root = NULL;
@@ -1129,6 +1140,7 @@ static LLMResponse *parse_response(const char *raw)
     if (!cJSON_IsArray(output)) { cJSON_Delete(root); return NULL; }
     LLMResponse *response = llm_response_create();
     if (!response) { cJSON_Delete(root); return NULL; }
+    char *reasoning_text = NULL;
     cJSON *item = NULL;
     cJSON_ArrayForEach(item, output)
     {
@@ -1143,8 +1155,33 @@ static LLMResponse *parse_response(const char *raw)
         {
             if (parse_function_call_item(response, item) != 0) goto fail;
         }
+        else if (strcmp(value, "reasoning") == 0)
+        {
+            char *summary = reasoning_summary_join(item);
+            if (summary)
+            {
+                if ((reasoning_text && append_text(&reasoning_text, "\n") != 0) ||
+                    append_text(&reasoning_text, summary) != 0)
+                { free(summary); goto fail; }
+                free(summary);
+            }
+        }
     }
     if (!response->content && append_text(&response->content, "") != 0) goto fail;
+    if (reasoning_text && reasoning_text[0])
+    {
+        char *tagged = NULL;
+        if (asprintf(&tagged, "<think>\n%s\n</think>\n\n%s", reasoning_text,
+                     response->content ? response->content : "") < 0)
+        { free(reasoning_text); goto fail; }
+        free(response->content);
+        response->content = tagged;
+        response->thinking = reasoning_text; /* ownership transferred */
+    }
+    else
+    {
+        free(reasoning_text);
+    }
     cJSON_Delete(root);
     return response;
 
@@ -1386,6 +1423,93 @@ static int append_reasoning_item(StreamParser *parser, const cJSON *item)
     return 0;
 }
 
+/* Opens (on first use) a <think> block, forwards the text via on_chunk,
+ * and accumulates it into response->content so the saved message keeps the
+ * tags — same convention as the ollama provider. */
+static int emit_thinking_text(StreamParser *parser, const char *text)
+{
+    if (!text || !text[0]) return 0;
+    if (!parser->thinking_open)
+    {
+        if (append_text(&parser->response->content, "<think>\n") != 0) return -1;
+        if (parser->on_chunk) parser->on_chunk("<think>\n", parser->userdata);
+        parser->thinking_open = 1;
+    }
+    if (append_text(&parser->response->content, text) != 0) return -1;
+    if (parser->on_chunk) parser->on_chunk(text, parser->userdata);
+    return 0;
+}
+
+static int close_thinking_block(StreamParser *parser)
+{
+    if (!parser->thinking_open) return 0;
+    if (append_text(&parser->response->content, "\n</think>\n\n") != 0) return -1;
+    if (parser->on_chunk) parser->on_chunk("\n</think>\n\n", parser->userdata);
+    parser->thinking_open = 0;
+    return 0;
+}
+
+/* Joins the text entries of a reasoning item's summary array (each entry
+ * is {"type":"summary_text","text":"..."}) into a caller-owned string.
+ * Returns NULL when the item has no readable summary. */
+static char *reasoning_summary_join(const cJSON *item)
+{
+    cJSON *summary = cJSON_GetObjectItemCaseSensitive(item, "summary");
+    if (!cJSON_IsArray(summary)) return NULL;
+    char *joined = NULL;
+    cJSON *entry = NULL;
+    cJSON_ArrayForEach(entry, summary)
+    {
+        cJSON *text = cJSON_GetObjectItemCaseSensitive(entry, "text");
+        if (!cJSON_IsString(text)) continue;
+        const char *part = cJSON_GetStringValue(text);
+        if (!part[0]) continue;
+        if (joined == NULL)
+        {
+            joined = str_dup(part);
+            if (!joined) return NULL;
+        }
+        else
+        {
+            if (append_text(&joined, "\n") != 0 ||
+                append_text(&joined, part) != 0)
+            { free(joined); return NULL; }
+        }
+    }
+    return joined;
+}
+
+/* Codex can return a literal HTML comment ("<!-- -->") as reasoning
+ * summary text instead of real content (server-side regression, tracked
+ * as openai/codex#31664). Strip the markers so the thinking block never
+ * renders an empty placeholder; a comment-only summary emits nothing. */
+static int emit_summary_text(StreamParser *parser, const char *text)
+{
+    if (!text || !text[0]) return 0;
+    if (!strstr(text, "<!--") && !strstr(text, "-->"))
+        return emit_thinking_text(parser, text);
+    char *clean = str_dup(text);
+    if (!clean) return -1;
+    char *src = clean;
+    char *dst = clean;
+    while (*src)
+    {
+        if (strncmp(src, "<!--", 4) == 0) { src += 4; continue; }
+        if (strncmp(src, "-->", 3) == 0) { src += 3; continue; }
+        *dst++ = *src++;
+    }
+    *dst = '\0';
+    int rc = 0;
+    if (clean[0] != '\0')
+    {
+        const char *p = clean;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p != '\0') rc = emit_thinking_text(parser, clean);
+    }
+    free(clean);
+    return rc;
+}
+
 static int parse_stream_event(StreamParser *parser, const char *text)
 {
     cJSON *event = NULL;
@@ -1403,11 +1527,33 @@ static int parse_stream_event(StreamParser *parser, const char *text)
     {
         cJSON *delta = cJSON_GetObjectItemCaseSensitive(event, "delta");
         if (!cJSON_IsString(delta) ||
+            close_thinking_block(parser) != 0 ||
             append_text(&parser->response->content,
                         cJSON_GetStringValue(delta)) != 0)
             result = -1;
         else if (parser->on_chunk)
             parser->on_chunk(cJSON_GetStringValue(delta), parser->userdata);
+    }
+    else if (strcmp(type, "response.reasoning_summary_text.delta") == 0)
+    {
+        /* Plaintext summary of the model's reasoning, streamed as the
+         * model thinks; this is the readable stand-in for the encrypted
+         * chain of thought. */
+        cJSON *delta = cJSON_GetObjectItemCaseSensitive(event, "delta");
+        if (!cJSON_IsString(delta) ||
+            emit_summary_text(parser, cJSON_GetStringValue(delta)) != 0)
+            result = -1;
+        else
+            parser->summary_deltas_seen = 1;
+    }
+    else if (strcmp(type, "response.reasoning_summary_text.done") == 0)
+    {
+        /* Carries the full summary; skip it when the deltas already
+         * streamed it, or appending again would duplicate the block. */
+        cJSON *text = cJSON_GetObjectItemCaseSensitive(event, "text");
+        if (!parser->summary_deltas_seen && cJSON_IsString(text) &&
+            emit_summary_text(parser, cJSON_GetStringValue(text)) != 0)
+            result = -1;
     }
     else if (strcmp(type, "response.output_item.added") == 0 ||
              strcmp(type, "response.output_item.done") == 0)
@@ -1419,7 +1565,22 @@ static int parse_stream_event(StreamParser *parser, const char *text)
             result = upsert_function_item(parser, event_output_index(event), item);
         else if (strcmp(type, "response.output_item.done") == 0 &&
                  strcmp(cJSON_GetStringValue(item_type), "reasoning") == 0)
+        {
             result = append_reasoning_item(parser, item);
+            /* Backends that never emit summary deltas still carry the final
+             * summary on the reasoning item itself. */
+            if (result == 0 && !parser->thinking_open)
+            {
+                char *summary = reasoning_summary_join(item);
+                if (summary)
+                {
+                    result = emit_summary_text(parser, summary);
+                    free(summary);
+                }
+            }
+            if (result == 0) result = close_thinking_block(parser);
+            parser->summary_deltas_seen = 0;
+        }
         else if (strcmp(type, "response.output_item.done") == 0 &&
                  strcmp(cJSON_GetStringValue(item_type), "message") == 0)
             result = capture_message_phase(parser->response, item);
@@ -1440,6 +1601,7 @@ static int parse_stream_event(StreamParser *parser, const char *text)
     {
         cJSON *delta = cJSON_GetObjectItemCaseSensitive(event, "delta");
         if (!cJSON_IsString(delta) ||
+            close_thinking_block(parser) != 0 ||
             append_text(&parser->response->content,
                         cJSON_GetStringValue(delta)) != 0)
             result = -1;
@@ -1550,6 +1712,9 @@ static int stream_finish(StreamParser *parser)
     if (!parser->terminal_seen || !parser->completed || parser->failed ||
         !stream_calls_complete(parser))
         return -1;
+    /* A stream that ended with the think block still open (tool-only turn,
+     * truncated summary) must close the tag so the saved message parses. */
+    if (close_thinking_block(parser) != 0) return -1;
     if (!parser->response->content &&
         append_text(&parser->response->content, "") != 0)
         return -1;

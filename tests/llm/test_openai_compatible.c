@@ -3,6 +3,8 @@
 #include <string.h>
 #include "agent/message.h"
 
+LLMResponse *openai_compatible_test_parse_response(const char *raw);
+
 LLMResponse *openai_compatible_test_parse_stream(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata);
 
@@ -61,6 +63,113 @@ START_TEST(test_openai_compatible_stream_handles_empty_response)
     LLMResponse *resp = openai_compatible_test_parse_stream("data: [DONE]", NULL, NULL);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "");
+    llm_response_free(resp);
+}
+END_TEST
+
+START_TEST(test_openai_compatible_stream_wraps_reasoning_content_in_think_block)
+{
+    /* DeepSeek/Qwen/GLM-style reasoning deltas arrive in
+     * delta.reasoning_content before the answer; they must be streamed
+     * inside <think> tags and closed when content begins. */
+    const char *stream =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"I need \"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"to look up\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"The answer\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    ChunkCapture capture = {0};
+    LLMResponse *resp = openai_compatible_test_parse_stream(
+        stream, capture_chunk, &capture);
+    ck_assert_ptr_nonnull(resp);
+    ck_assert_str_eq(resp->content,
+                     "<think>\nI need to look up\n</think>\n\nThe answer");
+    ck_assert_str_eq(capture.content,
+                     "<think>\nI need to look up\n</think>\n\nThe answer");
+    llm_response_free(resp);
+}
+END_TEST
+
+START_TEST(test_openai_compatible_stream_accepts_reasoning_field_variant)
+{
+    /* Kimi-style providers put reasoning in delta.reasoning instead */
+    const char *stream =
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Result\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    ChunkCapture capture = {0};
+    LLMResponse *resp = openai_compatible_test_parse_stream(
+        stream, capture_chunk, &capture);
+    ck_assert_ptr_nonnull(resp);
+    ck_assert_str_eq(resp->content, "<think>\nthinking\n</think>\n\nResult");
+    ck_assert_str_eq(capture.content, "<think>\nthinking\n</think>\n\nResult");
+    llm_response_free(resp);
+}
+END_TEST
+
+START_TEST(test_openai_compatible_stream_closes_think_block_at_end)
+{
+    /* reasoning-only turn (e.g. before a tool call): the block must still
+     * be closed so the saved message parses cleanly */
+    const char *stream =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"planning\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    ChunkCapture capture = {0};
+    LLMResponse *resp = openai_compatible_test_parse_stream(
+        stream, capture_chunk, &capture);
+    ck_assert_ptr_nonnull(resp);
+    ck_assert_str_eq(resp->content, "<think>\nplanning\n</think>\n\n");
+    ck_assert_str_eq(capture.content, "<think>\nplanning\n</think>\n\n");
+    llm_response_free(resp);
+}
+END_TEST
+
+START_TEST(test_openai_compatible_stream_skips_empty_reasoning_deltas)
+{
+    const char *stream =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Plain\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    LLMResponse *resp = openai_compatible_test_parse_stream(stream, NULL, NULL);
+    ck_assert_ptr_nonnull(resp);
+    ck_assert_str_eq(resp->content, "Plain");
+    llm_response_free(resp);
+}
+END_TEST
+
+START_TEST(test_openai_compatible_parse_response_extracts_reasoning_content)
+{
+    const char *raw =
+        "{\"choices\":[{\"message\":{\"content\":\"Answer\","
+        "\"reasoning_content\":\"deep thought\"}}]}";
+    LLMResponse *resp = openai_compatible_test_parse_response(raw);
+    ck_assert_ptr_nonnull(resp);
+    ck_assert_str_eq(resp->thinking, "deep thought");
+    ck_assert_str_eq(resp->content, "<think>\ndeep thought\n</think>\n\nAnswer");
+    llm_response_free(resp);
+}
+END_TEST
+
+START_TEST(test_openai_compatible_parse_response_accepts_reasoning_field)
+{
+    const char *raw =
+        "{\"choices\":[{\"message\":{\"content\":\"Answer\","
+        "\"reasoning\":\"kimi style\"}}]}";
+    LLMResponse *resp = openai_compatible_test_parse_response(raw);
+    ck_assert_ptr_nonnull(resp);
+    ck_assert_str_eq(resp->thinking, "kimi style");
+    ck_assert_str_eq(resp->content, "<think>\nkimi style\n</think>\n\nAnswer");
+    llm_response_free(resp);
+}
+END_TEST
+
+START_TEST(test_openai_compatible_parse_response_without_reasoning_keeps_content)
+{
+    const char *raw =
+        "{\"choices\":[{\"message\":{\"content\":\"Plain\"}}]}";
+    LLMResponse *resp = openai_compatible_test_parse_response(raw);
+    ck_assert_ptr_nonnull(resp);
+    ck_assert_ptr_null(resp->thinking);
+    ck_assert_str_eq(resp->content, "Plain");
     llm_response_free(resp);
 }
 END_TEST
@@ -207,9 +316,18 @@ int main(void)
     TCase *tc = tcase_create("Streaming");
     tcase_add_test(tc, test_openai_compatible_stream_accumulates_content_and_tool_calls);
     tcase_add_test(tc, test_openai_compatible_stream_handles_empty_response);
+    tcase_add_test(tc, test_openai_compatible_stream_wraps_reasoning_content_in_think_block);
+    tcase_add_test(tc, test_openai_compatible_stream_accepts_reasoning_field_variant);
+    tcase_add_test(tc, test_openai_compatible_stream_closes_think_block_at_end);
+    tcase_add_test(tc, test_openai_compatible_stream_skips_empty_reasoning_deltas);
     tcase_add_test(tc, test_openai_compatible_stream_splits_lines_across_fragments);
     tcase_add_test(tc, test_openai_compatible_stream_final_line_without_newline);
     suite_add_tcase(suite, tc);
+    TCase *tc_parse = tcase_create("BufferedParse");
+    tcase_add_test(tc_parse, test_openai_compatible_parse_response_extracts_reasoning_content);
+    tcase_add_test(tc_parse, test_openai_compatible_parse_response_accepts_reasoning_field);
+    tcase_add_test(tc_parse, test_openai_compatible_parse_response_without_reasoning_keeps_content);
+    suite_add_tcase(suite, tc_parse);
     TCase *tc_url = tcase_create("BuildUrl");
     tcase_add_test(tc_url, test_build_url_appends_v1_chat_completions);
     tcase_add_test(tc_url, test_build_url_v1_base_appends_chat_completions);

@@ -68,7 +68,28 @@ static int ensure_tool_call(LLMResponse *resp, int index)
     return 0;
 }
 
+/* Forwards a reasoning-content delta inside an open <think> block, opening
+ * the block on first use. The tags live in resp->content so saved messages
+ * keep them, matching the ollama provider's convention. */
+static int forward_reasoning_delta(LLMResponse *resp, int *thinking_open,
+                                   const char *text,
+                                   void (*on_chunk)(const char *, void *),
+                                   void *userdata)
+{
+    if (!text || !text[0]) return 0;
+    if (!*thinking_open)
+    {
+        if (append_text(&resp->content, "<think>\n") != 0) return -1;
+        if (on_chunk) on_chunk("<think>\n", userdata);
+        *thinking_open = 1;
+    }
+    if (append_text(&resp->content, text) != 0) return -1;
+    if (on_chunk) on_chunk(text, userdata);
+    return 0;
+}
+
 static int parse_stream_event(LLMResponse *resp, const char *json_text,
+                              int *thinking_open,
                               void (*on_chunk)(const char *, void *),
                               void *userdata)
 {
@@ -84,10 +105,35 @@ static int parse_stream_event(LLMResponse *resp, const char *json_text,
         return 0;
     }
 
+    /* Reasoning deltas: DeepSeek/Qwen/GLM send delta.reasoning_content,
+     * Kimi (and some others) send delta.reasoning. Both are plain text of
+     * what the model thought before answering. */
+    cJSON *reasoning = cJSON_GetObjectItem(delta, "reasoning_content");
+    if (!reasoning) reasoning = cJSON_GetObjectItem(delta, "reasoning");
+    if (reasoning && cJSON_IsString(reasoning) &&
+        forward_reasoning_delta(resp, thinking_open,
+                                cJSON_GetStringValue(reasoning),
+                                on_chunk, userdata) != 0)
+    {
+        cJSON_Delete(json);
+        return -1;
+    }
+
     cJSON *content = cJSON_GetObjectItem(delta, "content");
-    if (content && cJSON_IsString(content))
+    if (content && cJSON_IsString(content) &&
+        cJSON_GetStringValue(content)[0] != '\0')
     {
         const char *chunk = cJSON_GetStringValue(content);
+        if (*thinking_open)
+        {
+            if (append_text(&resp->content, "\n</think>\n\n") != 0)
+            {
+                cJSON_Delete(json);
+                return -1;
+            }
+            if (on_chunk) on_chunk("\n</think>\n\n", userdata);
+            *thinking_open = 0;
+        }
         if (append_text(&resp->content, chunk) != 0)
         {
             cJSON_Delete(json);
@@ -137,6 +183,7 @@ typedef struct {
     char *line;
     size_t line_len;
     size_t line_cap;
+    int thinking_open; /* 1 while a <think> block is open in resp->content */
     void (*on_chunk)(const char *, void *);
     void *userdata;
 } StreamParser;
@@ -167,6 +214,7 @@ static int stream_parser_feed(StreamParser *p, const char *bytes, size_t len)
             strcmp(p->line + 6, "[DONE]") != 0)
         {
             if (parse_stream_event(p->resp, p->line + 6,
+                                   &p->thinking_open,
                                    p->on_chunk, p->userdata) != 0)
                 return -1;
         }
@@ -176,21 +224,44 @@ static int stream_parser_feed(StreamParser *p, const char *bytes, size_t len)
 
 static int stream_parser_finish(StreamParser *p)
 {
-    if (p->line_len == 0) return 0;
-    /* final partial line without a trailing newline */
-    if (p->line_len > 0 && p->line[p->line_len - 1] == '\r')
-        p->line[--p->line_len] = '\0';
-    else
-        p->line[p->line_len] = '\0';
-    p->line_len = 0;
-    if (strncmp(p->line, "data: ", 6) == 0 &&
-        strcmp(p->line + 6, "[DONE]") != 0)
-        return parse_stream_event(p->resp, p->line + 6,
-                                  p->on_chunk, p->userdata);
+    if (p->line_len != 0)
+    {
+        /* final partial line without a trailing newline */
+        if (p->line[p->line_len - 1] == '\r')
+            p->line[--p->line_len] = '\0';
+        else
+            p->line[p->line_len] = '\0';
+        p->line_len = 0;
+        if (strncmp(p->line, "data: ", 6) == 0 &&
+            strcmp(p->line + 6, "[DONE]") != 0)
+        {
+            if (parse_stream_event(p->resp, p->line + 6,
+                                   &p->thinking_open,
+                                   p->on_chunk, p->userdata) != 0)
+                return -1;
+        }
+    }
+    /* a stream that ended while reasoning was still open (no content ever
+     * arrived) must still close the tag so the saved message parses */
+    if (p->thinking_open)
+    {
+        if (append_text(&p->resp->content, "\n</think>\n\n") != 0) return -1;
+        if (p->on_chunk) p->on_chunk("\n</think>\n\n", p->userdata);
+        p->thinking_open = 0;
+    }
     return 0;
 }
 
 #ifdef OPENAI_COMPATIBLE_TEST
+/* defined below the test hooks; declared here so the hook can expose the
+ * buffered parse path used by the non-streaming tests */
+static LLMResponse *openai_compatible_parse_response(const char *raw);
+
+LLMResponse *openai_compatible_test_parse_response(const char *raw)
+{
+    return openai_compatible_parse_response(raw);
+}
+
 LLMResponse *openai_compatible_test_parse_stream(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata)
 {
@@ -375,8 +446,22 @@ static LLMResponse *openai_compatible_parse_response(const char *raw)
     if (!message) { cJSON_Delete(json); free(resp); return NULL; }
 
     cJSON *content = cJSON_GetObjectItem(message, "content");
-    if (content && cJSON_IsString(content))
+    cJSON *reasoning = cJSON_GetObjectItem(message, "reasoning_content");
+    if (!reasoning) reasoning = cJSON_GetObjectItem(message, "reasoning");
+    if (reasoning && cJSON_IsString(reasoning) &&
+        cJSON_GetStringValue(reasoning)[0] != '\0')
+    {
+        resp->thinking = str_dup(cJSON_GetStringValue(reasoning));
+        const char *ct_str = content && cJSON_IsString(content)
+                                 ? cJSON_GetStringValue(content) : "";
+        if (asprintf(&resp->content, "<think>\n%s\n</think>\n\n%s",
+                     cJSON_GetStringValue(reasoning), ct_str) < 0)
+            resp->content = NULL;
+    }
+    else if (content && cJSON_IsString(content))
+    {
         resp->content = str_dup(cJSON_GetStringValue(content));
+    }
 
     cJSON *tc_arr = cJSON_GetObjectItem(message, "tool_calls");
     if (tc_arr && cJSON_IsArray(tc_arr))
