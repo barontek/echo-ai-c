@@ -9,6 +9,7 @@ const API_TIMEOUT = Math.max(
 );
 
 const UNLOCK_TOKEN_HEADER = 'X-Unlock-Token';
+const UNLOCK_TOKEN_STORAGE_KEY = 'echo-ai-unlock-token';
 
 type TokenExpiredCallback = () => void;
 
@@ -18,6 +19,10 @@ class ApiClient {
   private onTokenExpired: TokenExpiredCallback | null = null;
 
   constructor() {
+    /* Restore the token from a previous session so a page refresh keeps the
+     * user unlocked; the server stays STATE_UNLOCKED across reloads. */
+    this.unlockToken = localStorage.getItem(UNLOCK_TOKEN_STORAGE_KEY);
+
     this.client = axios.create({
       baseURL: API_BASE,
       timeout: API_TIMEOUT,
@@ -45,7 +50,7 @@ class ApiClient {
 
         // If we get 401 and have a token, the token is invalid/expired
         if (error.response.status === 401) {
-          this.unlockToken = null;
+          this.clearUnlockToken();
           if (this.onTokenExpired) {
             this.onTokenExpired();
           }
@@ -74,11 +79,13 @@ class ApiClient {
   /** Store the unlock token from a setup or unlock response. */
   private setUnlockToken(token: string): void {
     this.unlockToken = token;
+    localStorage.setItem(UNLOCK_TOKEN_STORAGE_KEY, token);
   }
 
   /** Clear the unlock token. */
   clearUnlockToken(): void {
     this.unlockToken = null;
+    localStorage.removeItem(UNLOCK_TOKEN_STORAGE_KEY);
   }
 
   async getModels(provider?: string, signal?: AbortSignal): Promise<string[]> {

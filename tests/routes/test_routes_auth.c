@@ -16,6 +16,7 @@ extern int openai_oauth_stub_attach_result;
 
 static int stub_rate_allow = 1;
 static int stub_unlock_result = 1;
+static int stub_has_valid_token_result = 1;
 static int stub_salt_result = 0;
 static int stub_key_derive_result = 0;
 static int stub_encrypt_check_verifier_result = 0;
@@ -35,6 +36,7 @@ static void reset_stubs(void)
 {
     stub_rate_allow = 1;
     stub_unlock_result = 1;
+    stub_has_valid_token_result = 1;
     stub_salt_result = 0;
     stub_key_derive_result = 0;
     stub_encrypt_check_verifier_result = 0;
@@ -94,7 +96,7 @@ int middleware_check_unlock(HTTPRequest *req, ServerContext *ctx)
 int middleware_has_valid_token(const char *headers, const char *token)
 {
     (void)headers; (void)token;
-    return 1;
+    return stub_has_valid_token_result;
 }
 
 /* ---------------------------------------------------------------------------
@@ -451,9 +453,73 @@ START_TEST(test_handle_unlock_success)
 }
 END_TEST
 
-/* ---------------------------------------------------------------------------
- * handle_logout
- * --------------------------------------------------------------------------- */
+START_TEST(test_handle_unlock_already_unlocked_with_valid_token)
+{
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = str_dup("tok_existing");
+    stub_has_valid_token_result = 1;
+    HTTPRequest req = {0};
+
+    handle_unlock(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(captured_body && strstr(captured_body, "\"token\":\"tok_existing\""));
+    ck_assert_int_eq(ctx.state, STATE_UNLOCKED);
+    ck_assert_str_eq(ctx.unlock_token, "tok_existing");
+    ck_assert_ptr_null(ctx.sm);
+
+    free(ctx.unlock_token);
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_unlock_already_unlocked_verifies_password)
+{
+    SessionManager manager = {0};
+    stub_sm_create_result = &manager;
+    stub_has_valid_token_result = 0;
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = str_dup("tok_existing");
+    HTTPRequest req = {0};
+    req.body = str_dup("{\"password\":\"goodpassword\"}");
+    req.body_len = strlen(req.body);
+
+    handle_unlock(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(captured_body && strstr(captured_body, "\"token\":\"tok_existing\""));
+    /* The live session manager must not be swapped out. */
+    ck_assert_int_eq(ctx.state, STATE_UNLOCKED);
+    ck_assert_ptr_null(ctx.sm);
+    ck_assert_str_eq(ctx.unlock_token, "tok_existing");
+
+    free(ctx.unlock_token);
+    free(req.body);
+    reset_stubs();
+}
+END_TEST
+
+START_TEST(test_handle_unlock_already_unlocked_rejects_wrong_password)
+{
+    stub_sm_create_result = NULL;
+    stub_encrypt_check_verifier_result = -1;
+    stub_has_valid_token_result = 0;
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = str_dup("tok_existing");
+    HTTPRequest req = {0};
+    req.body = str_dup("{\"password\":\"wrong\"}");
+    req.body_len = strlen(req.body);
+
+    handle_unlock(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 401);
+    ck_assert_int_eq(ctx.state, STATE_UNLOCKED);
+
+    free(ctx.unlock_token);
+    free(req.body);
+    reset_stubs();
+}
+END_TEST
 
 START_TEST(test_handle_logout_unauthorized)
 {
@@ -659,6 +725,9 @@ Suite *routes_auth_suite(void)
     tcase_add_test(tc, test_handle_unlock_key_derive_fails);
     tcase_add_test(tc, test_handle_unlock_encrypt_check_verifier_fails);
     tcase_add_test(tc, test_handle_unlock_success);
+    tcase_add_test(tc, test_handle_unlock_already_unlocked_with_valid_token);
+    tcase_add_test(tc, test_handle_unlock_already_unlocked_verifies_password);
+    tcase_add_test(tc, test_handle_unlock_already_unlocked_rejects_wrong_password);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("handle_logout");

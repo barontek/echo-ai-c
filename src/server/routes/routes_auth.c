@@ -114,7 +114,22 @@ void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
 
 void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
-    if (ctx->state != STATE_LOCKED)
+    if (ctx->state == STATE_UNLOCKED && ctx->unlock_token &&
+        middleware_has_valid_token(req->headers, ctx->unlock_token))
+    {
+        /* Already unlocked with a valid token: idempotent success so a
+         * client that re-showed the unlock screen recovers without
+         * re-entering the password. */
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "token", ctx->unlock_token);
+        char *str = cJSON_PrintUnformatted(resp);
+        server_response_json(client, 200, str);
+        free(str);
+        cJSON_Delete(resp);
+        return;
+    }
+
+    if (ctx->state != STATE_LOCKED && ctx->state != STATE_UNLOCKED)
     {
         server_response_error(client, 400, "not locked");
         return;
@@ -186,6 +201,23 @@ void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
         server_response_error(client, 500, "failed to generate unlock token");
         return;
     }
+
+    if (ctx->state == STATE_UNLOCKED)
+    {
+        /* The server kept running across a client refresh: the password was
+         * just verified above, so hand out the existing token instead of
+         * swapping in a second session manager over the live one. */
+        session_manager_free(sm);
+        free(token);
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "token", ctx->unlock_token);
+        char *str = cJSON_PrintUnformatted(resp);
+        server_response_json(client, 200, str);
+        free(str);
+        cJSON_Delete(resp);
+        return;
+    }
+
     ctx->sm = sm;
     if (ctx->openai_oauth && openai_oauth_attach_session(ctx->openai_oauth, sm) != 0)
         log_error("failed to load stored OpenAI credentials", NULL);
