@@ -13,6 +13,7 @@
 typedef struct {
     char *base_url;
     char *api_token;
+    char *effort; /* owned; NULL = API default ("low"/"medium"/"high"/"max"/"none") */
 } OpenAICompatCtx;
 
 typedef struct {
@@ -642,6 +643,84 @@ static LLMResponse *openai_compatible_chat_stream_request(
     return resp;
 }
 
+int openai_compatible_reasoning_effort_valid(const char *effort)
+{
+    if (!effort || !effort[0]) return 1;
+    return strcmp(effort, "low") == 0 ||
+           strcmp(effort, "medium") == 0 ||
+           strcmp(effort, "high") == 0 ||
+           strcmp(effort, "max") == 0 ||
+           strcmp(effort, "none") == 0;
+}
+
+/* Renders the "reasoning_effort" JSON field (with trailing comma) into buf,
+ * or an empty string when no effort is set. Returns -1 on invalid effort or
+ * a buffer too small for the value. */
+static int reasoning_effort_fragment(const char *effort, char *buf, size_t cap)
+{
+    if (!effort || !effort[0])
+    {
+        buf[0] = '\0';
+        return 0;
+    }
+    if (!openai_compatible_reasoning_effort_valid(effort)) return -1;
+    if (snprintf(buf, cap, "\"reasoning_effort\":\"%s\",", effort) >= (int)cap)
+        return -1;
+    return 0;
+}
+
+/* Builds a chat-completions request body. tools_json and json_schema are
+ * mutually exclusive; force_json_format forces the response_format json
+ * variant used by extract_structured. Returns a caller-owned string, or
+ * NULL when effort is invalid or allocation fails. */
+static char *build_body(const char *model, const char *msgs_json, int stream,
+                        double temperature, const char *tools_json,
+                        const char *json_schema, int force_json_format,
+                        const char *effort)
+{
+    char effort_frag[64];
+    if (reasoning_effort_fragment(effort, effort_frag,
+                                  sizeof(effort_frag)) != 0)
+        return NULL;
+
+    const char *stream_str = stream ? "true" : "false";
+    char *body = NULL;
+    if (tools_json && tools_json[0])
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":%s,"
+                     "%s\"temperature\":%.2f,\"tools\":%s}",
+                     model, msgs_json, stream_str, effort_frag,
+                     temperature, tools_json) < 0)
+            return NULL;
+    }
+    else if (json_schema && json_schema[0])
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
+                     "%s\"temperature\":%.2f,"
+                     "\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"schema\":%s,\"strict\":true}}}",
+                     model, msgs_json, effort_frag, temperature,
+                     json_schema) < 0)
+            return NULL;
+    }
+    else if (force_json_format)
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
+                     "%s\"temperature\":%.2f,"
+                     "\"response_format\":{\"type\":\"json_object\"}}",
+                     model, msgs_json, effort_frag, temperature) < 0)
+            return NULL;
+    }
+    else
+    {
+        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":%s,"
+                     "%s\"temperature\":%.2f}",
+                     model, msgs_json, stream_str, effort_frag,
+                     temperature) < 0)
+            return NULL;
+    }
+    return body;
+}
+
 static LLMResponse *openai_compatible_chat(LLMProvider *self, Message *messages, int count,
                                            const char *model, double temperature, int timeout,
                                            const char *tools_json)
@@ -651,28 +730,10 @@ static LLMResponse *openai_compatible_chat(LLMProvider *self, Message *messages,
     char *msgs_json = build_messages_json(messages, count, NULL, model);
     if (!msgs_json) return NULL;
 
-    char *body = NULL;
-    if (tools_json && tools_json[0])
-    {
-        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                     "\"temperature\":%.2f,\"tools\":%s}",
-                     model, msgs_json, temperature, tools_json) < 0)
-        {
-            free(msgs_json);
-            return NULL;
-        }
-    }
-    else
-    {
-        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                     "\"temperature\":%.2f}",
-                     model, msgs_json, temperature) < 0)
-        {
-            free(msgs_json);
-            return NULL;
-        }
-    }
+    char *body = build_body(model, msgs_json, 0, temperature, tools_json,
+                            NULL, 0, ctx->effort);
     free(msgs_json);
+    if (!body) return NULL;
 
     log_debug("openai compatible request", "model", model, NULL);
 
@@ -698,28 +759,10 @@ static LLMResponse *openai_compatible_chat_streaming(LLMProvider *self, Message 
     char *msgs_json = build_messages_json(messages, count, NULL, model);
     if (!msgs_json) return NULL;
 
-    char *body = NULL;
-    if (tools_json && tools_json[0])
-    {
-        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
-                     "\"temperature\":%.2f,\"tools\":%s}",
-                     model, msgs_json, temperature, tools_json) < 0)
-        {
-            free(msgs_json);
-            return NULL;
-        }
-    }
-    else
-    {
-        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
-                     "\"temperature\":%.2f}",
-                     model, msgs_json, temperature) < 0)
-        {
-            free(msgs_json);
-            return NULL;
-        }
-    }
+    char *body = build_body(model, msgs_json, 1, temperature, tools_json,
+                            NULL, 0, ctx->effort);
     free(msgs_json);
+    if (!body) return NULL;
 
     /* Live streaming: chunks fire via on_chunk as SSE lines arrive, and
      * the aggregated response is returned once the stream completes. */
@@ -738,24 +781,10 @@ static LLMResponse *openai_compatible_extract_structured(LLMProvider *self, Mess
     char *msgs_json = build_messages_json(messages, count, NULL, model);
     if (!msgs_json) return NULL;
 
-    char *body = NULL;
-    if (json_schema && json_schema[0])
-    {
-        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                     "\"temperature\":%.2f,"
-                     "\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"schema\":%s,\"strict\":true}}}",
-                     model, msgs_json, temperature, json_schema) < 0)
-        { free(msgs_json); return NULL; }
-    }
-    else
-    {
-        if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                     "\"temperature\":%.2f,"
-                     "\"response_format\":{\"type\":\"json_object\"}}",
-                     model, msgs_json, temperature) < 0)
-        { free(msgs_json); return NULL; }
-    }
+    char *body = build_body(model, msgs_json, 0, temperature, NULL,
+                            json_schema, 1, ctx->effort);
     free(msgs_json);
+    if (!body) return NULL;
 
     char *raw = openai_compatible_chat_request(ctx->base_url, ctx->api_token,
                                                body, timeout);
@@ -774,13 +803,22 @@ static void openai_compatible_destroy(LLMProvider *self)
     OpenAICompatCtx *ctx = self->ctx;
     free(ctx->base_url);
     free(ctx->api_token);
+    free(ctx->effort);
     free(ctx);
     free(self);
 }
 
 LLMProvider *openai_compatible_provider_create(const char *base_url,
-                                               const char *api_token)
+                                               const char *api_token,
+                                               const char *effort)
 {
+    if (effort && !openai_compatible_reasoning_effort_valid(effort))
+    {
+        log_error("OpenAI-compatible provider rejected invalid reasoning effort",
+                  "effort", effort, NULL);
+        return NULL;
+    }
+
     LLMProvider *p = calloc(1, sizeof(LLMProvider));
     if (!p) return NULL;
 
@@ -796,6 +834,12 @@ LLMProvider *openai_compatible_provider_create(const char *base_url,
         if (!ctx->api_token) { free(ctx->base_url); free(ctx); free(p); return NULL; }
     }
 
+    if (effort && effort[0])
+    {
+        ctx->effort = str_dup(effort);
+        if (!ctx->effort) { free(ctx->base_url); free(ctx->api_token); free(ctx); free(p); return NULL; }
+    }
+
     p->chat = openai_compatible_chat;
     p->chat_streaming = openai_compatible_chat_streaming;
     p->extract_structured = openai_compatible_extract_structured;
@@ -803,3 +847,18 @@ LLMProvider *openai_compatible_provider_create(const char *base_url,
     p->ctx = ctx;
     return p;
 }
+
+#ifdef OPENAI_COMPATIBLE_TEST
+/* Test hook: builds a request body exactly as the provider does, with the
+ * given effort. Returns a caller-owned string, or NULL on invalid effort. */
+char *openai_compatible_test_build_body(const char *model, const char *msgs_json,
+                                        int stream, double temperature,
+                                        const char *tools_json,
+                                        const char *json_schema,
+                                        int force_json_format,
+                                        const char *effort)
+{
+    return build_body(model, msgs_json, stream, temperature, tools_json,
+                      json_schema, force_json_format, effort);
+}
+#endif

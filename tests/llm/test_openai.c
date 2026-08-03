@@ -548,7 +548,7 @@ END_TEST
 START_TEST(test_provider_accepts_valid_effort_values)
 {
     OpenAIOAuth auth = {0};
-    const char *valid[] = {"minimal", "low", "medium", "high"};
+    const char *valid[] = {"low", "medium", "high", "xhigh", "max", "none"};
     for (size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++)
     {
         LLMProvider *provider = openai_provider_create(
@@ -567,6 +567,10 @@ START_TEST(test_provider_rejects_invalid_effort)
     ck_assert_ptr_null(provider);
     provider = openai_provider_create(
         NULL, NULL, "high-effort", &auth);
+    ck_assert_ptr_null(provider);
+    /* "minimal" was dropped from the accepted set. */
+    provider = openai_provider_create(
+        NULL, NULL, "minimal", &auth);
     ck_assert_ptr_null(provider);
 }
 END_TEST

@@ -37,7 +37,7 @@ extern int ollama_test_curl_init_fails;
 extern CURLcode ollama_test_curl_result;
 
 /* ---- Public create ---- */
-extern LLMProvider *ollama_provider_create(const char *base_url, int num_ctx, int keep_alive_secs);
+extern LLMProvider *ollama_provider_create(const char *base_url, int num_ctx, int keep_alive_secs, const char *effort);
 
 /* ---- Reset curl stub state ---- */
 static void curl_stubs_reset(void)
@@ -105,7 +105,7 @@ static void free_messages(Message *msgs, int count)
 
 START_TEST(test_provider_create_stores_default_values)
 {
-    LLMProvider *p = ollama_provider_create(NULL, 0, 0);
+    LLMProvider *p = ollama_provider_create(NULL, 0, 0, NULL);
     ck_assert_ptr_ne(p, NULL);
     ck_assert(p->chat != NULL);
     ck_assert(p->chat_streaming != NULL);
@@ -118,7 +118,7 @@ END_TEST
 
 START_TEST(test_provider_create_stores_custom_values)
 {
-    LLMProvider *p = ollama_provider_create("http://127.0.0.1:9999", 8192, 300);
+    LLMProvider *p = ollama_provider_create("http://127.0.0.1:9999", 8192, 300, NULL);
     ck_assert_ptr_ne(p, NULL);
     p->destroy(p);
 }
@@ -126,7 +126,7 @@ END_TEST
 
 START_TEST(test_provider_destroy_handles_null)
 {
-    LLMProvider *p = ollama_provider_create(NULL, 0, 0);
+    LLMProvider *p = ollama_provider_create(NULL, 0, 0, NULL);
     ck_assert_ptr_ne(p, NULL);
     p->destroy(NULL);
     p->destroy(p);
@@ -509,7 +509,7 @@ START_TEST(test_chat_builds_request_body_without_tools)
 {
     curl_stubs_reset();
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "hello");
@@ -530,12 +530,76 @@ START_TEST(test_chat_builds_request_body_without_tools)
 }
 END_TEST
 
+START_TEST(test_chat_embeds_reasoning_effort_in_options)
+{
+    curl_stubs_reset();
+
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, "max");
+    ck_assert_ptr_ne(p, NULL);
+
+    Message *msgs = make_messages("user", "hello");
+    ck_assert_ptr_ne(msgs, NULL);
+
+    LLMResponse *r = p->chat(p, msgs, 1, "qwen3", 0.7, 30, NULL);
+    ck_assert_ptr_eq(r, NULL); /* stub returns no data */
+
+    ck_assert_ptr_ne(ollama_test_captured_body, NULL);
+    ck_assert(strstr(ollama_test_captured_body, "\"reasoning_effort\":\"max\"") != NULL);
+    ck_assert(strstr(ollama_test_captured_body, "\"options\":{") != NULL);
+
+    free_messages(msgs, 1);
+    p->destroy(p);
+}
+END_TEST
+
+START_TEST(test_chat_omits_reasoning_effort_when_unset)
+{
+    curl_stubs_reset();
+
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
+    ck_assert_ptr_ne(p, NULL);
+
+    Message *msgs = make_messages("user", "hello");
+    ck_assert_ptr_ne(msgs, NULL);
+
+    LLMResponse *r = p->chat(p, msgs, 1, "llama3", 0.7, 30, NULL);
+    ck_assert_ptr_eq(r, NULL);
+
+    ck_assert_ptr_ne(ollama_test_captured_body, NULL);
+    ck_assert_ptr_null(strstr(ollama_test_captured_body, "reasoning_effort"));
+
+    free_messages(msgs, 1);
+    p->destroy(p);
+}
+END_TEST
+
+START_TEST(test_provider_accepts_valid_effort_values)
+{
+    const char *valid[] = {"low", "medium", "high", "max", "none"};
+    for (size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++)
+    {
+        LLMProvider *p = ollama_provider_create(NULL, 0, 0, valid[i]);
+        ck_assert_ptr_ne(p, NULL);
+        p->destroy(p);
+    }
+}
+END_TEST
+
+START_TEST(test_provider_rejects_invalid_effort)
+{
+    /* xhigh is openai-only; minimal was dropped repo-wide. */
+    ck_assert_ptr_null(ollama_provider_create(NULL, 0, 0, "xhigh"));
+    ck_assert_ptr_null(ollama_provider_create(NULL, 0, 0, "minimal"));
+    ck_assert_ptr_null(ollama_provider_create(NULL, 0, 0, "extreme"));
+}
+END_TEST
+
 START_TEST(test_chat_returns_null_on_curl_init_failure)
 {
     curl_stubs_reset();
     ollama_test_curl_init_fails = 1;
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "hello");
@@ -554,7 +618,7 @@ START_TEST(test_chat_returns_null_on_curl_perform_failure)
     curl_stubs_reset();
     ollama_test_curl_result = (CURLcode)1;
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "hello");
@@ -572,7 +636,7 @@ START_TEST(test_chat_includes_tools_json_when_provided)
 {
     curl_stubs_reset();
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "run ls");
@@ -598,7 +662,7 @@ START_TEST(test_chat_streaming_builds_stream_true_body)
 {
     curl_stubs_reset();
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "hello");
@@ -624,7 +688,7 @@ START_TEST(test_chat_streaming_returns_null_on_curl_failure)
     curl_stubs_reset();
     ollama_test_curl_result = (CURLcode)1;
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "hello");
@@ -643,7 +707,7 @@ START_TEST(test_chat_streaming_includes_tools_when_provided)
 {
     curl_stubs_reset();
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "run ls");
@@ -673,7 +737,7 @@ START_TEST(test_extract_structured_uses_format_json_by_default)
 {
     curl_stubs_reset();
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "extract name");
@@ -694,7 +758,7 @@ START_TEST(test_extract_structured_uses_custom_json_schema)
 {
     curl_stubs_reset();
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "extract data");
@@ -717,7 +781,7 @@ START_TEST(test_extract_structured_returns_null_on_curl_failure)
     curl_stubs_reset();
     ollama_test_curl_result = (CURLcode)1;
 
-    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120);
+    LLMProvider *p = ollama_provider_create("http://localhost:11434", 4096, 120, NULL);
     ck_assert_ptr_ne(p, NULL);
 
     Message *msgs = make_messages("user", "hello");
@@ -781,6 +845,10 @@ Suite *ollama_suite(void)
 
     TCase *tc_chat = tcase_create("Chat");
     tcase_add_test(tc_chat, test_chat_builds_request_body_without_tools);
+    tcase_add_test(tc_chat, test_chat_embeds_reasoning_effort_in_options);
+    tcase_add_test(tc_chat, test_chat_omits_reasoning_effort_when_unset);
+    tcase_add_test(tc_chat, test_provider_accepts_valid_effort_values);
+    tcase_add_test(tc_chat, test_provider_rejects_invalid_effort);
     tcase_add_test(tc_chat, test_chat_returns_null_on_curl_init_failure);
     tcase_add_test(tc_chat, test_chat_returns_null_on_curl_perform_failure);
     tcase_add_test(tc_chat, test_chat_includes_tools_json_when_provided);

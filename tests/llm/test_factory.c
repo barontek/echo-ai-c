@@ -106,6 +106,18 @@ START_TEST(test_get_provider_opencode_zen_without_token_returns_valid_provider)
 }
 END_TEST
 
+START_TEST(test_get_provider_opencode_zen_accepts_effort)
+{
+    LLMProvider *p = get_provider("opencode_zen", "model", NULL, "zen-test-1",
+                                  0, 0, "none");
+    ck_assert_ptr_ne(p, NULL);
+    p->destroy(p);
+    /* openai-only value stays rejected for zen. */
+    p = get_provider("opencode_zen", "model", NULL, "zen-test-1", 0, 0, "xhigh");
+    ck_assert_ptr_null(p);
+}
+END_TEST
+
 START_TEST(test_get_provider_unknown_returns_null)
 {
     LLMProvider *p = get_provider("unknown_provider", "model", "url", NULL, 0, 0, NULL);
@@ -153,12 +165,12 @@ END_TEST
  *  provider_supports_effort tests
  * ================================================================ */
 
-START_TEST(test_provider_supports_effort_openai_only)
+START_TEST(test_provider_supports_effort_lists)
 {
     ck_assert_int_eq(provider_supports_effort("openai"), 1);
-    ck_assert_int_eq(provider_supports_effort("ollama"), 0);
-    ck_assert_int_eq(provider_supports_effort("openai_compatible"), 0);
-    ck_assert_int_eq(provider_supports_effort("opencode_zen"), 0);
+    ck_assert_int_eq(provider_supports_effort("openai_compatible"), 1);
+    ck_assert_int_eq(provider_supports_effort("ollama"), 1);
+    ck_assert_int_eq(provider_supports_effort("opencode_zen"), 1);
 }
 END_TEST
 
@@ -167,6 +179,60 @@ START_TEST(test_provider_supports_effort_unknown_returns_zero)
     ck_assert_int_eq(provider_supports_effort("anthropic"), 0);
     ck_assert_int_eq(provider_supports_effort(""), 0);
     ck_assert_int_eq(provider_supports_effort(NULL), 0);
+}
+END_TEST
+
+START_TEST(test_provider_effort_options_are_provider_specific)
+{
+    const char *const *openai = provider_effort_options("openai");
+    ck_assert_ptr_nonnull(openai);
+    ck_assert_str_eq(openai[0], "low");
+    ck_assert_str_eq(openai[3], "xhigh");  /* openai-only value */
+    ck_assert_str_eq(openai[5], "none");
+    ck_assert_ptr_null(openai[6]);
+
+    const char *const *compat = provider_effort_options("openai_compatible");
+    ck_assert_ptr_nonnull(compat);
+    ck_assert_str_eq(compat[0], "low");
+    ck_assert_str_eq(compat[3], "max");
+    ck_assert_str_eq(compat[4], "none");
+    ck_assert_ptr_null(compat[5]);
+
+    const char *const *ollama = provider_effort_options("ollama");
+    ck_assert_ptr_nonnull(ollama);
+    ck_assert_str_eq(ollama[0], "low");
+    ck_assert_str_eq(ollama[4], "none");
+    ck_assert_ptr_null(ollama[5]);
+
+    /* Zen is the OpenAI-compatible client: same list, no xhigh. */
+    const char *const *zen = provider_effort_options("opencode_zen");
+    ck_assert_ptr_nonnull(zen);
+    ck_assert_str_eq(zen[0], "low");
+    ck_assert_str_eq(zen[3], "max");
+    ck_assert_str_eq(zen[4], "none");
+    ck_assert_ptr_null(zen[5]);
+}
+
+START_TEST(test_provider_effort_valid_checks_the_provider_set)
+{
+    /* NULL/empty always valid. */
+    ck_assert_int_eq(provider_effort_valid("openai", NULL), 1);
+    ck_assert_int_eq(provider_effort_valid("openai", ""), 1);
+    ck_assert_int_eq(provider_effort_valid("ollama", NULL), 1);
+    /* openai-only value. */
+    ck_assert_int_eq(provider_effort_valid("openai", "xhigh"), 1);
+    ck_assert_int_eq(provider_effort_valid("openai_compatible", "xhigh"), 0);
+    ck_assert_int_eq(provider_effort_valid("ollama", "xhigh"), 0);
+    /* shared values. */
+    ck_assert_int_eq(provider_effort_valid("ollama", "none"), 1);
+    ck_assert_int_eq(provider_effort_valid("openai_compatible", "max"), 1);
+    ck_assert_int_eq(provider_effort_valid("opencode_zen", "max"), 1);
+    ck_assert_int_eq(provider_effort_valid("opencode_zen", "xhigh"), 0);
+    /* dropped value. */
+    ck_assert_int_eq(provider_effort_valid("openai", "minimal"), 0);
+    /* unknown provider. */
+    ck_assert_int_eq(provider_effort_valid("anthropic", "low"), 0);
+    ck_assert_int_eq(provider_effort_valid(NULL, "low"), 0);
 }
 END_TEST
 
@@ -188,6 +254,7 @@ Suite *factory_suite(void)
     tcase_add_test(tc, test_get_provider_lmstudio_alias_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_opencode_zen_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_opencode_zen_without_token_returns_valid_provider);
+    tcase_add_test(tc, test_get_provider_opencode_zen_accepts_effort);
     tcase_add_test(tc, test_get_provider_unknown_returns_null);
     tcase_add_test(tc, test_get_provider_empty_name_returns_null);
     tcase_add_test(tc, test_get_provider_anthropic_not_implemented);
@@ -196,8 +263,10 @@ Suite *factory_suite(void)
     TCase *tc_url = tcase_create("DefaultBaseUrl");
     tcase_add_test(tc_url, test_provider_default_base_url_known_providers);
     tcase_add_test(tc_url, test_provider_default_base_url_unknown_returns_null);
-    tcase_add_test(tc_url, test_provider_supports_effort_openai_only);
+    tcase_add_test(tc_url, test_provider_supports_effort_lists);
     tcase_add_test(tc_url, test_provider_supports_effort_unknown_returns_zero);
+    tcase_add_test(tc_url, test_provider_effort_options_are_provider_specific);
+    tcase_add_test(tc_url, test_provider_effort_valid_checks_the_provider_set);
     suite_add_tcase(s, tc_url);
 
     return s;

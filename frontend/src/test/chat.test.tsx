@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatProvider, useChat } from '../context';
 
@@ -861,6 +861,9 @@ describe('Reasoning effort setting', () => {
     mockApi.getProviders.mockResolvedValue({
       providers: ['ollama', 'openai', 'opencode_zen'],
       effortSupported: ['openai'],
+      effortOptions: {
+        openai: ['low', 'medium', 'high', 'xhigh', 'max', 'none'],
+      },
     });
     mockApi.getModels.mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']);
     mockApi.getPreferences.mockResolvedValue({});
@@ -1003,6 +1006,84 @@ describe('Reasoning effort setting', () => {
     });
     await waitFor(() => {
       expect(wsCalls.some((c) => c.includes('"effort"'))).toBe(false);
+    });
+  });
+
+  it('renders per-provider effort options (ollama and zen have no xhigh)', async () => {
+    mockApi.getProviders.mockResolvedValueOnce({
+      providers: ['ollama', 'openai', 'opencode_zen'],
+      effortSupported: ['ollama', 'openai', 'opencode_zen'],
+      effortOptions: {
+        openai: ['low', 'medium', 'high', 'xhigh', 'max', 'none'],
+        ollama: ['low', 'medium', 'high', 'max', 'none'],
+        opencode_zen: ['low', 'medium', 'high', 'max', 'none'],
+      },
+    });
+    const { ChatInput } = await import('../components/ChatInput');
+    function TestComponent() {
+      const { selectProvider } = useChat();
+      return (
+        <>
+          <button onClick={() => void selectProvider('ollama')}>Ollama</button>
+          <button onClick={() => void selectProvider('openai')}>OpenAI</button>
+          <button onClick={() => void selectProvider('opencode_zen')}>Zen</button>
+          <ChatInput />
+        </>
+      );
+    }
+    render(
+      <ChatProvider>
+        <TestComponent />
+      </ChatProvider>
+    );
+
+    await userEvent.click(screen.getByText('Ollama'));
+    const ollamaSelect = await screen.findByRole('combobox', { name: 'Reasoning effort' });
+    expect(within(ollamaSelect).getByRole('option', { name: 'max' })).toBeDefined();
+    expect(within(ollamaSelect).queryByRole('option', { name: 'xhigh' })).toBeNull();
+
+    await userEvent.click(screen.getByText('Zen'));
+    const zenSelect = await screen.findByRole('combobox', { name: 'Reasoning effort' });
+    expect(within(zenSelect).getByRole('option', { name: 'none' })).toBeDefined();
+    expect(within(zenSelect).queryByRole('option', { name: 'xhigh' })).toBeNull();
+
+    await userEvent.click(screen.getByText('OpenAI'));
+    const openaiSelect = await screen.findByRole('combobox', { name: 'Reasoning effort' });
+    expect(within(openaiSelect).getByRole('option', { name: 'xhigh' })).toBeDefined();
+    expect(within(openaiSelect).getByRole('option', { name: 'max' })).toBeDefined();
+    expect(within(openaiSelect).getByRole('option', { name: 'none' })).toBeDefined();
+  });
+
+  it('drops an effort the switched-to provider does not accept', async () => {
+    function TestComponent() {
+      const { currentEffort, selectProvider, selectEffort } = useChat();
+      return (
+        <>
+          <span data-testid="effort">{currentEffort}</span>
+          <button onClick={() => void selectProvider('openai')}>OpenAI</button>
+          <button onClick={() => void selectProvider('opencode_zen')}>Zen</button>
+          <button onClick={() => selectEffort('xhigh')}>Effort xhigh</button>
+        </>
+      );
+    }
+    render(
+      <ChatProvider>
+        <TestComponent />
+      </ChatProvider>
+    );
+
+    await userEvent.click(screen.getByText('OpenAI'));
+    await waitFor(() => {
+      expect(mockApi.getModels).toHaveBeenCalledWith('openai', expect.anything());
+    });
+    await userEvent.click(screen.getByText('Effort xhigh'));
+    await waitFor(() => {
+      expect(screen.getByTestId('effort').textContent).toBe('xhigh');
+    });
+
+    await userEvent.click(screen.getByText('Zen'));
+    await waitFor(() => {
+      expect(screen.getByTestId('effort').textContent).toBe('');
     });
   });
 });

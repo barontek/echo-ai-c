@@ -3,8 +3,16 @@ import type { ApprovalRequest, ToolCall } from '../types';
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
 
-export const EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high'] as const;
-export type EffortOption = (typeof EFFORT_OPTIONS)[number];
+/* Fallback per-provider effort option lists, used only until /api/providers
+ * resolves (the backend's effort_options map is authoritative). OpenAI gets
+ * xhigh; openai_compatible, ollama and opencode_zen share the smaller set. */
+export const EFFORT_OPTIONS_BY_PROVIDER: Record<string, string[]> = {
+  openai: ['low', 'medium', 'high', 'xhigh', 'max', 'none'],
+  openai_compatible: ['low', 'medium', 'high', 'max', 'none'],
+  ollama: ['low', 'medium', 'high', 'max', 'none'],
+  opencode_zen: ['low', 'medium', 'high', 'max', 'none'],
+};
+export type EffortOption = string;
 
 export interface ChatContextValue {
   sessions: Array<{ id: string; title: string; created_at: string }>;
@@ -14,6 +22,7 @@ export interface ChatContextValue {
   models: string[];
   providers: string[];
   currentEffort: string;
+  effortOptions: string[];
   selectEffort: (effort: string) => void;
   supportsEffort: boolean;
   messages: Array<{

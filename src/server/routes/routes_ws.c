@@ -9,7 +9,6 @@
 #include "routes_ws.h"
 #include "../websocket.h"
 #include "../../agent/agent.h"
-#include "../../llm/openai.h"
 #include "../../llm/provider.h"
 #include "../../safety/safety.h"
 #include "../../session/session_manager.h"
@@ -347,7 +346,8 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                 if (effort_item)
                 {
                     if (cJSON_IsString(effort_item) &&
-                        openai_reasoning_effort_valid(effort_item->valuestring))
+                        provider_effort_valid(pname,
+                                              effort_item->valuestring))
                     {
                         if (effort_item->valuestring[0] == '\0')
                         {

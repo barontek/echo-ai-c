@@ -271,7 +271,30 @@ const char *const *provider_names_available(int *count)
  * real function is covered in test_factory.c. */
 int provider_supports_effort(const char *name)
 {
-    return name && strcmp(name, "openai") == 0;
+    if (!name) return 0;
+    return strcmp(name, "openai") == 0 ||
+           strcmp(name, "openai_compatible") == 0 ||
+           strcmp(name, "ollama") == 0 ||
+           strcmp(name, "opencode_zen") == 0;
+}
+
+static const char *const stub_openai_effort_options[] = {
+    "low", "medium", "high", "xhigh", "max", "none", NULL,
+};
+
+static const char *const stub_other_effort_options[] = {
+    "low", "medium", "high", "max", "none", NULL,
+};
+
+const char *const *provider_effort_options(const char *name)
+{
+    if (name && strcmp(name, "openai") == 0)
+        return stub_openai_effort_options;
+    if (name && (strcmp(name, "openai_compatible") == 0 ||
+                 strcmp(name, "ollama") == 0 ||
+                 strcmp(name, "opencode_zen") == 0))
+        return stub_other_effort_options;
+    return NULL;
 }
 
 /* ---------------------------------------------------------------------------
@@ -339,7 +362,8 @@ START_TEST(test_handle_providers_lists_available_providers)
     ck_assert(strstr(captured_body, "\"providers\":["));
     ck_assert(strstr(captured_body, "\"opencode_zen\""));
     ck_assert(strstr(captured_body, "\"ollama\""));
-    ck_assert(strstr(captured_body, "\"effort_supported\":[\"openai\"]"));
+    ck_assert(strstr(captured_body, "\"effort_supported\":[\"ollama\",\"openai\",\"openai_compatible\",\"opencode_zen\"]"));
+    ck_assert(strstr(captured_body, "\"effort_options\":{\"ollama\":[\"low\",\"medium\",\"high\",\"max\",\"none\"],\"openai\":[\"low\",\"medium\",\"high\",\"xhigh\",\"max\",\"none\"],\"openai_compatible\":[\"low\",\"medium\",\"high\",\"max\",\"none\"],\"opencode_zen\":[\"low\",\"medium\",\"high\",\"max\",\"none\"]}"));
 
     reset_stubs();
 }

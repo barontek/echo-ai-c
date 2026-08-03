@@ -25,20 +25,20 @@ LLMProvider *get_provider_with_auth(const char *name, const char *model,
 
     if (strcmp(name, "ollama") == 0)
     {
-        extern LLMProvider *ollama_provider_create(const char *, int, int);
-        return ollama_provider_create(base_url, num_ctx, keep_alive_secs);
+        extern LLMProvider *ollama_provider_create(const char *, int, int, const char *);
+        return ollama_provider_create(base_url, num_ctx, keep_alive_secs, effort);
     }
 
     if (strcmp(name, "openai_compatible") == 0)
     {
-        return openai_compatible_provider_create(base_url, api_token);
+        return openai_compatible_provider_create(base_url, api_token, effort);
     }
 
     if (strcmp(name, "lmstudio") == 0)
     {
         /* Back-compat alias: lmstudio is the OpenAI-compatible client
          * pointed at a local server. */
-        return openai_compatible_provider_create(base_url, api_token);
+        return openai_compatible_provider_create(base_url, api_token, effort);
     }
 
     if (strcmp(name, "openai") == 0)
@@ -49,8 +49,8 @@ LLMProvider *get_provider_with_auth(const char *name, const char *model,
 
     if (strcmp(name, "opencode_zen") == 0)
     {
-        extern LLMProvider *opencode_zen_provider_create(const char *, const char *);
-        return opencode_zen_provider_create(base_url, api_token);
+        extern LLMProvider *opencode_zen_provider_create(const char *, const char *, const char *);
+        return opencode_zen_provider_create(base_url, api_token, effort);
     }
 
     return NULL;
@@ -89,5 +89,53 @@ int provider_supports_effort(const char *name)
     if (!name) return 0;
     if (strcmp(name, "openai") == 0)
         return 1;
+    if (strcmp(name, "openai_compatible") == 0)
+        return 1;
+    if (strcmp(name, "ollama") == 0)
+        return 1;
+    /* Zen is the OpenAI-compatible client, so it takes the same set. */
+    if (strcmp(name, "opencode_zen") == 0)
+        return 1;
+    return 0;
+}
+
+/* UI display order; the wire validation mirrors these lists in the
+ * providers' own *_reasoning_effort_valid functions. */
+static const char *const OPENAI_EFFORT_OPTIONS[] = {
+    "low", "medium", "high", "xhigh", "max", "none", NULL,
+};
+
+static const char *const OPENAI_COMPAT_EFFORT_OPTIONS[] = {
+    "low", "medium", "high", "max", "none", NULL,
+};
+
+static const char *const OLLAMA_EFFORT_OPTIONS[] = {
+    "low", "medium", "high", "max", "none", NULL,
+};
+
+const char *const *provider_effort_options(const char *name)
+{
+    if (!name) return NULL;
+    if (strcmp(name, "openai") == 0)
+        return OPENAI_EFFORT_OPTIONS;
+    if (strcmp(name, "openai_compatible") == 0)
+        return OPENAI_COMPAT_EFFORT_OPTIONS;
+    if (strcmp(name, "ollama") == 0)
+        return OLLAMA_EFFORT_OPTIONS;
+    /* Zen is the OpenAI-compatible client; it validates through
+     * openai_compatible_reasoning_effort_valid, so reuse its list. */
+    if (strcmp(name, "opencode_zen") == 0)
+        return OPENAI_COMPAT_EFFORT_OPTIONS;
+    return NULL;
+}
+
+int provider_effort_valid(const char *name, const char *effort)
+{
+    if (!effort || !effort[0]) return 1;
+    const char *const *options = provider_effort_options(name);
+    if (!options) return 0;
+    for (int i = 0; options[i]; i++)
+        if (strcmp(options[i], effort) == 0)
+            return 1;
     return 0;
 }

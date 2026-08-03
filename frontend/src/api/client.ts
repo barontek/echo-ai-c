@@ -94,14 +94,20 @@ class ApiClient {
     return res.data.models || [];
   }
 
-  async getProviders(): Promise<{ providers: string[]; effortSupported: string[] }> {
+  async getProviders(): Promise<{
+    providers: string[];
+    effortSupported: string[];
+    effortOptions: Record<string, string[]>;
+  }> {
     const res = await this.client.get<{
       providers: string[];
       effort_supported?: string[];
+      effort_options?: Record<string, string[]>;
     }>('/api/providers');
     return {
       providers: res.data.providers || [],
       effortSupported: res.data.effort_supported || [],
+      effortOptions: res.data.effort_options || {},
     };
   }
 

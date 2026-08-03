@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import {
   ChatContext,
-  EFFORT_OPTIONS,
+  EFFORT_OPTIONS_BY_PROVIDER,
   type ChatContextValue,
   type ConnectionStatus,
 } from './ChatContext';
@@ -106,7 +106,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
    * selector in the chat input is gated on the current provider being in
    * this list. Empty until /api/providers resolves. */
   const [effortSupportedProviders, setEffortSupportedProviders] = useState<string[]>([]);
-  /* '' means "provider default"; otherwise one of EFFORT_OPTIONS. */
+  /* Per-provider effort value lists from /api/providers; falls back to
+   * EFFORT_OPTIONS_BY_PROVIDER until the fetch resolves. */
+  const [effortOptionsByProvider, setEffortOptionsByProvider] = useState<Record<string, string[]>>(
+    EFFORT_OPTIONS_BY_PROVIDER
+  );
+  /* '' means "provider default"; otherwise one of the current provider's
+   * accepted effort values. */
   const [currentEffort, setCurrentEffort] = useState<string>('');
   const [messages, setMessages] = useState<ChatContextValue['messages']>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
@@ -646,6 +652,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (!isMounted()) return;
         setProviders(availableProviders);
         setEffortSupportedProviders(providersData.effortSupported);
+        if (providersData.effortOptions && Object.keys(providersData.effortOptions).length > 0) {
+          setEffortOptionsByProvider(providersData.effortOptions);
+        }
         setSessions(sessionsData);
         if (!providerSelectionUnchanged()) return;
 
@@ -699,11 +708,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         savedModels[savedProvider] = savedModel;
         setModelByProvider(savedModels);
 
-        /* Restore the saved effort hint; anything outside EFFORT_OPTIONS is
-         * dropped so a stale localStorage value can never reach the wire. */
-        const savedEffort = EFFORT_OPTIONS.some((e) => e === storedPrefs.effort)
-          ? (storedPrefs.effort as string)
-          : '';
+        /* Restore the saved effort hint; anything outside the current
+         * provider's accepted set is dropped so a stale localStorage value
+         * can never reach the wire. */
+        const savedEffort =
+          storedPrefs.effort &&
+          (providersData.effortOptions?.[savedProvider] ||
+            EFFORT_OPTIONS_BY_PROVIDER[savedProvider] ||
+            []).includes(storedPrefs.effort)
+            ? storedPrefs.effort
+            : '';
         setCurrentEffort(savedEffort);
 
         const resolvedPrefs: ChatPreferences = {
@@ -875,6 +889,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             : nextModels[0] || '';
         setCurrentProvider(provider);
         setCurrentModel(model);
+        /* A provider switch can invalidate the current effort (e.g. xhigh
+         * is openai-only); drop it so an unsupported value never reaches
+         * the wire. */
+        if (
+          currentEffort &&
+          !(effortOptionsByProvider[provider] || []).includes(currentEffort)
+        ) {
+          setCurrentEffort('');
+        }
         const models = { ...modelByProvider, [provider]: model };
         setModelByProvider(models);
         const preferences = { model, provider, models };
@@ -890,7 +913,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       // The useEffect on connect() will detect the provider change and reconnect
     },
-    [modelByProvider]
+    [modelByProvider, currentEffort, effortOptionsByProvider]
   );
 
   const retryMessage = useCallback(
@@ -905,6 +928,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const supportsEffort = effortSupportedProviders.includes(currentProvider);
+  const effortOptions = effortOptionsByProvider[currentProvider] || [];
 
   const value = useMemo<ChatContextValue>(
     () => ({
@@ -915,6 +939,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       models,
       providers,
       currentEffort,
+      effortOptions,
       selectEffort,
       supportsEffort,
       messages,
@@ -948,6 +973,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       models,
       providers,
       currentEffort,
+      effortOptions,
       selectEffort,
       supportsEffort,
       messages,

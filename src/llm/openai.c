@@ -38,7 +38,7 @@
 
 typedef struct {
     OpenAIOAuth *auth;
-    char *effort; /* owned; NULL = API default ("minimal"/"low"/"medium"/"high") */
+    char *effort; /* owned; NULL = API default ("low"/"medium"/"high"/"xhigh"/"max"/"none") */
 } OpenAICtx;
 
 typedef struct {
@@ -549,10 +549,12 @@ static int add_reasoning_include(cJSON *root)
 int openai_reasoning_effort_valid(const char *effort)
 {
     if (!effort || !effort[0]) return 1;
-    return strcmp(effort, "minimal") == 0 ||
-           strcmp(effort, "low") == 0 ||
+    return strcmp(effort, "low") == 0 ||
            strcmp(effort, "medium") == 0 ||
-           strcmp(effort, "high") == 0;
+           strcmp(effort, "high") == 0 ||
+           strcmp(effort, "xhigh") == 0 ||
+           strcmp(effort, "max") == 0 ||
+           strcmp(effort, "none") == 0;
 }
 
 static int add_reasoning_effort(cJSON *root, const char *effort)

@@ -381,6 +381,7 @@ void handle_providers(HTTPRequest *req, Client *client, ServerContext *ctx)
     cJSON *json = cJSON_CreateObject();
     cJSON *arr = cJSON_CreateArray();
     cJSON *effort_arr = cJSON_CreateArray();
+    cJSON *effort_opts = cJSON_CreateObject();
     if (json && arr)
     {
         int count = 0;
@@ -391,7 +392,19 @@ void handle_providers(HTTPRequest *req, Client *client, ServerContext *ctx)
             /* Tells the UI which providers accept a reasoning-effort hint so
              * it can gate the effort selector per provider. */
             if (provider_supports_effort(names[i]))
+            {
                 cJSON_AddItemToArray(effort_arr, cJSON_CreateString(names[i]));
+                /* Per-provider option lists; the UI renders exactly these
+                 * (openai has xhigh, openai_compatible does not). */
+                const char *const *options = provider_effort_options(names[i]);
+                cJSON *opt_arr = cJSON_CreateArray();
+                if (opt_arr && options)
+                {
+                    for (int j = 0; options[j]; j++)
+                        cJSON_AddItemToArray(opt_arr, cJSON_CreateString(options[j]));
+                }
+                cJSON_AddItemToObject(effort_opts, names[i], opt_arr);
+            }
         }
         cJSON_AddItemToObject(json, "providers", arr);
     }
@@ -399,6 +412,10 @@ void handle_providers(HTTPRequest *req, Client *client, ServerContext *ctx)
         cJSON_AddItemToObject(json, "effort_supported", effort_arr);
     else
         cJSON_Delete(effort_arr);
+    if (json && effort_opts && cJSON_GetArraySize(effort_opts) > 0)
+        cJSON_AddItemToObject(json, "effort_options", effort_opts);
+    else
+        cJSON_Delete(effort_opts);
     char *str = json ? cJSON_PrintUnformatted(json) : NULL;
     server_response_json(client, 200, str ? str : "{\"providers\":[]}");
     free(str);

@@ -25,8 +25,9 @@ typedef struct {
     int num_ctx;
     int keep_alive_secs;
     int parallel_tool_exec;
-    /* Reasoning-effort hint for providers that support it ("minimal"/
-     * "low"/"medium"/"high"); NULL = provider default. Borrowed from conf. */
+    /* Reasoning-effort hint for providers that support it (values are
+     * provider-specific; see provider_effort_options); NULL = provider
+     * default. Borrowed from conf. */
     const char *effort;
 } AgentConfig;
 

@@ -14,6 +14,7 @@ typedef struct {
     char *base_url;
     int num_ctx;
     int keep_alive_secs;
+    char *effort; /* owned; NULL = model default ("low"/"medium"/"high"/"max"/"none") */
 } OllamaCtx;
 
 static int call_seq = 1;
@@ -341,6 +342,34 @@ static LLMResponse *ollama_parse_response(const char *raw)
     return resp;
 }
 
+/* Ollama passes reasoning_effort through its options map for reasoning
+ * models; the accepted levels match openai_compatible (no xhigh). */
+int ollama_reasoning_effort_valid(const char *effort)
+{
+    if (!effort || !effort[0]) return 1;
+    return strcmp(effort, "low") == 0 ||
+           strcmp(effort, "medium") == 0 ||
+           strcmp(effort, "high") == 0 ||
+           strcmp(effort, "max") == 0 ||
+           strcmp(effort, "none") == 0;
+}
+
+/* Renders the "reasoning_effort" entry (with trailing comma) for the
+ * options map, or an empty string when no effort is set. Returns -1 on
+ * invalid effort or a buffer too small for the value. */
+static int reasoning_effort_fragment(const char *effort, char *buf, size_t cap)
+{
+    if (!effort || !effort[0])
+    {
+        buf[0] = '\0';
+        return 0;
+    }
+    if (!ollama_reasoning_effort_valid(effort)) return -1;
+    if (snprintf(buf, cap, "\"reasoning_effort\":\"%s\",", effort) >= (int)cap)
+        return -1;
+    return 0;
+}
+
 static LLMResponse *ollama_chat(LLMProvider *self, Message *messages, int count,
                                 const char *model, double temperature, int timeout,
                                 const char *tools_json)
@@ -350,13 +379,21 @@ static LLMResponse *ollama_chat(LLMProvider *self, Message *messages, int count,
     char *msgs_json = llm_messages_format(messages, count, NULL, NULL);
     if (!msgs_json) return NULL;
 
+    char effort_frag[64];
+    if (reasoning_effort_fragment(ctx->effort, effort_frag,
+                                  sizeof(effort_frag)) != 0)
+    {
+        free(msgs_json);
+        return NULL;
+    }
+
     char *body = NULL;
     if (tools_json && tools_json[0])
     {
         if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"options\":{%s\"temperature\":%.2f,\"num_ctx\":%d},"
                      "\"keep_alive\":%d,\"tools\":%s}",
-                     model, msgs_json, temperature, ctx->num_ctx,
+                     model, msgs_json, effort_frag, temperature, ctx->num_ctx,
                      ctx->keep_alive_secs, tools_json) < 0)
         {
             free(msgs_json);
@@ -366,9 +403,9 @@ static LLMResponse *ollama_chat(LLMProvider *self, Message *messages, int count,
     else
     {
         if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"options\":{%s\"temperature\":%.2f,\"num_ctx\":%d},"
                      "\"keep_alive\":%d}",
-                     model, msgs_json, temperature, ctx->num_ctx,
+                     model, msgs_json, effort_frag, temperature, ctx->num_ctx,
                      ctx->keep_alive_secs) < 0)
         {
             free(msgs_json);
@@ -428,13 +465,21 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
     char *msgs_json = llm_messages_format(messages, count, NULL, NULL);
     if (!msgs_json) return NULL;
 
+    char effort_frag[64];
+    if (reasoning_effort_fragment(ctx->effort, effort_frag,
+                                  sizeof(effort_frag)) != 0)
+    {
+        free(msgs_json);
+        return NULL;
+    }
+
     char *body = NULL;
     if (tools_json && tools_json[0])
     {
         if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
-                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"options\":{%s\"temperature\":%.2f,\"num_ctx\":%d},"
                      "\"keep_alive\":%d,\"tools\":%s}",
-                     model, msgs_json, temperature, ctx->num_ctx,
+                     model, msgs_json, effort_frag, temperature, ctx->num_ctx,
                      ctx->keep_alive_secs, tools_json) < 0)
         {
             free(msgs_json);
@@ -444,9 +489,9 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
     else
     {
         if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":true,"
-                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"options\":{%s\"temperature\":%.2f,\"num_ctx\":%d},"
                      "\"keep_alive\":%d}",
-                     model, msgs_json, temperature, ctx->num_ctx,
+                     model, msgs_json, effort_frag, temperature, ctx->num_ctx,
                      ctx->keep_alive_secs) < 0)
         {
             free(msgs_json);
@@ -498,24 +543,32 @@ static LLMResponse *ollama_extract_structured(LLMProvider *self, Message *messag
     char *msgs_json = llm_messages_format(messages, count, NULL, NULL);
     if (!msgs_json) return NULL;
 
+    char effort_frag[64];
+    if (reasoning_effort_fragment(ctx->effort, effort_frag,
+                                  sizeof(effort_frag)) != 0)
+    {
+        free(msgs_json);
+        return NULL;
+    }
+
     char *body = NULL;
     if (json_schema && json_schema[0])
     {
         if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"options\":{%s\"temperature\":%.2f,\"num_ctx\":%d},"
                      "\"keep_alive\":%d,"
                      "\"format\":%s}",
-                     model, msgs_json, temperature, ctx->num_ctx,
+                     model, msgs_json, effort_frag, temperature, ctx->num_ctx,
                      ctx->keep_alive_secs, json_schema) < 0)
         { free(msgs_json); return NULL; }
     }
     else
     {
         if (asprintf(&body, "{\"model\":\"%s\",\"messages\":%s,\"stream\":false,"
-                     "\"options\":{\"temperature\":%.2f,\"num_ctx\":%d},"
+                     "\"options\":{%s\"temperature\":%.2f,\"num_ctx\":%d},"
                      "\"keep_alive\":%d,"
                      "\"format\":\"json\"}",
-                     model, msgs_json, temperature, ctx->num_ctx,
+                     model, msgs_json, effort_frag, temperature, ctx->num_ctx,
                      ctx->keep_alive_secs) < 0)
         { free(msgs_json); return NULL; }
     }
@@ -536,12 +589,21 @@ static void ollama_destroy(LLMProvider *self)
     if (!self) return;
     OllamaCtx *ctx = self->ctx;
     free(ctx->base_url);
+    free(ctx->effort);
     free(ctx);
     free(self);
 }
 
-LLMProvider *ollama_provider_create(const char *base_url, int num_ctx, int keep_alive_secs)
+LLMProvider *ollama_provider_create(const char *base_url, int num_ctx,
+                                    int keep_alive_secs, const char *effort)
 {
+    if (effort && !ollama_reasoning_effort_valid(effort))
+    {
+        log_error("Ollama provider rejected invalid reasoning effort",
+                  "effort", effort, NULL);
+        return NULL;
+    }
+
     LLMProvider *p = calloc(1, sizeof(LLMProvider));
     if (!p) return NULL;
 
@@ -549,8 +611,15 @@ LLMProvider *ollama_provider_create(const char *base_url, int num_ctx, int keep_
     if (!ctx) { free(p); return NULL; }
 
     ctx->base_url = str_dup(base_url ? base_url : "http://localhost:11434");
+    if (!ctx->base_url) { free(ctx); free(p); return NULL; }
     ctx->num_ctx = num_ctx > 0 ? num_ctx : 4096;
     ctx->keep_alive_secs = keep_alive_secs > 0 ? keep_alive_secs : 120;
+
+    if (effort && effort[0])
+    {
+        ctx->effort = str_dup(effort);
+        if (!ctx->effort) { free(ctx->base_url); free(ctx); free(p); return NULL; }
+    }
 
     p->chat = ollama_chat;
     p->chat_streaming = ollama_chat_streaming;

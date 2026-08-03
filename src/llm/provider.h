@@ -23,14 +23,14 @@ struct LLMProvider {
     void *ctx;
 };
 
-/* effort: reasoning-effort hint for providers that support it ("low"/
- * "medium"/"high", plus OpenAI's "minimal"). NULL or empty means the
- * provider's default. Providers that don't support effort ignore it.
- * The pointer is borrowed for the duration of the call. */
+/* effort: reasoning-effort hint for providers that support it. The accepted
+ * values are provider-specific (see provider_effort_options). NULL or empty
+ * means the provider's default. Providers that don't support effort ignore
+ * it. The pointer is borrowed for the duration of the call. */
 LLMProvider *get_provider(const char *name, const char *model,
-                           const char *base_url, const char *api_token,
-                           int num_ctx, int keep_alive_secs,
-                           const char *effort);
+                          const char *base_url, const char *api_token,
+                          int num_ctx, int keep_alive_secs,
+                          const char *effort);
 
 LLMProvider *get_provider_with_auth(const char *name, const char *model,
                                     const char *base_url, const char *api_token,
@@ -50,7 +50,18 @@ const char *const *provider_names_available(int *count);
 const char *provider_default_base_url(const char *name);
 
 /* Returns 1 when the named provider accepts a reasoning-effort hint
- * (currently openai only), 0 otherwise. Unknown names return 0. */
+ * (openai, openai_compatible, ollama, opencode_zen), 0 otherwise. Unknown
+ * names return 0. */
 int provider_supports_effort(const char *name);
+
+/* Returns the reasoning-effort values the named provider accepts, as a
+ * static NULL-terminated array in UI display order (caller must not free).
+ * NULL/empty effort means "provider default" and is accepted for every
+ * provider. Returns NULL when the provider has no effort support. */
+const char *const *provider_effort_options(const char *name);
+
+/* Returns 1 when effort is NULL, empty, or in the named provider's accepted
+ * effort set; 0 for unknown providers or values outside the set. */
+int provider_effort_valid(const char *name, const char *effort);
 
 #endif

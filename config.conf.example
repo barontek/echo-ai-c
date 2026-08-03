@@ -69,9 +69,10 @@ temperature = 70
 # Request timeout in seconds (default: 120)
 timeout = 120
 
-# Reasoning effort for providers that support it (currently openai).
-# Valid: minimal, low, medium, high. Unset/empty = provider default.
-# Other providers ignore this setting.
+# Reasoning effort for providers that support it (openai, openai_compatible,
+# ollama, opencode_zen). Accepted values are provider-specific: openai
+# accepts low/medium/high/xhigh/max/none; the others accept
+# low/medium/high/max/none (no xhigh). Unset/empty = provider default.
 effort = medium
 
 # Maximum LLM iterations per user message (default: 50)

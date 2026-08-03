@@ -1,7 +1,6 @@
 import { memo, useState, useRef, useEffect, type KeyboardEvent, type FormEvent } from 'react';
 import { Square, ArrowUp, Gauge } from 'lucide-react';
 import { useChat } from '../context';
-import { EFFORT_OPTIONS } from '../context/ChatContext';
 
 interface ChatInputProps {
   placeholder?: string;
@@ -16,6 +15,7 @@ export const ChatInput = memo(function ChatInput({
     isStreaming,
     stopGeneration,
     currentEffort,
+    effortOptions,
     selectEffort,
     supportsEffort,
   } = useChat();
@@ -84,7 +84,7 @@ export const ChatInput = memo(function ChatInput({
               aria-label="Reasoning effort"
             >
               <option value="">Default</option>
-              {EFFORT_OPTIONS.map((level) => (
+              {effortOptions.map((level) => (
                 <option key={level} value={level}>
                   {level}
                 </option>

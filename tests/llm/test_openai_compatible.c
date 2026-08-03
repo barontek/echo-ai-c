@@ -12,6 +12,13 @@ LLMResponse *openai_compatible_test_stream_fragments(
 
 char *openai_compatible_test_build_url(const char *base_url);
 
+char *openai_compatible_test_build_body(const char *model, const char *msgs_json,
+                                        int stream, double temperature,
+                                        const char *tools_json,
+                                        const char *json_schema,
+                                        int force_json_format,
+                                        const char *effort);
+
 typedef struct {
     char content[64];
     size_t len;
@@ -137,6 +144,63 @@ START_TEST(test_build_url_keeps_exact_chat_completions_endpoint)
 }
 END_TEST
 
+START_TEST(test_body_embeds_reasoning_effort_when_set)
+{
+    char *body = openai_compatible_test_build_body(
+        "qwen3", "[{\"role\":\"user\",\"content\":\"hi\"}]", 1, 0.7,
+        NULL, NULL, 0, "none");
+    ck_assert_ptr_nonnull(body);
+    ck_assert(strstr(body, "\"reasoning_effort\":\"none\"") != NULL);
+    ck_assert(strstr(body, "\"stream\":true") != NULL);
+    free(body);
+
+    body = openai_compatible_test_build_body(
+        "qwen3", "[]", 0, 0.7, NULL, NULL, 0, "max");
+    ck_assert_ptr_nonnull(body);
+    ck_assert(strstr(body, "\"reasoning_effort\":\"max\"") != NULL);
+    free(body);
+}
+END_TEST
+
+START_TEST(test_body_omits_reasoning_effort_when_unset)
+{
+    char *body = openai_compatible_test_build_body(
+        "qwen3", "[]", 0, 0.7, NULL, NULL, 0, NULL);
+    ck_assert_ptr_nonnull(body);
+    ck_assert_ptr_null(strstr(body, "reasoning_effort"));
+    free(body);
+}
+END_TEST
+
+START_TEST(test_body_rejects_invalid_effort)
+{
+    ck_assert_ptr_null(openai_compatible_test_build_body(
+        "qwen3", "[]", 0, 0.7, NULL, NULL, 0, "xhigh"));
+    ck_assert_ptr_null(openai_compatible_test_build_body(
+        "qwen3", "[]", 0, 0.7, NULL, NULL, 0, "minimal"));
+    ck_assert_ptr_null(openai_compatible_test_build_body(
+        "qwen3", "[]", 0, 0.7, NULL, NULL, 0, "extreme"));
+}
+END_TEST
+
+START_TEST(test_body_with_tools_and_schema_still_carries_effort)
+{
+    char *body = openai_compatible_test_build_body(
+        "qwen3", "[]", 0, 0.7, "[{\"type\":\"function\"}]", NULL, 0, "high");
+    ck_assert_ptr_nonnull(body);
+    ck_assert(strstr(body, "\"reasoning_effort\":\"high\"") != NULL);
+    ck_assert(strstr(body, "\"tools\":") != NULL);
+    free(body);
+
+    body = openai_compatible_test_build_body(
+        "qwen3", "[]", 0, 0.7, NULL, "{\"type\":\"object\"}", 1, "low");
+    ck_assert_ptr_nonnull(body);
+    ck_assert(strstr(body, "\"reasoning_effort\":\"low\"") != NULL);
+    ck_assert(strstr(body, "\"response_format\"") != NULL);
+    free(body);
+}
+END_TEST
+
 int main(void)
 {
     Suite *suite = suite_create("OpenAI Compatible");
@@ -152,6 +216,12 @@ int main(void)
     tcase_add_test(tc_url, test_build_url_bare_base_appends_v1_chat_completions);
     tcase_add_test(tc_url, test_build_url_keeps_exact_chat_completions_endpoint);
     suite_add_tcase(suite, tc_url);
+    TCase *tc_body = tcase_create("RequestBody");
+    tcase_add_test(tc_body, test_body_embeds_reasoning_effort_when_set);
+    tcase_add_test(tc_body, test_body_omits_reasoning_effort_when_unset);
+    tcase_add_test(tc_body, test_body_rejects_invalid_effort);
+    tcase_add_test(tc_body, test_body_with_tools_and_schema_still_carries_effort);
+    suite_add_tcase(suite, tc_body);
     SRunner *runner = srunner_create(suite);
     srunner_run_all(runner, CK_NORMAL);
     int failed = srunner_ntests_failed(runner);

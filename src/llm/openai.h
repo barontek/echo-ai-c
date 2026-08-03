@@ -17,11 +17,11 @@ enum {
 /* Creates the OAuth-only ChatGPT Codex Responses provider. base_url and
  * api_token are intentionally ignored; auth is borrowed and must outlive the
  * returned provider. effort is a borrowed reasoning-effort hint: NULL or
- * empty means the API default; otherwise it must be one of "minimal", "low",
- * "medium", "high" — anything else is rejected with NULL returned and an
- * error logged (no silent fallback to a default). Returns NULL when auth is
- * NULL, effort is invalid, or allocation fails. The caller owns the result and
- * destroys it through destroy(). */
+ * empty means the API default; otherwise it must be one of "low", "medium",
+ * "high", "xhigh", "max", "none" — anything else is rejected with NULL
+ * returned and an error logged (no silent fallback to a default). Returns
+ * NULL when auth is NULL, effort is invalid, or allocation fails. The caller
+ * owns the result and destroys it through destroy(). */
 LLMProvider *openai_provider_create(const char *base_url, const char *api_token,
                                      const char *effort, OpenAIOAuth *auth);
 
@@ -35,9 +35,9 @@ int openai_models_fetch_alloc(OpenAIOAuth *auth, char ***models_out,
 void openai_models_free(char **models, size_t count);
 
 /* Returns 1 when effort is NULL, empty, or one of the accepted reasoning
- * effort values ("minimal", "low", "medium", "high"); 0 otherwise. This is
- * the single validation used for both config-provided and wire-provided
- * effort strings. */
+ * effort values ("low", "medium", "high", "xhigh", "max", "none"); 0
+ * otherwise. This is the single validation used for both config-provided
+ * and wire-provided effort strings. */
 int openai_reasoning_effort_valid(const char *effort);
 
 #ifdef OPENAI_TEST

@@ -166,17 +166,6 @@ static void teardown(void) { reset_capture(); }
 
 /* ---- STUBS ---- */
 
-/* Mirrors src/llm/openai.c's validator (openai.c is not linked into this
- * binary); the real function is covered in test_openai.c. */
-int openai_reasoning_effort_valid(const char *effort)
-{
-    if (!effort || !effort[0]) return 1;
-    return strcmp(effort, "minimal") == 0 ||
-           strcmp(effort, "low") == 0 ||
-           strcmp(effort, "medium") == 0 ||
-           strcmp(effort, "high") == 0;
-}
-
 int ws_send_json(WSClient *ws, const char *json)
 {
     (void)ws;
@@ -299,15 +288,17 @@ void agent_set_callback_manager(Agent *a, CallbackManager *m) { (void)a; (void)m
  * provider constructors, but nothing in routes_ws.c calls get_provider
  * — the agent layer is stubbed above. Stub them so the real factory
  * mapping links without dragging in live LLM clients. */
-LLMProvider *ollama_provider_create(const char *b, int n, int k)
-{ (void)b; (void)n; (void)k; return NULL; }
-LLMProvider *openai_compatible_provider_create(const char *b, const char *t)
-{ (void)b; (void)t; return NULL; }
+LLMProvider *ollama_provider_create(const char *b, int n, int k, const char *e)
+{ (void)b; (void)n; (void)k; (void)e; return NULL; }
+LLMProvider *openai_compatible_provider_create(const char *b, const char *t,
+                                               const char *e)
+{ (void)b; (void)t; (void)e; return NULL; }
 LLMProvider *openai_provider_create(const char *b, const char *t, const char *e,
                                     OpenAIOAuth *auth)
 { (void)b; (void)t; (void)e; (void)auth; return NULL; }
-LLMProvider *opencode_zen_provider_create(const char *b, const char *t)
-{ (void)b; (void)t; return NULL; }
+LLMProvider *opencode_zen_provider_create(const char *b, const char *t,
+                                          const char *e)
+{ (void)b; (void)t; (void)e; return NULL; }
 
 Session *session_manager_load_session(SessionManager *sm, const char *id)
 { (void)sm; (void)id; return stub_session_load_result; }
@@ -1139,9 +1130,9 @@ START_TEST(test_on_message_provider_config_applies_effort_override)
     c.agent = &agent;
     char dummy_ws = 0;
     ws_chat_on_message((WSClient *)&dummy_ws,
-        "{\"provider\":\"ollama\",\"model\":\"llama3\",\"effort\":\"low\"}", 53, &c);
+        "{\"provider\":\"openai\",\"model\":\"gpt-5-codex\",\"effort\":\"xhigh\"}", 60, &c);
     ck_assert_int_eq(stub_agent_set_provider_calls, 1);
-    ck_assert_str_eq(stub_agent_set_provider_effort, "low");
+    ck_assert_str_eq(stub_agent_set_provider_effort, "xhigh");
     ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
     ck_assert_ptr_null(strstr(captured_ws_json, "\"type\":\"error\""));
     free(c.effort);
@@ -1177,6 +1168,73 @@ START_TEST(test_on_message_provider_config_rejects_invalid_effort)
         "{\"provider\":\"ollama\",\"effort\":\"extreme\"}", 36, &c);
     ck_assert_int_eq(stub_agent_set_provider_calls, 1);
     ck_assert_str_eq(stub_agent_set_provider_effort, "high");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
+    ck_assert(strstr(captured_ws_json, "invalid effort value"));
+    free(c.effort);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_rejects_effort_for_unsupported_provider)
+{
+    /* Unknown providers have no effort support; the override must be
+     * rejected rather than silently forwarded. */
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    c.effort = str_dup("high");
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"anthropic\",\"effort\":\"low\"}", 38, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_str_eq(stub_agent_set_provider_effort, "high");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
+    ck_assert(strstr(captured_ws_json, "invalid effort value"));
+    free(c.effort);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_opencode_zen_accepts_effort)
+{
+    /* Zen is the OpenAI-compatible client; it takes the same set. */
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"opencode_zen\",\"effort\":\"max\"}", 41, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_str_eq(stub_agent_set_provider_effort, "max");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    ck_assert_ptr_null(strstr(captured_ws_json, "\"type\":\"error\""));
+    free(c.effort);
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_provider_config_openai_compatible_accepts_its_set)
+{
+    /* openai_compatible gets low/medium/high/max/none — but not xhigh. */
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    char dummy_ws = 0;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"openai_compatible\",\"effort\":\"none\"}", 49, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 1);
+    ck_assert_str_eq(stub_agent_set_provider_effort, "none");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
+    ck_assert_ptr_null(strstr(captured_ws_json, "\"type\":\"error\""));
+    free(c.effort);
+    reset_capture();
+
+    c = (WSChatCtx){0};
+    c.agent = &agent;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"provider\":\"openai_compatible\",\"effort\":\"xhigh\"}", 50, &c);
+    ck_assert_int_eq(stub_agent_set_provider_calls, 2);
+    ck_assert_ptr_null(stub_agent_set_provider_effort);
     ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
     ck_assert(strstr(captured_ws_json, "invalid effort value"));
     free(c.effort);
@@ -1768,6 +1826,9 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_provider_config_applies_effort_override);
     tcase_add_test(tc, test_on_message_provider_config_empty_effort_clears);
     tcase_add_test(tc, test_on_message_provider_config_rejects_invalid_effort);
+    tcase_add_test(tc, test_on_message_provider_config_rejects_effort_for_unsupported_provider);
+    tcase_add_test(tc, test_on_message_provider_config_openai_compatible_accepts_its_set);
+    tcase_add_test(tc, test_on_message_provider_config_opencode_zen_accepts_effort);
     tcase_add_test(tc, test_on_message_provider_config_resolves_token_from_conf);
     tcase_add_test(tc, test_on_message_provider_switch_uses_target_default_base_url);
     tcase_add_test(tc, test_on_message_provider_switch_uses_conf_base_url_override);
