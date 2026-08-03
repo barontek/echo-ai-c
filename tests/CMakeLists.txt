@@ -124,5 +124,6 @@ if(HAS_LIBFUZZER)
     target_compile_options(fuzz_openai_codex_stream PRIVATE
         -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_openai_codex_stream PRIVATE
-        -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON m)
+        -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON
+        PkgConfig::OPENSSL m)
 endif()

@@ -16,6 +16,7 @@
           buildInputs = with pkgs; [
             cmake
             gnumake
+            clang
             pkg-config
             libuv
             curl

@@ -454,8 +454,8 @@ START_TEST(test_stream_accepts_fragmented_done_without_final_newline)
 {
     const char *fragments[] = {
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"o",
-        "k\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{"
-        "\"status\":\"completed\",\"output\":[]}}\n\ndata: [DO", "NE]"};
+        "k\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\ndata: [DO",
+        "NE]"};
     LLMResponse *response = openai_test_stream_fragments(
         fragments, NULL, 3, NULL, NULL);
     ck_assert_ptr_nonnull(response);

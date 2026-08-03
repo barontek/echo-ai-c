@@ -187,7 +187,7 @@ class ApiClient {
   }
 
   async setPreferences(prefs: {
-    model: string;
+    model?: string;
     provider?: string;
     models?: Record<string, string>;
   }): Promise<void> {
