@@ -1,8 +1,13 @@
 #define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <curl/curl.h>
 
 #include "tool.h"
@@ -33,11 +38,11 @@ static curl_socket_t open_socket_cb(void *userdata, curlsocktype purpose,
     return socket(address->family, address->socktype, address->protocol);
 }
 
-static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
+/* Appends to a WriteBuf, enforcing max_len. Returns 0 on OOM or overflow
+ * (caller aborts the transfer). Shared by the libcurl write callback and
+ * the impersonator subprocess reader so both paths obey the same cap. */
+static int buf_append(WriteBuf *buf, const void *ptr, size_t total)
 {
-    WriteBuf *buf = userdata;
-    if (size != 0 && nmemb > SIZE_MAX / size) return 0;
-    size_t total = size * nmemb;
     if (total > buf->max_len - buf->len)
     {
         buf->too_large = 1;
@@ -56,7 +61,248 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
     memcpy(buf->data + buf->len, ptr, total);
     buf->len += total;
     buf->data[buf->len] = '\0';
-    return total;
+    return 1;
+}
+
+static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    if (size != 0 && nmemb > SIZE_MAX / size) return 0;
+    if (!buf_append(userdata, ptr, size * nmemb)) return 0;
+    return size * nmemb;
+}
+
+/* ---- Optional JS-challenge fallback ---------------------------------
+ * WAFs (Cloudflare, DataDome, simple JS gates) serve challenge pages to
+ * non-browser clients even when the site allows automated access.  A
+ * header-shaped libcurl request cannot pass these because they require a
+ * real JS engine.  If a curl-impersonate binary happens to be on PATH
+ * (nix dev shell, Homebrew, a server image), retry challenged pages
+ * through it: it presents a full Chrome TLS fingerprint plus header set,
+ * which is enough for header/TLS-level challenges (verified against
+ * sncf-connect.com, turkishairlines.com, skyscanner.com).  This is an
+ * optional capability, never a dependency: no binary -> the original
+ * result is returned unchanged.  Sites whose challenge is genuine
+ * JS-execution (e.g. DataDome on kiwi.com) still come back blocked. */
+
+#define IMPERSONATE_TIMEOUT_S 30
+/* Only the first chunk of the body is scanned: challenge pages are small
+ * and this keeps binary blobs (which never match) cheap to check. */
+#define IMPERSONATE_SCAN_LEN 65536
+
+/* Case-insensitive scan for challenge-page markers. */
+static int looks_like_challenge(const char *data, size_t len)
+{
+    static const char *markers[] = {
+        "just a moment", "client challenge", "enable js",
+        "enable javascript", "ad blocker", "cf-browser-verification",
+        "challenge-platform", "attention required", "ddos protection",
+        "verify you", "checking your browser", NULL
+    };
+    if (!data || len == 0) return 0;
+    size_t scan = len < IMPERSONATE_SCAN_LEN ? len : IMPERSONATE_SCAN_LEN;
+    char *lower = malloc(scan + 1);
+    if (!lower) return 0;
+    for (size_t i = 0; i < scan; i++)
+        lower[i] = (char)((data[i] >= 'A' && data[i] <= 'Z') ? data[i] + 32 : data[i]);
+    lower[scan] = '\0';
+    int hit = 0;
+    for (int i = 0; markers[i]; i++)
+    {
+        if (strstr(lower, markers[i])) { hit = 1; break; }
+    }
+    free(lower);
+    return hit;
+}
+
+/* Returns 1 when an executable of the given name exists on PATH. */
+static int binary_on_path(const char *name)
+{
+    const char *path = getenv("PATH");
+    if (!path || !name) return 0;
+    const char *p = path;
+    while (*p)
+    {
+        const char *end = strchr(p, ':');
+        size_t dlen = end ? (size_t)(end - p) : strlen(p);
+        if (dlen > 0)
+        {
+            char full[4096];
+            int n = snprintf(full, sizeof(full), "%.*s/%s", (int)dlen, p, name);
+            if (n > 0 && (size_t)n < sizeof(full) && access(full, X_OK) == 0)
+                return 1;
+        }
+        if (!end) break;
+        p = end + 1;
+    }
+    return 0;
+}
+
+/* Executes the impersonator binary and captures its stdout.  Returns a
+ * malloc'd body (caller frees) or NULL on failure/timeout/OOM/size-limit.
+ * Protocol and redirect behavior mirror the libcurl path: http(s) only,
+ * no redirect following (CURLOPT_FOLLOWLOCATION stays 0). */
+static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
+                                    const char *url, size_t max_len,
+                                    int timeout_s, size_t *out_len)
+{
+    int out_pipe[2];
+    if (pipe(out_pipe) != 0) return NULL;
+
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        close(out_pipe[0]);
+        close(out_pipe[1]);
+        return NULL;
+    }
+
+    if (pid == 0)
+    {
+        close(out_pipe[0]);
+        dup2(out_pipe[1], STDOUT_FILENO);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+        for (int i = 3; i < 256; i++) close(i);
+        char timeout_arg[32];
+        snprintf(timeout_arg, sizeof(timeout_arg), "%d", timeout_s);
+        /* --compressed: the impersonated Chrome header set advertises
+         * Accept-Encoding, so the server may send gzip/br; curl must be
+         * told to decode it or the extractor sees compressed bytes. */
+        if (imp_flag)
+            execlp(binary, binary, "-s", "--compressed", "--max-time", timeout_arg,
+                   "--noproxy", "*", "--proto", "https,http",
+                   "--impersonate", imp_flag, url, (char *)NULL);
+        else
+            execlp(binary, binary, "-s", "--compressed", "--max-time", timeout_arg,
+                   "--noproxy", "*", "--proto", "https,http",
+                   url, (char *)NULL);
+        _exit(127);
+    }
+
+    close(out_pipe[1]);
+
+    WriteBuf buf = {.max_len = max_len};
+    int deadline_ms = timeout_s > 0 ? timeout_s * 1000 : 30000;
+    int elapsed_ms = 0;
+    int status = 0;
+    char chunk[8192];
+
+    for (;;)
+    {
+        pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid) break;                 /* child exited, drain below */
+        if (r < 0 && errno != EINTR) break;
+
+        if (elapsed_ms >= deadline_ms)
+        {
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            free(buf.data);
+            close(out_pipe[0]);
+            return NULL;                     /* timed out */
+        }
+
+        struct pollfd pfd = {.fd = out_pipe[0], .events = POLLIN};
+        int pr = poll(&pfd, 1, 100);
+        if (pr < 0 && errno != EINTR)
+        {
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            free(buf.data);
+            close(out_pipe[0]);
+            return NULL;
+        }
+        if (pr == 0) { elapsed_ms += 100; continue; }
+        ssize_t n = read(out_pipe[0], chunk, sizeof(chunk));
+        if (n > 0)
+        {
+            if (!buf_append(&buf, chunk, (size_t)n))
+            {
+                kill(pid, SIGKILL);          /* body exceeded the cap */
+                waitpid(pid, &status, 0);
+                free(buf.data);
+                close(out_pipe[0]);
+                return NULL;
+            }
+        }
+        elapsed_ms += 100;
+    }
+
+    for (;;)
+    {
+        ssize_t n = read(out_pipe[0], chunk, sizeof(chunk));
+        if (n <= 0) break;
+        if (!buf_append(&buf, chunk, (size_t)n))
+        {
+            free(buf.data);
+            close(out_pipe[0]);
+            return NULL;
+        }
+    }
+    close(out_pipe[0]);
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || buf.len == 0)
+    {
+        free(buf.data);
+        return NULL;
+    }
+    *out_len = buf.len;
+    return buf.data;
+}
+
+/* Retries the fetch through one impersonator binary, replacing the body
+ * and content type on success.  With require_challenge set the body must
+ * first look like a challenge page; without it (libcurl-level failure)
+ * any non-empty body counts as a win.  Returns 1 when replaced. */
+static int retry_with_impersonator_binary(WriteBuf *buf, char **ctype,
+                                          const char *url, const char *binary,
+                                          const char *imp_flag,
+                                          int require_challenge,
+                                          int timeout_s)
+{
+    if (require_challenge && !looks_like_challenge(buf->data, buf->len))
+        return 0;
+    if (!binary_on_path(binary)) return 0;
+    size_t ilen = 0;
+    char *ibody = fetch_via_impersonator(binary, imp_flag, url, buf->max_len,
+                                         timeout_s, &ilen);
+    if (!ibody) return 0;
+    free(buf->data);
+    buf->data = ibody;
+    buf->len = ilen;
+    buf->cap = ilen + 1;
+    buf->too_large = 0;
+    char *html = str_dup("text/html");
+    if (html)
+    {
+        free(*ctype);
+        *ctype = html;
+    }
+    return 1;
+}
+
+/* Tries every known impersonator binary name until one succeeds. */
+static int retry_with_impersonator(WriteBuf *buf, char **ctype, const char *url,
+                                   int require_challenge, int timeout_s)
+{
+    static const struct
+    {
+        const char *name;
+        const char *flag;
+    } candidates[] = {
+        {"curl-impersonate-chrome", NULL},  /* Homebrew / upstream */
+        {"curl-impersonate", "chrome136"},  /* nixpkgs generic */
+        {"curl_chrome136", NULL},           /* nixpkgs versioned */
+        {NULL, NULL}
+    };
+    for (int i = 0; candidates[i].name; i++)
+    {
+        if (retry_with_impersonator_binary(buf, ctype, url, candidates[i].name,
+                                           candidates[i].flag,
+                                           require_challenge, timeout_s))
+            return 1;
+    }
+    return 0;
 }
 
 static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
@@ -85,8 +331,8 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
     CURL *curl = curl_easy_init();
     if (!curl) { free(url); return tool_result_error("curl init failed", "execution_error"); }
 
+    /* url stays alive: it is re-used by the impersonator fallback below. */
     curl_easy_setopt(curl, CURLOPT_URL, url);
-    free(url);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
 #if LIBCURL_VERSION_NUM >= 0x075500
@@ -135,8 +381,26 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
 
     if (res != CURLE_OK)
     {
+        /* Connection-level bot block (TLS drop, RST, ...): before giving
+         * up, let the impersonator try — it wins where the server rejects
+         * the TLS fingerprint outright. */
+        if (retry_with_impersonator(&buf, &ctype_copy, url, 0,
+                                    IMPERSONATE_TIMEOUT_S))
+            res = CURLE_OK;
+    }
+    else
+    {
+        /* Challenge page served with a 200/4xx body: retry only if the
+         * body actually looks like one. */
+        retry_with_impersonator(&buf, &ctype_copy, url, 1,
+                                IMPERSONATE_TIMEOUT_S);
+    }
+
+    if (res != CURLE_OK)
+    {
         free(buf.data);
         free(ctype_copy);
+        free(url);
         if (buf.too_large)
             return tool_result_error("response too large", "policy_denied");
         char *err = NULL;
@@ -146,6 +410,7 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
         free(err);
         return tr;
     }
+    free(url);
 
     char *simplified = content_extract_for_llm(ctype_copy, buf.data, buf.len,
                                                ctx->safety->web_fetch_max_chars);
@@ -195,3 +460,38 @@ Tool *tool_web_fetch_create(SafetyConfig *safety)
     t->ctx = ctx;
     return t;
 }
+
+#ifdef WEB_FETCH_TEST
+/* Test-only exports: keep the challenge/impersonator logic unit-testable
+ * without any network or a real curl-impersonate install. */
+
+int web_fetch_test_looks_like_challenge(const char *data, size_t len)
+{
+    return looks_like_challenge(data, len);
+}
+
+int web_fetch_test_binary_on_path(const char *name)
+{
+    return binary_on_path(name);
+}
+
+/* Runs the single-binary retry on caller-owned buffers.  On success
+ * *data is replaced (caller frees the new buffer) and 1 is returned;
+ * on failure *data is untouched and 0 is returned. */
+int web_fetch_test_retry_challenge(char **data, size_t *len, size_t max_len,
+                                   char **ctype, const char *url,
+                                   const char *binary, const char *imp_flag,
+                                   int timeout_s)
+{
+    WriteBuf buf = {.data = *data, .len = *len, .cap = *len + 1,
+                    .max_len = max_len};
+    int replaced = retry_with_impersonator_binary(&buf, ctype, url, binary,
+                                                  imp_flag, 1, timeout_s);
+    if (replaced)
+    {
+        *data = buf.data;
+        *len = buf.len;
+    }
+    return replaced;
+}
+#endif

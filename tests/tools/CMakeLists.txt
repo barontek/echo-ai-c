@@ -69,3 +69,17 @@ add_executable(test_grep_tool
 target_include_directories(test_grep_tool PRIVATE ../../src)
 target_link_libraries(test_grep_tool PRIVATE echo_ai_test_deps)
 add_test(NAME test_grep_tool COMMAND test_grep_tool)
+
+add_executable(test_web_fetch
+    ../../src/tools/web_fetch.c
+    ../../src/tools/tool.c
+    ../../src/safety/safety.c
+    ../../src/config/config.c
+    ../../src/utils/string_utils.c
+    ../../src/utils/html_extract.c
+    test_web_fetch.c
+)
+target_compile_definitions(test_web_fetch PRIVATE WEB_FETCH_TEST=1)
+target_include_directories(test_web_fetch PRIVATE ../../src)
+target_link_libraries(test_web_fetch PRIVATE echo_ai_test_deps)
+add_test(NAME test_web_fetch COMMAND test_web_fetch)

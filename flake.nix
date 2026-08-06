@@ -28,6 +28,10 @@
             gcovr
             nodejs_22
             caddy
+            # Optional (not a build dependency): web_fetch uses the
+            # curl-impersonate-chrome binary at runtime when it is on PATH
+            # to retry pages served a JS challenge to plain libcurl.
+            curl-impersonate
           ];
 
           shellHook = ''
