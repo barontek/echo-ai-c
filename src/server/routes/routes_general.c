@@ -422,27 +422,3 @@ void handle_providers(HTTPRequest *req, Client *client, ServerContext *ctx)
     cJSON_Delete(json);
 }
 
-void handle_preferences_get(HTTPRequest *req, Client *client, ServerContext *ctx)
-{
-    (void)req;
-    (void)ctx;
-    cJSON *resp = cJSON_CreateObject();
-    cJSON *prefs = cJSON_CreateObject();
-    cJSON_AddItemToObject(resp, "preferences", prefs);
-    char *str = cJSON_PrintUnformatted(resp);
-    server_response_json(client, 200, str);
-    free(str);
-    cJSON_Delete(resp);
-}
-
-void handle_preferences_set(HTTPRequest *req, Client *client, ServerContext *ctx)
-{
-    (void)req;
-    (void)ctx;
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "saved", 1);
-    char *str = cJSON_PrintUnformatted(resp);
-    server_response_json(client, 200, str);
-    free(str);
-    cJSON_Delete(resp);
-}

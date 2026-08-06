@@ -58,8 +58,6 @@ const Route routes[] = {
     {"POST", "/api/logout",               0, 1, 0, handle_logout},
     {"GET",  "/api/models",               0, 0, 0, handle_models},
     {"GET",  "/api/providers",            0, 0, 0, handle_providers},
-    {"GET",  "/api/preferences",          0, 0, 0, handle_preferences_get},
-    {"POST", "/api/preferences",          0, 0, 0, handle_preferences_set},
     {"GET",  "/api/sessions",             0, 1, 0, handle_sessions},
     {"POST", "/api/sessions",             0, 1, 0, handle_create_session},
     {"POST", "/api/sessions/rename",      0, 1, 0, handle_sessions_rename},

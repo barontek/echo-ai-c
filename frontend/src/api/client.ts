@@ -185,28 +185,6 @@ class ApiClient {
     await this.client.post('/api/sessions/rename', { session_id: sessionId, new_title: newTitle });
   }
 
-  async getPreferences(): Promise<{
-    model?: string;
-    provider?: string;
-    models?: Record<string, string>;
-  }> {
-    const res = await this.client.get<{
-      model?: string;
-      provider?: string;
-      models?: Record<string, string>;
-      preferences?: { model?: string; provider?: string; models?: Record<string, string> };
-    }>('/api/preferences');
-    return res.data.preferences || res.data;
-  }
-
-  async setPreferences(prefs: {
-    model?: string;
-    provider?: string;
-    models?: Record<string, string>;
-  }): Promise<void> {
-    await this.client.post('/api/preferences', prefs);
-  }
-
   async healthCheck(): Promise<boolean> {
     try {
       const res = await this.client.get('/api/health');

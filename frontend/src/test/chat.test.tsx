@@ -24,8 +24,6 @@ const { mockApi, wsCalls, wsOnOpenTimers } = vi.hoisted(() => ({
     deleteSession: vi.fn().mockResolvedValue(undefined),
     renameSession: vi.fn().mockResolvedValue(undefined),
     updateConfig: vi.fn().mockResolvedValue(undefined),
-    getPreferences: vi.fn().mockResolvedValue({}),
-    setPreferences: vi.fn().mockResolvedValue(undefined),
     getConfig: vi.fn().mockResolvedValue({
       provider: 'ollama',
       model: 'qwen3:4b-instruct',
@@ -127,8 +125,6 @@ describe('Session History Bug Tests', () => {
       effortSupported: ['openai'],
     });
     mockApi.getModels.mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']);
-    mockApi.getPreferences.mockResolvedValue({});
-    mockApi.setPreferences.mockResolvedValue(undefined);
     mockApi.getOpenAIOAuthStatus.mockResolvedValue({ state: 'signed_out' });
   });
 
@@ -373,7 +369,10 @@ describe('Session History Bug Tests', () => {
     });
 
     it('should track current model', async () => {
-      mockApi.getPreferences.mockResolvedValueOnce({ model: 'qwen3:4b-instruct' });
+      localStorage.setItem(
+        'echo-ai-chat-preferences',
+        JSON.stringify({ model: 'qwen3:4b-instruct' })
+      );
 
       function TestComponent() {
         const { currentModel } = useChat();
@@ -391,8 +390,11 @@ describe('Session History Bug Tests', () => {
       });
     });
 
-    it('should load model from API preferences on mount', async () => {
-      mockApi.getPreferences.mockResolvedValueOnce({ model: 'llama3.2:latest' });
+    it('should restore model from stored preferences on mount', async () => {
+      localStorage.setItem(
+        'echo-ai-chat-preferences',
+        JSON.stringify({ model: 'llama3.2:latest' })
+      );
 
       function TestComponent() {
         const { currentModel } = useChat();
@@ -406,15 +408,11 @@ describe('Session History Bug Tests', () => {
       );
 
       await waitFor(() => {
-        expect(mockApi.getPreferences).toHaveBeenCalled();
-      });
-
-      await waitFor(() => {
         expect(screen.getByTestId('pref-model').textContent).toBe('llama3.2:latest');
       });
     });
 
-    it('should persist model via API on selectModel', async () => {
+    it('should persist model to localStorage on selectModel', async () => {
       function TestComponent() {
         const { selectModel } = useChat();
         return <button onClick={() => selectModel('gpt-4')}>Use GPT-4</button>;
@@ -429,21 +427,21 @@ describe('Session History Bug Tests', () => {
       await userEvent.click(screen.getByText('Use GPT-4'));
 
       await waitFor(() => {
-        expect(mockApi.setPreferences).toHaveBeenCalledWith({
-          model: 'gpt-4',
-          provider: 'ollama',
-          models: { ollama: 'gpt-4' },
-        });
+        const prefs = JSON.parse(localStorage.getItem('echo-ai-chat-preferences') || '{}');
+        expect(prefs).toEqual({ model: 'gpt-4', provider: 'ollama', models: { ollama: 'gpt-4' } });
       });
     });
 
     it('should restore the last model for each provider', async () => {
       mockApi.getProviders.mockResolvedValueOnce({ providers: ['ollama', 'openai'], effortSupported: ['openai'] });
-      mockApi.getPreferences.mockResolvedValueOnce({
-        provider: 'ollama',
-        model: 'qwen3:4b-instruct',
-        models: { ollama: 'qwen3:4b-instruct', openai: 'gpt-4o-mini' },
-      });
+      localStorage.setItem(
+        'echo-ai-chat-preferences',
+        JSON.stringify({
+          provider: 'ollama',
+          model: 'qwen3:4b-instruct',
+          models: { ollama: 'qwen3:4b-instruct', openai: 'gpt-4o-mini' },
+        })
+      );
       mockApi.getModels.mockImplementation((provider?: string) =>
         Promise.resolve(provider === 'openai' ? ['gpt-4o-mini', 'gpt-4o'] : ['qwen3:4b-instruct', 'llama3.2:latest'])
       );
@@ -576,9 +574,8 @@ describe('Session History Bug Tests', () => {
       });
       expect(screen.getByTestId('ordered-provider').textContent).toBe('opencode_zen');
       expect(screen.getByTestId('ordered-models').textContent).toBe('zen-second,zen-first');
-      expect(mockApi.setPreferences).not.toHaveBeenCalledWith(
-        expect.objectContaining({ provider: 'openai' })
-      );
+      const stored = JSON.parse(localStorage.getItem('echo-ai-chat-preferences') || '{}');
+      expect(stored.provider).not.toBe('openai');
       expect(wsCalls).not.toContainEqual(expect.stringContaining('"provider":"openai"'));
     });
 
@@ -866,8 +863,6 @@ describe('Reasoning effort setting', () => {
       },
     });
     mockApi.getModels.mockResolvedValue(['qwen3:4b-instruct', 'llama3.2:latest']);
-    mockApi.getPreferences.mockResolvedValue({});
-    mockApi.setPreferences.mockResolvedValue(undefined);
     mockApi.getOpenAIOAuthStatus.mockResolvedValue({ state: 'signed_out' });
     mockApi.getSessions.mockResolvedValue([]);
     mockApi.loadSession.mockResolvedValue({ session_id: 's', title: 't', messages: [] });
@@ -934,9 +929,8 @@ describe('Reasoning effort setting', () => {
     await userEvent.click(screen.getByText('Effort low'));
     expect(screen.getByTestId('effort').textContent).toBe('low');
     await waitFor(() => {
-      expect(mockApi.setPreferences).toHaveBeenCalledWith(
-        expect.objectContaining({ effort: 'low' })
-      );
+      const prefs = JSON.parse(localStorage.getItem('echo-ai-chat-preferences') || '{}');
+      expect(prefs.effort).toBe('low');
     });
     expect(
       wsCalls.some((c) => c.includes('"provider":"openai"') && c.includes('"effort":"low"'))
@@ -946,9 +940,8 @@ describe('Reasoning effort setting', () => {
     await userEvent.click(screen.getByText('Effort default'));
     expect(screen.getByTestId('effort').textContent).toBe('');
     await waitFor(() => {
-      expect(mockApi.setPreferences).toHaveBeenCalledWith(
-        expect.objectContaining({ effort: undefined })
-      );
+      const prefs = JSON.parse(localStorage.getItem('echo-ai-chat-preferences') || '{}');
+      expect(prefs.effort).toBeUndefined();
     });
     expect(wsCalls.some((c) => c.includes('"effort":'))).toBe(false);
   });

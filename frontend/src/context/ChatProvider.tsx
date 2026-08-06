@@ -631,21 +631,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const loadData = async () => {
       try {
         debugLog('loadData:start');
-        const [providersData, sessionsData, prefsData] = await Promise.all([
+        const [providersData, sessionsData] = await Promise.all([
           api.getProviders(),
           api.getSessions(),
-          api.getPreferences(),
         ]);
         const storedPrefs = readChatPreferences();
         const savedModels = {
-          ...(prefsData.models || {}),
           ...(storedPrefs.models || {}),
         };
-        if (prefsData.provider && prefsData.model && !savedModels[prefsData.provider]) {
-          savedModels[prefsData.provider] = prefsData.model;
-        }
         debugLog('loadData:sessions', sessionsData.length);
-        debugLog('loadData:prefs', prefsData);
         const availableProviders = providersData.providers.length > 0
           ? providersData.providers
           : FALLBACK_PROVIDERS;
@@ -660,9 +654,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         // Validate saved provider; fall back to first available
         let savedProvider =
-          (storedPrefs.provider || prefsData.provider) &&
-          availableProviders.includes(storedPrefs.provider || prefsData.provider || '')
-            ? storedPrefs.provider || prefsData.provider || availableProviders[0]
+          storedPrefs.provider &&
+          availableProviders.includes(storedPrefs.provider || '')
+            ? storedPrefs.provider || availableProviders[0]
             : availableProviders[0];
         if (savedProvider === 'openai') {
           try {
@@ -684,7 +678,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const legacyModel = storedPrefs.model || prefsData.model;
+        const legacyModel = storedPrefs.model;
         if (legacyModel && !savedModels[savedProvider]) {
           savedModels[savedProvider] = legacyModel;
         }
@@ -727,7 +721,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           effort: savedEffort || undefined,
         };
         writeChatPreferences(resolvedPrefs);
-        api.setPreferences(resolvedPrefs).catch(console.error);
       } catch (err) {
         if (!providerSelectionUnchanged()) return;
         console.error('[Chat] Failed to load data:', err);
@@ -831,7 +824,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setModelByProvider(models);
       const preferences = { model, provider: currentProvider, models };
       writeChatPreferences(preferences);
-      api.setPreferences(preferences).catch(console.error);
       // The useEffect on connect() will detect the model change and reconnect
     },
     [currentProvider, modelByProvider]
@@ -845,7 +837,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
        * clobbers provider/model state that was written elsewhere. */
       const preferences = { ...readChatPreferences(), effort: effort || undefined };
       writeChatPreferences(preferences);
-      void api.setPreferences(preferences).catch(console.error);
       /* Resend the config over the live socket so the change applies
        * immediately; the backend rebuilds the provider when the effort
        * differs. Fresh connections pick it up from the initial config
@@ -902,7 +893,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setModelByProvider(models);
         const preferences = { model, provider, models };
         writeChatPreferences(preferences);
-        void api.setPreferences(preferences).catch(console.error);
       } catch (error) {
         if (controller.signal.aborted || generation !== modelRequestGenerationRef.current) return;
         throw error;

@@ -20,8 +20,6 @@ const { mockApi } = vi.hoisted(() => ({
     deleteSession: vi.fn().mockResolvedValue(undefined),
     renameSession: vi.fn().mockResolvedValue(undefined),
     updateConfig: vi.fn().mockResolvedValue(undefined),
-    getPreferences: vi.fn().mockResolvedValue({}),
-    setPreferences: vi.fn().mockResolvedValue(undefined),
     getConfig: vi.fn().mockResolvedValue({
       provider: 'ollama',
       model: 'qwen3:4b-instruct',

@@ -34,9 +34,10 @@ Method: traced every REST/WebSocket contract from `frontend/src` against the han
 - Files: `src/server/routes/routes_general.c`, `src/main.c`, `config.conf.example` (`[openai]` section).
 - Verified: 6 new Check tests (ollama default URL, explicit query, openai URL + `.data[].id` parsing, `lm_studio` alias, custom `openai.base_url` from a real conf file, unknown provider → empty without curl) + 1 updated; 30 suites green under ASan+UBSan. Live before/after with two fake model servers: old binary returns the Ollama list for every provider; new binary returns each provider's own list.
 
-### 5. Preferences endpoint is a stub
-- `GET /api/preferences` returns `{"preferences":{}}` (`src/server/routes/routes_general.c:217-228`) while the FE reads top-level `model`/`provider` (`frontend/src/api/client.ts:127-129`) → always `undefined` → model/provider reset to defaults on every reload.
-- `POST /api/preferences` discards the request body (`src/server/routes/routes_general.c:230-240`, `(void)req`). The FE believes settings persist; nothing is stored.
+### 5. Preferences endpoint is a stub — **RESOLVED (routes removed)**
+- Old behavior: `GET /api/preferences` returned `{"preferences":{}}` while the FE read top-level `model`/`provider` → always `undefined` → model/provider reset on every reload; `POST /api/preferences` discarded the body (`(void)req`).
+- Resolution: the endpoints were removed rather than implemented — `handle_preferences_get`/`handle_preferences_set` deleted from `src/server/routes/routes_general.c`/`.h` and the routes dropped from the table (`src/server/routes/routes.c`), so there is no longer a contract to diverge. The FE persists model/provider/models/effort to `localStorage` (`echo-ai-chat-preferences`, `frontend/src/context/ChatProvider.tsx:26-42`) as the single source of truth; `getPreferences`/`setPreferences` were deleted from `frontend/src/api/client.ts`. Per-browser persistence only — no cross-device sync.
+- Verified: `test_routes_general` preferences tests removed; 29 suites green under ASan+UBSan; FE typecheck/lint/tests clean.
 
 ### 6. `change-password` never verifies the current password
 - Frontend sends `current_password` / `new_password` / `confirm` (`frontend/src/api/client.ts:181-185`); backend reads only `new_password` (`src/server/routes/routes_auth.c:252`).

@@ -315,40 +315,6 @@ START_TEST(test_handle_health_ok)
 END_TEST
 
 /* ---------------------------------------------------------------------------
- * handle_preferences_get
- * --------------------------------------------------------------------------- */
-
-START_TEST(test_handle_preferences_get_empty)
-{
-    ServerContext ctx = {0};
-    HTTPRequest req = {0};
-
-    handle_preferences_get(&req, NULL, &ctx);
-    ck_assert_int_eq(captured_status, 200);
-    ck_assert(strstr(captured_body, "\"preferences\":{"));
-
-    reset_stubs();
-}
-END_TEST
-
-/* ---------------------------------------------------------------------------
- * handle_preferences_set
- * --------------------------------------------------------------------------- */
-
-START_TEST(test_handle_preferences_set_ok)
-{
-    ServerContext ctx = {0};
-    HTTPRequest req = {0};
-
-    handle_preferences_set(&req, NULL, &ctx);
-    ck_assert_int_eq(captured_status, 200);
-    ck_assert(strstr(captured_body, "\"saved\":true"));
-
-    reset_stubs();
-}
-END_TEST
-
-/* ---------------------------------------------------------------------------
  * handle_providers
  * --------------------------------------------------------------------------- */
 
@@ -1033,12 +999,6 @@ Suite *routes_general_suite(void)
     TCase *tc = tcase_create("handle_health");
     tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_handle_health_ok);
-    suite_add_tcase(s, tc);
-
-    tc = tcase_create("handle_preferences");
-    tcase_add_checked_fixture(tc, setup, teardown);
-    tcase_add_test(tc, test_handle_preferences_get_empty);
-    tcase_add_test(tc, test_handle_preferences_set_ok);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("handle_status");
