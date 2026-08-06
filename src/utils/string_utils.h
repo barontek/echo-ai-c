@@ -26,4 +26,10 @@ void str_array_free(StrArray *arr);
 
 char *sanitize_json(const char *str);
 
+/* Hard-truncate `text` to at most `max_chars` bytes, appending a
+ * "[... truncated, N chars omitted ...]" marker when anything was cut.
+ * Returns a freshly malloc'd NUL-terminated string the caller must free;
+ * returns NULL only on allocation failure. NULL input yields NULL. */
+char *str_truncate_ellipsis(const char *text, size_t max_chars);
+
 #endif

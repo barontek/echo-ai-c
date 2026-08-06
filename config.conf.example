@@ -84,6 +84,10 @@ max_context_messages = 50
 # Max characters to keep in context (default: 100000)
 max_context_chars = 100000
 
+# Cap on a single tool result before it enters the context; oversized
+# results are truncated with an "[... truncated ...]" marker (default: 25000)
+max_tool_result_chars = 25000
+
 [ollama]
 # Base URL of the Ollama server (default: http://localhost:11434)
 base_url = http://localhost:11434
@@ -120,6 +124,10 @@ allow_network = true
 
 # Maximum file size in bytes for read/write (default: 10485760 = 10 MB)
 max_file_size = 10485760
+
+# Maximum characters of fetched page text passed to the LLM. web_fetch
+# strips HTML boilerplate and truncates to this budget (default: 25000)
+web_fetch_max_chars = 25000
 
 # Maximum execution time for bash commands in seconds (default: 300)
 max_execution_time = 300

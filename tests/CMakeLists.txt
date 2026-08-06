@@ -70,6 +70,18 @@ if(HAS_LIBFUZZER)
     target_link_libraries(fuzz_session_deserialize PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::CJSON)
 
+    # fuzz_html_extract — exercises html_extract_text with fuzzed raw HTML
+    add_executable(fuzz_html_extract
+        ../src/utils/html_extract.c
+        ../src/utils/string_utils.c
+        fuzz/fuzz_html_extract.c
+    )
+    target_include_directories(fuzz_html_extract PRIVATE ../src)
+    target_compile_options(fuzz_html_extract PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+    target_link_libraries(fuzz_html_extract PRIVATE
+        -fsanitize=fuzzer,address,undefined m)
+
     add_executable(fuzz_http_parser
         ../src/server/server.c
         ../src/utils/string_utils.c

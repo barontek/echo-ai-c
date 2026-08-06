@@ -8,6 +8,7 @@
 #include "tool.h"
 #include "../safety/safety.h"
 #include "../utils/string_utils.h"
+#include "../utils/html_extract.h"
 #include "../utils/logging.h"
 
 typedef struct {
@@ -95,7 +96,25 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
 #endif
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "EchoAI/1.0");
+    /* Bot-detection hygiene: HTTP/2 and a browser-shaped header set. A bare
+     * UA (e.g. "EchoAI/1.0") plus HTTP/1.1 gets 403'd by Cloudflare/WAF
+     * filters even on pages that allow automated access. */
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                     "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0");
+    struct curl_slist *hdrs = NULL;
+    hdrs = curl_slist_append(hdrs, "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+    hdrs = curl_slist_append(hdrs, "Accept-Language: en-US,en;q=0.9");
+    hdrs = curl_slist_append(hdrs, "Upgrade-Insecure-Requests: 1");
+    hdrs = curl_slist_append(hdrs, "Sec-Fetch-Dest: document");
+    hdrs = curl_slist_append(hdrs, "Sec-Fetch-Mode: navigate");
+    hdrs = curl_slist_append(hdrs, "Sec-Fetch-Site: none");
+    hdrs = curl_slist_append(hdrs, "Sec-Fetch-User: ?1");
+    if (hdrs) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+    /* Accept-Encoding is negotiated by curl itself ("" = all supported
+     * encodings); without this the server's gzip/br response arrives
+     * undecoded and the extractor sees compressed bytes. */
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(curl, CURLOPT_PROXY, "");
     curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, open_socket_cb);
     curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, ctx->safety);
@@ -105,11 +124,19 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
 
     CURLcode res = curl_easy_perform(curl);
+
+    /* Capture the Content-Type before cleanup: it decides whether the body
+     * is extracted (HTML), truncated (text) or replaced by a descriptor. */
+    char *ctype = NULL;
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ctype);
+    char *ctype_copy = ctype ? str_dup(ctype) : NULL;
     curl_easy_cleanup(curl);
+    curl_slist_free_all(hdrs);
 
     if (res != CURLE_OK)
     {
         free(buf.data);
+        free(ctype_copy);
         if (buf.too_large)
             return tool_result_error("response too large", "policy_denied");
         char *err = NULL;
@@ -120,7 +147,18 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
         return tr;
     }
 
-    ToolResult *tr = tool_result_create(buf.data ? buf.data : "(empty response)");
+    char *simplified = content_extract_for_llm(ctype_copy, buf.data, buf.len,
+                                               ctx->safety->web_fetch_max_chars);
+    free(ctype_copy);
+    if (!simplified)
+    {
+        free(buf.data);
+        return tool_result_error("out of memory during content extraction",
+                                 "execution_error");
+    }
+
+    ToolResult *tr = tool_result_create(simplified);
+    free(simplified);
     free(buf.data);
     return tr;
 }
@@ -145,7 +183,8 @@ Tool *tool_web_fetch_create(SafetyConfig *safety)
     ctx->safety = safety;
 
     t->name = str_dup("web_fetch");
-    t->description = str_dup("Fetch a URL and return its text content");
+    t->description = str_dup("Fetch a URL and return its extracted text "
+                             "(HTML boilerplate stripped, links as citations)");
     t->parameters_schema = str_dup(
         "{\"type\":\"object\",\"properties\":{"
         "\"url\":{\"type\":\"string\",\"description\":\"URL to fetch\"}"

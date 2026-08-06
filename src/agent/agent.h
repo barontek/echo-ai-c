@@ -22,6 +22,7 @@ typedef struct {
     int max_iterations;
     int max_context_messages;
     int max_context_chars;
+    int max_tool_result_chars;
     int num_ctx;
     int keep_alive_secs;
     int parallel_tool_exec;
@@ -53,6 +54,7 @@ typedef struct {
     int max_iterations;
     int max_context_messages;
     int max_context_chars;
+    int max_tool_result_chars;
     int parallel_tool_exec;
     char *effort; /* owned; NULL = provider default */
     volatile int cancel_requested;

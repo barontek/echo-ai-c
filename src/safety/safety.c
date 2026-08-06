@@ -27,6 +27,7 @@ SafetyConfig *safety_config_create(void)
     cfg->max_execution_time = 300;
     cfg->allow_network = 1;
     cfg->read_size_threshold = 1048576;
+    cfg->web_fetch_max_chars = 25000;
 
     return cfg;
 }
@@ -107,6 +108,7 @@ void safety_load_from_conf(SafetyConfig *cfg, const Conf *conf)
 
     cfg->read_requires_approval = conf_get_int(conf, "safety.read_requires_approval", 0);
     cfg->read_size_threshold = (size_t)conf_get_int(conf, "safety.read_size_threshold", 1048576);
+    cfg->web_fetch_max_chars = (size_t)conf_get_int(conf, "safety.web_fetch_max_chars", 25000);
 }
 
 static void free_str_array(char ***arr, int *count)

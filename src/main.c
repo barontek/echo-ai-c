@@ -84,6 +84,7 @@ static AgentConfig *load_agent_config(Conf *conf)
     cfg->max_iterations = conf_get_int(conf, "agent.max_iterations", 50);
     cfg->max_context_messages = conf_get_int(conf, "agent.max_context_messages", 50);
     cfg->max_context_chars = conf_get_int(conf, "agent.max_context_chars", 100000);
+    cfg->max_tool_result_chars = conf_get_int(conf, "agent.max_tool_result_chars", 25000);
     cfg->num_ctx = conf_get_int(conf, "ollama.num_ctx", 4096);
     cfg->keep_alive_secs = conf_get_int(conf, "ollama.keep_alive_secs", 120);
 

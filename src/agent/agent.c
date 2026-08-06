@@ -79,6 +79,7 @@ Agent *agent_create(const AgentConfig *cfg)
     agent->max_iterations = cfg->max_iterations;
     agent->max_context_messages = cfg->max_context_messages;
     agent->max_context_chars = cfg->max_context_chars;
+    agent->max_tool_result_chars = cfg->max_tool_result_chars;
     agent->parallel_tool_exec = cfg->parallel_tool_exec;
     agent->cancel_requested = 0;
     agent->cb = cb_create(5, 30000);
@@ -198,9 +199,24 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
         if (!result)
             result = tool_result_error("tool returned no result", "execution_error");
 
+        /* Generic safety net: cap oversized tool results so one result
+         * cannot blow the whole context window. web_fetch already extracts
+         * and truncates; this catches read_file / rest_api / grep etc.
+         * On truncation OOM we fall back to the untruncated content
+         * (borrowed, not owned) rather than losing the result. */
+        const char *raw_content = result->content ? result->content : "";
+        const char *display = raw_content;
+        char *capped = NULL;
+        if (agent->max_tool_result_chars > 0)
+        {
+            capped = str_truncate_ellipsis(raw_content,
+                                           (size_t)agent->max_tool_result_chars);
+            if (capped) display = capped;
+        }
+
         free(calls[i].result_content);
         free(calls[i].result_error);
-        calls[i].result_content = str_dup(result->content ? result->content : "");
+        calls[i].result_content = str_dup(display);
         calls[i].result_error = str_dup(result->error ? result->error : "");
 
         if (agent->on_tool_end)
@@ -220,8 +236,7 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
                                     "Total tool execution errors by name");
         }
 
-        Message *tool_msg = message_create("tool",
-                                            result->content ? result->content : "");
+        Message *tool_msg = message_create("tool", display);
         tool_msg->tool_call_id = str_dup(calls[i].id ? calls[i].id : "");
         tool_msg->tool_name = str_dup(calls[i].name);
         if (result->error)
@@ -235,6 +250,7 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
         }
 
         agent_append_message(agent, tool_msg);
+        free(capped);
         if (result->error)
             cb_manager_tool_error(agent->cb_mgr, NULL, tname, result->error);
         else

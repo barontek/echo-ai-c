@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -101,6 +102,40 @@ void str_array_free(StrArray *arr)
     free(arr->items);
     arr->items = NULL;
     arr->count = 0;
+}
+
+char *str_truncate_ellipsis(const char *text, size_t max_chars)
+{
+    if (!text) return NULL;
+
+    size_t len = strlen(text);
+    if (len <= max_chars) return str_dup(text);
+
+    char buf[64];
+    int ml = snprintf(buf, sizeof(buf),
+                      "[... truncated, %zu chars omitted ...]", len - max_chars);
+    if (ml < 0) ml = 0;
+    if ((size_t)ml >= sizeof(buf)) ml = (int)sizeof(buf) - 1;
+    size_t mlen = (size_t)ml;
+
+    /* Keep the first `keep` chars of text; the marker replaces the tail. */
+    size_t keep;
+    if (max_chars > mlen + 1)
+    {
+        keep = max_chars - mlen; /* text + marker == max_chars */
+    }
+    else
+    {
+        keep = max_chars; /* no room for the marker; hard cut */
+        mlen = 0;
+    }
+
+    char *out = malloc(keep + mlen + 1);
+    if (!out) return NULL;
+    memcpy(out, text, keep);
+    if (mlen) memcpy(out + keep, buf, mlen);
+    out[keep + mlen] = '\0';
+    return out;
 }
 
 char *sanitize_json(const char *str)

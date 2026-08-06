@@ -28,6 +28,7 @@ typedef struct {
     char *audit_log_path;
     int read_requires_approval;
     size_t read_size_threshold;
+    size_t web_fetch_max_chars;
 } SafetyConfig;
 
 SafetyConfig *safety_config_create(void);
