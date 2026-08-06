@@ -1,9 +1,11 @@
 #include <check.h>
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <curl/curl.h>
 
 /* Exported by web_fetch.c when built with WEB_FETCH_TEST=1. */
 extern int web_fetch_test_looks_like_challenge(const char *data, size_t len);
@@ -12,6 +14,15 @@ extern int web_fetch_test_retry_challenge(char **data, size_t *len,
                                           size_t max_len, char **ctype,
                                           const char *url, const char *binary,
                                           const char *imp_flag, int timeout_s);
+extern int web_fetch_test_error_path_retry(char **data, size_t *len,
+                                           size_t max_len, char **ctype,
+                                           const char *url, int timeout_s,
+                                           int policy_rejected,
+                                           int resolve_failed);
+extern int web_fetch_test_open_socket_addr(unsigned int s_addr_be,
+                                           curl_socket_t *out);
+extern int web_fetch_test_open_socket_addr6(const unsigned char s6[16],
+                                            curl_socket_t *out);
 
 static char test_dir[64];
 static char *saved_path = NULL;
@@ -29,6 +40,8 @@ static void teardown(void)
     {
         char path[256];
         snprintf(path, sizeof(path), "%s/curl-impersonate-chrome", test_dir);
+        unlink(path);
+        snprintf(path, sizeof(path), "%s/spawn_marker", test_dir);
         unlink(path);
         rmdir(test_dir);
         test_dir[0] = '\0';
@@ -59,14 +72,40 @@ static void write_fake_binary(const char *body)
 
 static void set_path_to_test_dir(void)
 {
-    char env[300];
-    snprintf(env, sizeof(env), "%s:%s", test_dir, saved_path);
+    /* saved_path can be long (nix dev shell): size dynamically so the
+     * fake binary's own external commands (touch etc.) stay findable. */
+    size_t need = strlen(test_dir) + 1 + strlen(saved_path) + 1;
+    char *env = malloc(need);
+    if (!env) abort();
+    snprintf(env, need, "%s:%s", test_dir, saved_path);
     setenv("PATH", env, 1);
+    free(env);
 }
 
 static void set_path_to_empty(void)
 {
     setenv("PATH", test_dir, 1);
+}
+
+/* Writes a fake impersonator that emits `body` on stdout AND touches
+ * spawn_marker in the fixture dir, proving the binary was executed. */
+static void write_marker_fake_binary(const char *body)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "%s/curl-impersonate-chrome", test_dir);
+    FILE *f = fopen(path, "w");
+    if (!f) abort();
+    fprintf(f, "#!/bin/sh\ntouch %s/spawn_marker\nprintf '%%s' '%s'\n",
+            test_dir, body);
+    fclose(f);
+    chmod(path, 0755);
+}
+
+static int marker_exists(void)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "%s/spawn_marker", test_dir);
+    return access(path, F_OK) == 0;
 }
 
 /* --- challenge detection ------------------------------------------- */
@@ -252,6 +291,100 @@ START_TEST(test_retry_size_limit_keeps_body)
 }
 END_TEST
 
+/* --- SSRF gate: socket-policy callback ------------------------------- */
+
+START_TEST(test_socket_cb_flags_private_address)
+{
+    curl_socket_t sock = 0;
+    int rejected = web_fetch_test_open_socket_addr(inet_addr("169.254.169.254"),
+                                                   &sock);
+    ck_assert_int_eq(rejected, 1);
+    ck_assert_int_eq(sock, CURL_SOCKET_BAD);
+}
+END_TEST
+
+START_TEST(test_socket_cb_accepts_public_address)
+{
+    curl_socket_t sock = 0;
+    int rejected = web_fetch_test_open_socket_addr(inet_addr("8.8.8.8"), &sock);
+    ck_assert_int_eq(rejected, 0);
+    ck_assert_int_ne(sock, CURL_SOCKET_BAD);
+    if (sock != CURL_SOCKET_BAD) close(sock);
+}
+END_TEST
+
+START_TEST(test_socket_cb_flags_ipv6_linklocal)
+{
+    unsigned char s6[16];
+    ck_assert_int_eq(inet_pton(AF_INET6, "fe80::1", s6), 1);
+    curl_socket_t sock = 0;
+    int rejected = web_fetch_test_open_socket_addr6(s6, &sock);
+    ck_assert_int_eq(rejected, 1);
+    ck_assert_int_eq(sock, CURL_SOCKET_BAD);
+}
+END_TEST
+
+/* --- SSRF gate: error-path suppression ------------------------------- */
+
+START_TEST(test_error_path_suppressed_on_policy_rejection)
+{
+    write_marker_fake_binary("retried body");
+    set_path_to_test_dir();
+
+    char *body = strdup("partial body");
+    char *ctype = strdup("text/html");
+    char *orig = body;
+    size_t len = strlen(body);
+    int replaced = web_fetch_test_error_path_retry(
+        &body, &len, 100000, &ctype,
+        "https://www.example.com/route", 10, 1, 0);
+    ck_assert_int_eq(replaced, 0);
+    ck_assert_ptr_eq(body, orig);
+    ck_assert_int_eq(marker_exists(), 0);
+    free(body);
+    free(ctype);
+}
+END_TEST
+
+START_TEST(test_error_path_suppressed_on_resolve_failure)
+{
+    write_marker_fake_binary("retried body");
+    set_path_to_test_dir();
+
+    char *body = strdup("partial body");
+    char *ctype = strdup("text/html");
+    char *orig = body;
+    size_t len = strlen(body);
+    int replaced = web_fetch_test_error_path_retry(
+        &body, &len, 100000, &ctype,
+        "https://www.example.com/route", 10, 0, 1);
+    ck_assert_int_eq(replaced, 0);
+    ck_assert_ptr_eq(body, orig);
+    ck_assert_int_eq(marker_exists(), 0);
+    free(body);
+    free(ctype);
+}
+END_TEST
+
+START_TEST(test_error_path_retries_when_not_rejected)
+{
+    write_marker_fake_binary("retried body");
+    set_path_to_test_dir();
+
+    char *body = strdup("partial body");
+    char *ctype = strdup("text/html");
+    size_t len = strlen(body);
+    int replaced = web_fetch_test_error_path_retry(
+        &body, &len, 100000, &ctype,
+        "https://www.example.com/route", 10, 0, 0);
+    ck_assert_int_eq(replaced, 1);
+    ck_assert(strstr(body, "retried body") != NULL);
+    ck_assert_int_eq(marker_exists(), 1);
+    free(body);
+    free(ctype);
+}
+END_TEST
+
 static Suite *web_fetch_suite(void)
 {
     Suite *s = suite_create("web_fetch");
@@ -270,6 +403,12 @@ static Suite *web_fetch_suite(void)
     tcase_add_test(tc, test_retry_binary_failure_keeps_body);
     tcase_add_test(tc, test_retry_times_out_keeps_body);
     tcase_add_test(tc, test_retry_size_limit_keeps_body);
+    tcase_add_test(tc, test_socket_cb_flags_private_address);
+    tcase_add_test(tc, test_socket_cb_accepts_public_address);
+    tcase_add_test(tc, test_socket_cb_flags_ipv6_linklocal);
+    tcase_add_test(tc, test_error_path_suppressed_on_policy_rejection);
+    tcase_add_test(tc, test_error_path_suppressed_on_resolve_failure);
+    tcase_add_test(tc, test_error_path_retries_when_not_rejected);
 
     suite_add_tcase(s, tc);
     return s;

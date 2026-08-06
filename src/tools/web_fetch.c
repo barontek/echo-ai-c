@@ -20,6 +20,14 @@ typedef struct {
     SafetyConfig *safety;
 } WebCtx;
 
+/* Per-call state for the fetch, stack-declared in web_fetch_execute so it
+ * dies with the frame: no shared/static state that concurrent calls or a
+ * stale reuse could corrupt. */
+typedef struct {
+    SafetyConfig *safety;
+    int socket_policy_rejected;
+} FetchCtx;
+
 typedef struct {
     char *data;
     size_t len;
@@ -31,10 +39,13 @@ typedef struct {
 static curl_socket_t open_socket_cb(void *userdata, curlsocktype purpose,
                                     struct curl_sockaddr *address)
 {
-    (void)userdata;
     (void)purpose;
+    FetchCtx *fc = userdata;
     if (!safety_check_socket_address((const struct sockaddr *)&address->addr))
+    {
+        fc->socket_policy_rejected = 1;
         return CURL_SOCKET_BAD;
+    }
     return socket(address->family, address->socktype, address->protocol);
 }
 
@@ -305,6 +316,21 @@ static int retry_with_impersonator(WriteBuf *buf, char **ctype, const char *url,
     return 0;
 }
 
+/* Error-path gate: the impersonator subprocess does its own resolution and
+ * connect with no socket-policy hook, so suppress the retry when the policy
+ * rejected an address, or when resolution failed (open_socket_cb never ran,
+ * so no address was ever validated; the subprocess' second lookup could
+ * answer differently). Bot walls never present as resolve failures. */
+static int error_path_retry_with_impersonator(WriteBuf *buf, char **ctype,
+                                              const char *url, CURLcode res,
+                                              const FetchCtx *fc,
+                                              int timeout_s)
+{
+    if (fc->socket_policy_rejected || res == CURLE_COULDNT_RESOLVE_HOST)
+        return 0;
+    return retry_with_impersonator(buf, ctype, url, 0, timeout_s);
+}
+
 static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
 {
     WebCtx *ctx = self->ctx;
@@ -363,7 +389,8 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(curl, CURLOPT_PROXY, "");
     curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, open_socket_cb);
-    curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, ctx->safety);
+    FetchCtx fctx = {.safety = ctx->safety};
+    curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, &fctx);
 
     WriteBuf buf = {.max_len = ctx->safety->max_file_size};
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
@@ -384,8 +411,8 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
         /* Connection-level bot block (TLS drop, RST, ...): before giving
          * up, let the impersonator try — it wins where the server rejects
          * the TLS fingerprint outright. */
-        if (retry_with_impersonator(&buf, &ctype_copy, url, 0,
-                                    IMPERSONATE_TIMEOUT_S))
+        if (error_path_retry_with_impersonator(&buf, &ctype_copy, url, res,
+                                               &fctx, IMPERSONATE_TIMEOUT_S))
             res = CURLE_OK;
     }
     else
@@ -401,6 +428,9 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
         free(buf.data);
         free(ctype_copy);
         free(url);
+        if (fctx.socket_policy_rejected)
+            return tool_result_error("connection blocked by network policy",
+                                     "policy_denied");
         if (buf.too_large)
             return tool_result_error("response too large", "policy_denied");
         char *err = NULL;
@@ -464,6 +494,7 @@ Tool *tool_web_fetch_create(SafetyConfig *safety)
 #ifdef WEB_FETCH_TEST
 /* Test-only exports: keep the challenge/impersonator logic unit-testable
  * without any network or a real curl-impersonate install. */
+#include <netinet/in.h>
 
 int web_fetch_test_looks_like_challenge(const char *data, size_t len)
 {
@@ -475,9 +506,9 @@ int web_fetch_test_binary_on_path(const char *name)
     return binary_on_path(name);
 }
 
-/* Runs the single-binary retry on caller-owned buffers.  On success
- * *data is replaced (caller frees the new buffer) and 1 is returned;
- * on failure *data is untouched and 0 is returned. */
+/* Runs the single-binary challenge retry on caller-owned buffers: on
+ * success *data is replaced (caller frees the new buffer) and 1 is
+ * returned; on failure *data is untouched and 0 is returned. */
 int web_fetch_test_retry_challenge(char **data, size_t *len, size_t max_len,
                                    char **ctype, const char *url,
                                    const char *binary, const char *imp_flag,
@@ -493,5 +524,73 @@ int web_fetch_test_retry_challenge(char **data, size_t *len, size_t max_len,
         *len = buf.len;
     }
     return replaced;
+}
+
+/* Runs the error-path gate on caller-owned buffers.  Same contract as
+ * web_fetch_test_retry_challenge, with the gate's two suppression inputs
+ * mapped to booleans (resolve_failed -> CURLE_COULDNT_RESOLVE_HOST). */
+int web_fetch_test_error_path_retry(char **data, size_t *len, size_t max_len,
+                                    char **ctype, const char *url,
+                                    int timeout_s, int policy_rejected,
+                                    int resolve_failed)
+{
+    WriteBuf buf = {.data = *data, .len = *len, .cap = *len + 1,
+                    .max_len = max_len};
+    FetchCtx fc = {.socket_policy_rejected = policy_rejected};
+    CURLcode res = resolve_failed ? CURLE_COULDNT_RESOLVE_HOST : CURLE_OK;
+    int replaced = error_path_retry_with_impersonator(
+        &buf, ctype, url, res, &fc, timeout_s);
+    if (replaced)
+    {
+        *data = buf.data;
+        *len = buf.len;
+    }
+    return replaced;
+}
+
+/* Runs the real open_socket_cb against a fabricated address, returning the
+ * callback's flag state.  s_addr_be is in network byte order.  A successful
+ * callback opens a real socket in *out (test closes it); a rejected one
+ * leaves CURL_SOCKET_BAD. */
+int web_fetch_test_open_socket_addr(unsigned int s_addr_be,
+                                    curl_socket_t *out)
+{
+    /* curl_sockaddr only carries 16 bytes of addr; fabricate the larger
+     * structs via a union so the writes stay inside the declared storage. */
+    union {
+        struct curl_sockaddr ca;
+        unsigned char storage[sizeof(struct curl_sockaddr) + 16];
+    } u;
+    memset(&u, 0, sizeof(u));
+    u.ca.family = AF_INET;
+    u.ca.socktype = SOCK_STREAM;
+    u.ca.protocol = IPPROTO_TCP;
+    u.ca.addrlen = sizeof(struct sockaddr_in);
+    struct sockaddr_in *in = (struct sockaddr_in *)&u.ca.addr;
+    in->sin_family = AF_INET;
+    in->sin_addr.s_addr = s_addr_be;
+    FetchCtx fc = {0};
+    *out = open_socket_cb(&fc, CURLSOCKTYPE_IPCXN, &u.ca);
+    return fc.socket_policy_rejected;
+}
+
+int web_fetch_test_open_socket_addr6(const unsigned char s6[16],
+                                     curl_socket_t *out)
+{
+    union {
+        struct curl_sockaddr ca;
+        unsigned char storage[sizeof(struct curl_sockaddr) + 16];
+    } u;
+    memset(&u, 0, sizeof(u));
+    u.ca.family = AF_INET6;
+    u.ca.socktype = SOCK_STREAM;
+    u.ca.protocol = IPPROTO_TCP;
+    u.ca.addrlen = sizeof(struct sockaddr_in6);
+    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&u.ca.addr;
+    in6->sin6_family = AF_INET6;
+    memcpy(&in6->sin6_addr.s6_addr, s6, 16);
+    FetchCtx fc = {0};
+    *out = open_socket_cb(&fc, CURLSOCKTYPE_IPCXN, &u.ca);
+    return fc.socket_policy_rejected;
 }
 #endif
