@@ -39,9 +39,10 @@ Method: traced every REST/WebSocket contract from `frontend/src` against the han
 - Resolution: the endpoints were removed rather than implemented — `handle_preferences_get`/`handle_preferences_set` deleted from `src/server/routes/routes_general.c`/`.h` and the routes dropped from the table (`src/server/routes/routes.c`), so there is no longer a contract to diverge. The FE persists model/provider/models/effort to `localStorage` (`echo-ai-chat-preferences`, `frontend/src/context/ChatProvider.tsx:26-42`) as the single source of truth; `getPreferences`/`setPreferences` were deleted from `frontend/src/api/client.ts`. Per-browser persistence only — no cross-device sync.
 - Verified: `test_routes_general` preferences tests removed; 29 suites green under ASan+UBSan; FE typecheck/lint/tests clean.
 
-### 6. `change-password` never verifies the current password
-- Frontend sends `current_password` / `new_password` / `confirm` (`frontend/src/api/client.ts:181-185`); backend reads only `new_password` (`src/server/routes/routes_auth.c:252`).
-- Anyone with the UI open can change the DB password without the old one; `confirm` is also unverified server-side.
+### 6. `change-password` never verifies the current password — **FIXED**
+- Old behavior: the backend read only `new_password` (`src/server/routes/routes_auth.c`), so anyone holding the unlock token (the UI being open, or a lifted localStorage token) could re-encrypt the DB to a password of their choice without knowing the current one; `confirm` was also unverified server-side.
+- Fix: `handle_change_password` now requires and verifies `current_password` via the same `session_manager_create_ex` check the unlock flow uses (AUTH_FAILED → 401 "current password is incorrect", recorded against the same rate-limiter bucket as `/api/unlock` — 5 attempts/20s → 429), rejects `confirm` mismatches with 400, and aligns the new-password minimum with the FE (8 chars, matching the dialog's error mapping). The throwaway verification manager is freed before any key material is touched; password buffers are zeroed after use. The FE already sent all three fields and rendered the error branch — no FE change needed.
+- Verified: 6 new Check tests (missing current → 400, confirm mismatch → 400, wrong current → 401 + rate-failure recorded + `migration_change_password` not called, rate-limited → 429, storage failure → 500, success path still 200 + migration called) fail on the old handler (wrong current returned 200) and pass on the new one; 40 suites green under ASan+UBSan.
 
 ## MEDIUM
 

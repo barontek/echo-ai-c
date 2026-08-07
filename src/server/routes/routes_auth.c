@@ -268,6 +268,12 @@ void handle_logout(HTTPRequest *req, Client *client, ServerContext *ctx)
 
 void handle_change_password(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
+    char *current = NULL;
+    char *next = NULL;
+    size_t current_len = 0;
+    size_t next_len = 0;
+    cJSON *json = NULL;
+
     if (!ctx->sm)
     {
         server_response_error(client, 400, "session manager not available");
@@ -280,32 +286,106 @@ void handle_change_password(HTTPRequest *req, Client *client, ServerContext *ctx
         return;
     }
 
-    cJSON *json = cJSON_Parse(req->body);
+    /* Same rate-limit bucket as /api/unlock: without this gate a token
+     * holder could brute-force the current password through this endpoint. */
+    if (ctx->rate_limiter &&
+        !rate_limiter_unlock_allowed(ctx->rate_limiter, req->ip, 5, 20))
+    {
+        server_response_error(client, 429, "too many attempts, try again later");
+        return;
+    }
+
+    json = cJSON_Parse(req->body);
     if (!json)
     {
         server_response_error(client, 400, "invalid json");
         return;
     }
 
-    cJSON *pw = cJSON_GetObjectItem(json, "new_password");
-    if (!pw || !pw->valuestring || strlen(pw->valuestring) < 4)
+    cJSON *cur_item = cJSON_GetObjectItem(json, "current_password");
+    if (!cur_item || !cur_item->valuestring)
     {
-        cJSON_Delete(json);
-        server_response_error(client, 400, "new password must be at least 4 characters");
-        return;
+        server_response_error(client, 400, "current password is required");
+        goto cleanup;
+    }
+    current = str_dup(cur_item->valuestring);
+    if (!current)
+    {
+        server_response_error(client, 500, "oom");
+        goto cleanup;
+    }
+    current_len = strlen(current);
+
+    cJSON *new_item = cJSON_GetObjectItem(json, "new_password");
+    if (!new_item || !new_item->valuestring || strlen(new_item->valuestring) < 8)
+    {
+        server_response_error(client, 400, "new password must be at least 8 characters");
+        goto cleanup;
+    }
+    next = str_dup(new_item->valuestring);
+    if (!next)
+    {
+        server_response_error(client, 500, "oom");
+        goto cleanup;
+    }
+    next_len = strlen(next);
+
+    /* Server-side confirm check: defense in depth; the FE also enforces it. */
+    cJSON *confirm_item = cJSON_GetObjectItem(json, "confirm");
+    if (confirm_item && confirm_item->valuestring &&
+        strcmp(confirm_item->valuestring, next) != 0)
+    {
+        server_response_error(client, 400, "new passwords do not match");
+        goto cleanup;
     }
 
-    int rc = migration_change_password(ctx->sm, pw->valuestring);
-    cJSON_Delete(json);
+    /* Prove the current password before touching any key material, using
+     * the same verification as the unlock flow. The throwaway manager is
+     * freed immediately — only its result matters. */
+    const char *home = getenv("HOME");
+    if (!home)
+    {
+        server_response_error(client, 500, "HOME not set");
+        goto cleanup;
+    }
+    char *data_dir = NULL;
+    if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0)
+    {
+        server_response_error(client, 500, "oom");
+        goto cleanup;
+    }
+    SessionManagerCreateResult create_result = SESSION_MANAGER_CREATE_STORAGE_FAILED;
+    SessionManager *probe = session_manager_create_ex(data_dir, current,
+                                                      &create_result);
+    free(data_dir);
+    if (!probe)
+    {
+        if (create_result == SESSION_MANAGER_CREATE_AUTH_FAILED)
+        {
+            if (ctx->rate_limiter)
+                rate_limiter_record_unlock_failure(ctx->rate_limiter, req->ip);
+            server_response_error(client, 401, "current password is incorrect");
+            goto cleanup;
+        }
+        server_response_error(client, 500, "session storage unavailable");
+        goto cleanup;
+    }
+    session_manager_free(probe);
 
+    int rc = migration_change_password(ctx->sm, next);
     if (rc != 0)
     {
         server_response_error(client, 500,
             rc == -2 ?
                 "password changed but activation is incomplete; restart and unlock with the new password" :
                 "password change failed");
-        return;
+        goto cleanup;
     }
 
     server_response_json(client, 200, "{\"changed\":true}");
+
+cleanup:
+    if (current) { memset(current, 0, current_len); free(current); }
+    if (next) { memset(next, 0, next_len); free(next); }
+    cJSON_Delete(json);
 }
