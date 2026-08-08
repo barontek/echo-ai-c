@@ -402,6 +402,25 @@ START_TEST(test_handle_status_unlocked_bad_token)
 }
 END_TEST
 
+START_TEST(test_handle_status_noop_token_unlocked_without_header)
+{
+    /* session-management-disabled mode ("noop" token): the FE must never
+     * see locked=1, or it is stuck on the unlock screen forever. */
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "noop";
+    stub_has_valid_token = 0;
+    HTTPRequest req = {0};
+
+    handle_status(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_body, "\"locked\":false"));
+    ck_assert(strstr(captured_body, "\"needs_setup\":false"));
+
+    reset_stubs();
+}
+END_TEST
+
 START_TEST(test_handle_status_session_enabled)
 {
     SessionManager sm = {0};
@@ -1007,6 +1026,7 @@ Suite *routes_general_suite(void)
     tcase_add_test(tc, test_handle_status_setup);
     tcase_add_test(tc, test_handle_status_unlocked_valid_token);
     tcase_add_test(tc, test_handle_status_unlocked_bad_token);
+    tcase_add_test(tc, test_handle_status_noop_token_unlocked_without_header);
     tcase_add_test(tc, test_handle_status_session_enabled);
     suite_add_tcase(s, tc);
 

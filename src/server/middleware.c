@@ -91,7 +91,13 @@ int middleware_has_valid_ws_token(const char *headers, const char *token)
 int middleware_check_unlock(HTTPRequest *req, ServerContext *ctx)
 {
     if (ctx->state == STATE_UNLOCKED && ctx->unlock_token)
+    {
+        /* "noop" marks session-management-disabled mode: every
+         * unlock-gated route is open without a token. */
+        if (strcmp(ctx->unlock_token, "noop") == 0)
+            return 1;
         return middleware_has_valid_token(req->headers, ctx->unlock_token);
+    }
     return 0;
 }
 
@@ -100,6 +106,11 @@ int middleware_check_unlock_query(HTTPRequest *req, ServerContext *ctx)
     if (!req || !ctx) return 0;
     if (ctx->state != STATE_UNLOCKED || !ctx->unlock_token)
         return 0;
+
+    /* "noop" marks session-management-disabled mode: query-token-gated
+     * routes (SSE) are open without a token. */
+    if (strcmp(ctx->unlock_token, "noop") == 0)
+        return 1;
 
     /* NOTE: passing the unlock token in a URL query parameter means it
      * can end up in browser history, referrer headers, and server logs.

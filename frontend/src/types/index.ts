@@ -41,6 +41,10 @@ export interface ToolCall {
     content: string;
     error: string | null;
   };
+  /* Backend wire shape (history / session GET / done frames). Normalized
+   * to `result` on ingestion — renderers only read `result`. */
+  result_content?: string;
+  result_error?: string;
 }
 
 export interface Config {

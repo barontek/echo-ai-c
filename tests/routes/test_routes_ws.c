@@ -1140,7 +1140,8 @@ START_TEST(test_on_message_invalid_json)
     char dummy_ws = 0;
     ws_chat_on_message((WSClient *)&dummy_ws, "not json", 8, &c);
     ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
-    ck_assert(strstr(captured_ws_json, "invalid json"));
+    ck_assert(strstr(captured_ws_json, "\"content\":\"invalid json\""));
+    ck_assert(!strstr(captured_ws_json, "\"message\":\"invalid json\""));
     reset_capture();
 }
 END_TEST
@@ -1681,7 +1682,8 @@ START_TEST(test_on_message_session_id_stale)
     char dummy_ws = 0;
     ws_chat_on_message((WSClient *)&dummy_ws,
         "{\"type\":\"message\",\"content\":\"x\",\"session_id\":\"other-sess\"}", 60, &c);
-    ck_assert(strstr(captured_ws_json, "stale session_id"));
+    ck_assert(strstr(captured_ws_json, "\"content\":\"stale session_id\""));
+    ck_assert(!strstr(captured_ws_json, "\"message\":\"stale session_id\""));
     reset_capture();
     c.active_session_id = NULL;
 }
@@ -1698,7 +1700,8 @@ START_TEST(test_on_message_session_id_not_found)
     stub_session_load_result = NULL;
     ws_chat_on_message((WSClient *)&dummy_ws,
         "{\"type\":\"message\",\"content\":\"x\",\"session_id\":\"no-such\"}", 56, &c);
-    ck_assert(strstr(captured_ws_json, "session not found"));
+    ck_assert(strstr(captured_ws_json, "\"content\":\"session not found\""));
+    ck_assert(!strstr(captured_ws_json, "\"message\":\"session not found\""));
     reset_capture();
 }
 END_TEST

@@ -6,7 +6,7 @@ import {
   type ConnectionStatus,
 } from './ChatContext';
 import { api } from '../api/client';
-import type { ApprovalRequest, BranchInfo, StreamEvent } from '../types';
+import type { ApprovalRequest, BranchInfo, StreamEvent, ToolCall } from '../types';
 
 const DEBUG = import.meta.env.DEV;
 
@@ -49,23 +49,45 @@ function validateModels(models: string[]): string[] {
   return models.filter((model) => typeof model === 'string' && model.trim().length > 0);
 }
 
+function normalizeToolCallResult(tc: ToolCall): ToolCall {
+  /* Wire shape carries results as result_content/result_error; the app's
+   * canonical shape is result.{content,error}. Normalize on ingestion so
+   * reloaded messages render results the same way live ones do. */
+  if (tc.result) return tc;
+  if (tc.result_content === undefined && tc.result_error === undefined) return tc;
+  return {
+    ...tc,
+    result: {
+      content: tc.result_content || '',
+      error: tc.result_error ?? null,
+    },
+  };
+}
+
 function combineAssistantMessages(
   messages: ChatContextValue['messages']
 ): ChatContextValue['messages'] {
   const combined: ChatContextValue['messages'] = [];
 
-  for (const msg of messages) {
+  for (const raw of messages) {
+    /* Normalize the wire shape once per message so every branch below
+     * (push as-is or merge into a previous assistant) sees canonical
+     * tc.result. */
+    const msg = raw.tool_calls
+      ? { ...raw, tool_calls: raw.tool_calls.map(normalizeToolCallResult) }
+      : raw;
+
     if (msg.role === 'system') continue;
 
     if (msg.role === 'tool') {
       const last = combined[combined.length - 1];
       if (last && last.role === 'assistant' && last.tool_calls && last.tool_calls.length > 0) {
-        for (const tc of last.tool_calls) {
-          if (!tc.result) {
-            tc.result = { content: msg.content || '', error: null };
-            break;
-          }
-        }
+        /* Match by tool_call_id first so concurrent/parallel tool calls
+         * don't collapse onto the first unresolved call. */
+        const target = msg.tool_call_id
+          ? last.tool_calls.find((tc) => tc.tool_call_id === msg.tool_call_id && !tc.result)
+          : last.tool_calls.find((tc) => !tc.result);
+        if (target) target.result = { content: msg.content || '', error: null };
       }
       continue;
     }
@@ -427,20 +449,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                     }
 
                     const mergedToolCalls = (last.tool_calls || []).map((existing) => {
-                      const doneMatch =
-                        data.tool_calls?.find(
-                          (dtc: { name?: string }) => dtc.name === existing.name
-                        );
-                      if (doneMatch && (doneMatch as { result_content?: string; result_error?: string }).result_content) {
-                        return {
-                          ...existing,
-                          result: {
-                            content: (doneMatch as { result_content?: string; result_error?: string }).result_content || '',
-                            error: (doneMatch as { result_content?: string; result_error?: string }).result_error || null,
-                          },
-                        };
-                      }
-                      return existing;
+                      if (existing.result) return existing;
+                      const doneMatch = data.tool_calls?.find(
+                        (dtc) => dtc.name === existing.name
+                      );
+                      if (!doneMatch) return existing;
+                      return normalizeToolCallResult({
+                        ...existing,
+                        result_content: doneMatch.result_content,
+                        result_error: doneMatch.result_error,
+                      });
                     });
 
                     /* Only use data.tool_calls to enrich existing tool_calls

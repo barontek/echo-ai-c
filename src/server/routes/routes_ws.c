@@ -463,7 +463,7 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
     cJSON *json = cJSON_Parse(data);
     if (!json)
     {
-        ws_send_json(ws, "{\"type\":\"error\",\"message\":\"invalid json\"}");
+        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"invalid json\"}");
         return;
     }
 
@@ -474,7 +474,7 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
         {
             if (strcmp(session_id_item->valuestring, c->active_session_id) != 0)
             {
-                ws_send_json(ws, "{\"type\":\"error\",\"message\":\"stale session_id\"}");
+                ws_send_json(ws, "{\"type\":\"error\",\"content\":\"stale session_id\"}");
                 cJSON_Delete(json);
                 return;
             }
@@ -540,7 +540,7 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                  * fresh id (per C7), creating a disconnect between the
                  * client's expected session and reality. */
                 cJSON_Delete(json);
-                ws_send_json(ws, "{\"type\":\"error\",\"message\":\"session not found\"}");
+                ws_send_json(ws, "{\"type\":\"error\",\"content\":\"session not found\"}");
                 return;
             }
         }

@@ -344,6 +344,28 @@ START_TEST(test_check_unlock_query_null_req)
 }
 END_TEST
 
+START_TEST(test_check_unlock_noop_token_open_without_header)
+{
+    /* "noop" marks session-management-disabled mode: unlock-gated routes
+     * must be open even with no token header at all. */
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "noop";
+    ck_assert_int_eq(middleware_check_unlock(&req, &ctx), 1);
+}
+END_TEST
+
+START_TEST(test_check_unlock_query_noop_token_open_without_token)
+{
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.state = STATE_UNLOCKED;
+    ctx.unlock_token = "noop";
+    ck_assert_int_eq(middleware_check_unlock_query(&req, &ctx), 1);
+}
+END_TEST
+
 Suite *middleware_suite(void)
 {
     Suite *s = suite_create("middleware");
@@ -392,7 +414,12 @@ Suite *middleware_suite(void)
     tcase_add_test(tc_uq, test_check_unlock_query_locked_state);
     tcase_add_test(tc_uq, test_check_unlock_query_null_unlock_token);
     tcase_add_test(tc_uq, test_check_unlock_query_null_req);
+    tcase_add_test(tc_uq, test_check_unlock_query_noop_token_open_without_token);
     suite_add_tcase(s, tc_uq);
+
+    TCase *tc_ul = tcase_create("check_unlock");
+    tcase_add_test(tc_ul, test_check_unlock_noop_token_open_without_header);
+    suite_add_tcase(s, tc_ul);
 
     return s;
 }

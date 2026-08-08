@@ -123,3 +123,116 @@ Any function that allocates more than one thing and then commits a count, index,
 
 **Known gaps as of this sweep:**
 All allocation-safety paths in `metrics.c`, `config.c`, `memory.c`, `session_manager.c`, `change_tracker.c`, `semantic_search.c`, `tool_delegate.c`, and `registry.c` are covered. Any new module with multi-allocation commit logic should get this same treatment before merge, not discovered later via a production crash.
+
+---- DOCUMENTATION
+
+## C Documentation Standards
+
+### Style
+Use kernel-doc style for all public functions (declared in `.h` files) — no `@` tags,
+plain-English field names, matches the project's procedural/no-OOP conventions:
+
+/**
+ * db_open - open a connection to the database
+ * @path: null-terminated path to the SQLite file
+ * @flags: DB_READONLY or DB_CREATE
+ *
+ * Return: pointer to an allocated db_conn_t, or NULL on failure with
+ * errno set. Caller must release the connection with db_close().
+ */
+db_conn_t *db_open(const char *path, int flags);
+
+### Where docs live
+- **Headers (.h) carry the contract.** Every public function gets a doc comment above
+  its declaration in the header — this is what someone integrates against without
+  reading the .c file.
+- **Implementation (.c) carries the "why," not the "what."** Inline comments explain
+  non-obvious decisions, invariants, or workarounds — never restate what the code
+  already says.
+- **File-level header** at the top of every .c/.h: one or two lines on what the module
+  is responsible for and what it depends on.
+
+/*
+ * db_crypto.c - Fernet-based field-level encryption for session records.
+ * Depends on: sqlite3.
+ */
+
+### Non-negotiable per function (C has no GC, no exceptions — the compiler won't
+catch you getting these wrong):
+1. **Ownership** — who allocates, who frees. Any returned pointer: does the caller own it?
+2. **Lifetime** — if a returned pointer becomes invalid after some other call
+   (e.g. a free/realloc elsewhere), say so explicitly.
+3. **NULL behavior** — does the function accept NULL args? Can it return NULL, and when?
+4. **Thread-safety** — safe to call concurrently? Does it touch global/static state?
+5. **Error signaling** — return code vs errno vs out-param. State which one, and use
+   it consistently across the whole codebase.
+
+### General rules
+- Document the interface, not the implementation. If a comment needs to change every
+  time the function body changes without its behavior changing, it's in the wrong place.
+- Don't restate the code (`// increment i` above `i++` is noise) — comment intent, not mechanics.
+- Update the doc comment in the same commit as the code change. Stale docs are worse than no docs.
+- One README per module/subsystem explaining what it's for and how pieces fit together —
+  that's where "why does this file exist" gets answered, not in scattered function comments.
+- Consistency over cleverness: one comment format, enforced everywhere.
+- When C is touched by non-C tooling (bindings, agent code review), be extra explicit
+  about ownership/lifetime in headers — that's the bug class invisible to a reviewer
+  unless it's spelled out.
+
+## TypeScript/React Documentation Standards
+
+### Style
+Use TSDoc-style comments for exported functions, types, and components — this is
+what VS Code/hover-tooltips and most TS tooling actually parse:
+
+/**
+ * Fetches and decrypts a session record from the local API.
+ *
+ * @param sessionId - UUID of the session to load.
+ * @param signal - AbortSignal to cancel the request on unmount.
+ * @returns The decrypted session, or null if the session doesn't exist yet.
+ * @throws {UnlockRequiredError} if the vault hasn't been unlocked this run.
+ */
+async function loadSession(sessionId: string, signal?: AbortSignal): Promise<Session | null>;
+
+### Where docs live
+- **Types/interfaces carry the contract.** In TS, the type signature already documents
+  a lot (shape, optionality) — don't restate types in prose. Document what the type
+  itself can't express: valid ranges, invariants between fields, when an optional field
+  is actually required in practice.
+- **Component doc comment goes above the component**, not scattered across individual
+  props — describe what the component owns/renders and what triggers a re-render,
+  not a line-by-line prop list (the props type already is that list).
+- **Hooks get a doc comment stating what they subscribe to and what they clean up** —
+  this is the TS equivalent of C's ownership/lifetime problem.
+
+/**
+ * useSessionStream - subscribes to the SSE stream for a running session.
+ * Cleans up the EventSource on unmount or when sessionId changes.
+ */
+function useSessionStream(sessionId: string): { messages: Message[]; isStreaming: boolean };
+
+### Non-negotiable per exported function/hook (the compiler catches shape, not intent):
+1. **Nullability beyond the type.** `T | null` tells you it *can* be null — the comment
+   says *when*/*why* (not found vs not loaded yet vs intentionally cleared).
+2. **Async failure mode.** Does it throw, return a Result-like type, or swallow errors?
+   State it — `Promise<T>` alone doesn't tell you.
+3. **Effect ownership.** For hooks: what does it subscribe to, and what's torn down
+   on cleanup? Uncleaned subscriptions are this codebase's version of a memory leak.
+4. **Mutation vs new reference.** Does the function mutate its argument, or return a
+   new object/array? Matters for React's referential-equality re-render checks.
+5. **Server vs client boundary.** If a function only works in one context (browser API,
+   Node-only, requires a specific provider context), say so — TS won't catch this.
+
+### General rules
+- Document the interface, not the implementation — same rule as C. If the comment needs
+  editing every time you refactor internals without changing behavior, move it or drop it.
+- Don't document what the type system already says. `// id: the id` above `id: string`
+  is noise; explain constraints the type can't encode instead.
+- Update the doc comment in the same commit as the code change.
+- One README per feature/route directory, not per component — explains how the pieces
+  in that folder compose, not what each file does line by line.
+- Consistency over cleverness: TSDoc tags used the same way project-wide, enforced by
+  a lint rule if the project grows past a handful of contributors.
+- Be explicit about effect cleanup and error-throwing behavior in doc comments — those
+  are the two things an agent doing code review is most likely to get wrong silently.

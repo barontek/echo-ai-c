@@ -1463,4 +1463,107 @@ describe('Branching (edit/regenerate/switch)', () => {
     });
     expect(await screen.findByText('2/2')).toBeInTheDocument();
   });
+
+  describe('tool-call results after reload', () => {
+    /* Regression: the backend wire shape carries tool results as
+     * tool_calls[].result_content / result_error (history / session GET /
+     * done frames), but renderers only read tc.result.{content,error}.
+     * Before the fix, reloaded tool calls never got a result and
+     * rendered as perpetually "running". */
+
+    it('renders wire-shape results (not "running") after a history frame', async () => {
+      const { MessageList } = await import('../components/MessageList');
+      render(
+        <ChatProvider>
+          <MessageList />
+        </ChatProvider>
+      );
+      await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+      pushFrame({ type: 'ready', session_id: 's' });
+      pushFrame({
+        type: 'history',
+        messages: [
+          { role: 'user', content: 'run it' },
+          {
+            role: 'assistant',
+            content: 'done',
+            has_tools: true,
+            tool_calls: [
+              { name: 'bash', arguments: '{"cmd":"ls"}', result_content: 'file1\nfile2' },
+            ],
+          },
+        ],
+      });
+
+      await waitFor(() => {
+        expect(document.querySelector('.tool-call-status--success')).not.toBeNull();
+      });
+      expect(document.querySelector('.tool-call-status--running')).toBeNull();
+      expect(document.querySelector('.tool-call-result')?.textContent).toContain('file1');
+    });
+
+    it('renders a wire-shape error result with the error status', async () => {
+      const { MessageList } = await import('../components/MessageList');
+      render(
+        <ChatProvider>
+          <MessageList />
+        </ChatProvider>
+      );
+      await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+      pushFrame({ type: 'ready', session_id: 's' });
+      pushFrame({
+        type: 'history',
+        messages: [
+          { role: 'user', content: 'run it' },
+          {
+            role: 'assistant',
+            content: 'done',
+            has_tools: true,
+            tool_calls: [
+              { name: 'bash', arguments: '{"cmd":"ls"}', result_error: 'exit 1' },
+            ],
+          },
+        ],
+      });
+
+      await waitFor(() => {
+        expect(document.querySelector('.tool-call-status--error')).not.toBeNull();
+      });
+      expect(document.querySelector('.tool-call-error')?.textContent).toContain('exit 1');
+    });
+
+    it('keeps each tool result on its own call (no collapse onto the first)', async () => {
+      const { MessageList } = await import('../components/MessageList');
+      render(
+        <ChatProvider>
+          <MessageList />
+        </ChatProvider>
+      );
+      await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+      pushFrame({ type: 'ready', session_id: 's' });
+      pushFrame({
+        type: 'history',
+        messages: [
+          { role: 'user', content: 'run it' },
+          {
+            role: 'assistant',
+            content: 'done',
+            has_tools: true,
+            tool_calls: [
+              { name: 'bash', arguments: '{"cmd":"a"}', result_content: 'first result' },
+              { name: 'python_execute', arguments: '{"code":"1"}', result_content: 'second result' },
+            ],
+          },
+        ],
+      });
+
+      await waitFor(() => {
+        const results = document.querySelectorAll('.tool-call-result');
+        expect(results.length).toBe(2);
+      });
+      const results = Array.from(document.querySelectorAll('.tool-call-result'));
+      expect(results[0]?.textContent).toContain('first result');
+      expect(results[1]?.textContent).toContain('second result');
+    });
+  });
 });

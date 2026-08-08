@@ -21,7 +21,11 @@ void handle_status(HTTPRequest *req, Client *client, ServerContext *ctx)
     int locked = (ctx->state == STATE_LOCKED);
     int needs_setup = (ctx->state == STATE_SETUP);
 
+    /* unlock_token "noop" marks session-management-disabled mode: the
+     * server is permanently unlocked and never demands a token (mirrors
+     * the WS gate's special case in server.c). */
     if (ctx->state == STATE_UNLOCKED && ctx->unlock_token &&
+        strcmp(ctx->unlock_token, "noop") != 0 &&
         !middleware_has_valid_token(req->headers, ctx->unlock_token))
         locked = 1;
 
