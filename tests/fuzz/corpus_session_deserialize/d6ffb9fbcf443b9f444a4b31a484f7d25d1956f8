@@ -1,1 +1,0 @@
-[{"role":"user","content":"with tools","id":"m_3","parent_id":"m_2","fork_group_id":"fg_3","tool_calls":[{")d":"tc_0","function":{"name":"bash","arguments":"{\"cmd\":\"ls\"}"}}]}]

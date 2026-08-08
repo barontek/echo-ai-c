@@ -14,3 +14,6 @@ compile_commands.json
 config.conf
 scripts/decrypt_session
 scripts/test_ollama
+
+# libFuzzer mutation artifacts (keep only hand-written seeds)
+tests/fuzz/corpus_session_deserialize/[0-9a-f]*
