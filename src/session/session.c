@@ -122,8 +122,9 @@ char *session_serialize_messages(const Session *session)
  * C2: every str_dup/calloc failure now propagates through unified cleanup
  * labels. For each field the NULL check distinguishes OOM from missing-key:
  * role and content are always present (guaranteed non-NULL str_dup result
- * means OOM); optional fields (id, tool_call_id, tool_name, error_category,
- * thinking, phase, provider_state, and tool_call inner members) only treat a NULL str_dup as OOM
+ * means OOM); optional fields (id, parent_id, fork_group_id, tool_call_id,
+ * tool_name, error_category, thinking, phase, provider_state, and tool_call
+ * inner members) only treat a NULL str_dup as OOM
  * when the source cJSON item was actually a non-NULL string. The cleanup
  * labels route everything through message_clear (NULL-safe, idempotent,
  * zeros the struct) — same pattern as the C15 fix. */
@@ -152,6 +153,8 @@ int session_deserialize_messages(Session *session, const char *json_str)
         cJSON *role = cJSON_GetObjectItem(item, "role");
         cJSON *content = cJSON_GetObjectItem(item, "content");
         cJSON *msg_id = cJSON_GetObjectItem(item, "id");
+        cJSON *parent_id = cJSON_GetObjectItem(item, "parent_id");
+        cJSON *fork_group_id = cJSON_GetObjectItem(item, "fork_group_id");
         cJSON *tool_call_id = cJSON_GetObjectItem(item, "tool_call_id");
         cJSON *tool_name = cJSON_GetObjectItem(item, "tool_name");
         cJSON *error_cat = cJSON_GetObjectItem(item, "error_category");
@@ -171,6 +174,10 @@ int session_deserialize_messages(Session *session, const char *json_str)
         /* optional fields: NULL from str_dup is only OOM when source was a real string */
         session->messages[i].id = str_dup(msg_id && msg_id->valuestring ? msg_id->valuestring : NULL);
         if (!session->messages[i].id && msg_id && msg_id->valuestring) goto partial_fail_msg;
+        session->messages[i].parent_id = str_dup(parent_id && parent_id->valuestring ? parent_id->valuestring : NULL);
+        if (!session->messages[i].parent_id && parent_id && parent_id->valuestring) goto partial_fail_msg;
+        session->messages[i].fork_group_id = str_dup(fork_group_id && fork_group_id->valuestring ? fork_group_id->valuestring : NULL);
+        if (!session->messages[i].fork_group_id && fork_group_id && fork_group_id->valuestring) goto partial_fail_msg;
         session->messages[i].tool_call_id = str_dup(tool_call_id && tool_call_id->valuestring ? tool_call_id->valuestring : NULL);
         if (!session->messages[i].tool_call_id && tool_call_id && tool_call_id->valuestring) goto partial_fail_msg;
         session->messages[i].tool_name = str_dup(tool_name && tool_name->valuestring ? tool_name->valuestring : NULL);

@@ -993,6 +993,13 @@ body {
   opacity: 1;
 }
 
+/* The last AI response's action row (copy + regenerate) is always visible,
+ * unlike other footers which fade in on hover — regenerating the answer is
+ * a primary action the user must spot without hovering. */
+.message-footer-actions-visible {
+  opacity: 1;
+}
+
 .icon-button {
   background: transparent;
   border: none;
@@ -1013,6 +1020,42 @@ body {
 .icon-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Branch-switch pill: rendered below the message body, always visible so
+ * the user can see at a glance that a message has alternatives. */
+.branch-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.15));
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.branch-pill-arrow {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  color: inherit;
+}
+
+.branch-pill-arrow:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.branch-pill-label {
+  min-width: 24px;
+  text-align: center;
+  user-select: none;
 }
 
 .send-button-icon {

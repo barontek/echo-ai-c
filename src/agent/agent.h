@@ -82,6 +82,13 @@ LLMResponse *agent_run(Agent *agent, const char *user_input);
 LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
                                  void (*on_chunk)(const char *chunk, void *userdata),
                                  void *userdata);
+/* Runs the streaming loop against the agent's current message context
+ * WITHOUT appending a user turn. Caller must have already appended the
+ * final user/assistant message (the fork message in the edit/regenerate
+ * flow). Ownership of the returned LLMResponse matches agent_run_streaming. */
+LLMResponse *agent_run_streaming_context(Agent *agent,
+                                         void (*on_chunk)(const char *chunk, void *userdata),
+                                         void *userdata);
 void agent_set_session_manager(Agent *agent, SessionManager *sm);
 void agent_set_approval_callback(Agent *agent,
                                  int (*cb)(const char *, const char *, void *),

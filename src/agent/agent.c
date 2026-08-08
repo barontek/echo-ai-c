@@ -811,18 +811,17 @@ static void null_chunk_handler(const char *chunk, void *userdata)
     (void)userdata;
 }
 
-LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
-                                 void (*on_chunk)(const char *, void *),
-                                 void *userdata)
+/* Shared streaming run loop: calls the provider against the agent's current
+ * message context, appending assistant responses (and tool result turns) as
+ * they arrive. Caller is responsible for the context being complete — either
+ * the user turn was appended (agent_run_streaming) or the caller pre-built
+ * the context (agent_run_streaming_context, used by the edit/regenerate fork
+ * flow where the fork message must stay the last context entry). */
+static LLMResponse *agent_run_loop(Agent *agent,
+                                   void (*on_chunk)(const char *, void *),
+                                   void *userdata)
 {
-    agent->cancel_requested = 0;
-
     if (!on_chunk) on_chunk = null_chunk_handler;
-
-    Message *user_msg = message_create("user", user_input);
-    if (!user_msg) return NULL;
-    agent_append_message(agent, user_msg);
-    agent_save_session(agent);
 
     for (int iter = 0; iter < agent->max_iterations; iter++)
     {
@@ -903,6 +902,28 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
     }
 
     return NULL;
+}
+
+LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
+                                 void (*on_chunk)(const char *, void *),
+                                 void *userdata)
+{
+    agent->cancel_requested = 0;
+
+    Message *user_msg = message_create("user", user_input);
+    if (!user_msg) return NULL;
+    agent_append_message(agent, user_msg);
+    agent_save_session(agent);
+
+    return agent_run_loop(agent, on_chunk, userdata);
+}
+
+LLMResponse *agent_run_streaming_context(Agent *agent,
+                                         void (*on_chunk)(const char *, void *),
+                                         void *userdata)
+{
+    agent->cancel_requested = 0;
+    return agent_run_loop(agent, on_chunk, userdata);
 }
 
 void agent_set_session_manager(Agent *agent, SessionManager *sm)

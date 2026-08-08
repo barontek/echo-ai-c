@@ -55,8 +55,9 @@ Method: traced every REST/WebSocket contract from `frontend/src` against the han
 - Frontend types/renderers read `tc.result.{content,error}` (`frontend/src/types/index.ts:24-27`, `frontend/src/components/MessageList.tsx:203`).
 - Live results are reconstructed from `tool_end` events, but on `loadSession` / `history` reload the conversion only happens incidentally via role `tool` messages (`frontend/src/context/ChatProvider.tsx:22-33`) — multiple results collapse onto the first unresolved call; tool results can render as perpetually "running".
 
-### 9. `edit` payload has a dead `message_id` field
-- Frontend sends it (`frontend/src/context/ChatProvider.tsx:528`); backend parses only `index` / `content` (`src/server/routes/routes_ws.c:312-317`).
+### 9. `edit` payload has a dead `message_id` field — **FIXED**
+- Old behavior: frontend sent it (`frontend/src/context/ChatProvider.tsx:528`); backend parsed only `index` / `content` (`src/server/routes/routes_ws.c:312-317`).
+- Fix (branching feature): the `edit` handler now reads `message_id` and forks the DB chain via `session_manager_fork_branch` at the id-resolved index (index fallback retained); `regenerate` and `branch_switch` are new sibling frames. `done` after a fork carries the fresh `fork_message_id` / `fork_group_id` so the FE can adopt the new identity for the branch pill. Amendment (2026-08-08): `done` also carries `fork_role` (`user` for an edit, `assistant` for a regenerate) so the pill attaches to the fork-point message itself, not blindly to the last assistant message.
 
 ### 10. `session.enabled=false` mode is unusable from the FE
 - `src/main.c:524` sets `unlock_token="noop"`; `handle_status` then reports `locked=1` unless that header matches (`src/server/routes/routes_general.c:20-22`), `/api/unlock` fails ("salt not found"), and the WS is blocked (issue 1). The UI can never get past the unlock screen.
@@ -83,4 +84,5 @@ Method: traced every REST/WebSocket contract from `frontend/src` against the han
 - `unlock` / `setup` / `logout` / `status` / `health` request/response shapes.
 - `X-Unlock-Token` header handling for axios REST calls, including `debug-export` (`frontend/src/components/Header.tsx:114`).
 - WS events `ready` / `content` / `done` / `tool_start` / `tool_end` / `history` / `title_updated` / `session_start` / `approval_request` / `approval_response`, and `stop`.
+- Branching wire frames (2026-08-07, implemented per `BRANCHING_IMPLEMENTATION_PLAN.md` §3.3-3.4): `branch_info` on connect-history/selectSession-reload/edit/regenerate/`branch_switch`, shape `[{message_id, count, active, branch_ids[]}]` (ordered by chain `created_at`; live chain has no record id); `done` may carry `fork_message_id` / `fork_group_id` / `fork_role` after edit/regenerate; client frames `edit` (with `message_id`), `regenerate` (`{index, session_id, message_id?}`), `branch_switch` (`{message_id, direction: 1|-1}`, no wrap); REST `GET /api/sessions/:id` includes `branches`. Amendment (2026-08-08): chain timestamps are millisecond-granularity (`%Y-%m-%dT%H:%M:%S.%3N`) so the active position is deterministic; regenerate forks AT the assistant message (the fresh response is re-tagged via `session_manager_tag_message`); switch-branch records are append-only and a switch to the already-live chain is a no-op — verified end-to-end via the live WS smoke harness (edit → switch → switch-back preserves content and pill state).
 - All 24 backend tool names match the FE tool labels (`frontend/src/components/MessageList.tsx:105-177`).

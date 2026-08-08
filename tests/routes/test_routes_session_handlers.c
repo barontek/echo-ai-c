@@ -232,6 +232,13 @@ int session_manager_truncate_history(SessionManager *sm, const char *session_id,
                                       int index)
 { (void)sm; (void)session_id; (void)index; return 0; }
 
+static const char *stub_branch_info_json = NULL;
+char *session_manager_branch_info_alloc(SessionManager *sm, const char *sid)
+{
+    (void)sm; (void)sid;
+    return str_dup(stub_branch_info_json ? stub_branch_info_json : "[]");
+}
+
 void session_manager_lock(SessionManager *sm) { (void)sm; }
 void session_manager_unlock(SessionManager *sm) { (void)sm; }
 
@@ -246,6 +253,8 @@ void message_clear(Message *msg)
         free(msg->role);
         free(msg->content);
         free(msg->id);
+        free(msg->parent_id);
+        free(msg->fork_group_id);
         free(msg->tool_call_id);
         free(msg->tool_name);
         free(msg->error_category);
@@ -610,6 +619,30 @@ START_TEST(test_handle_session_get_success)
     reset_stubs(); free_req(&req);
 }
 END_TEST
+
+START_TEST(test_handle_session_get_includes_branches)
+{
+    SessionManager sm = {0};
+    ServerContext ctx = make_ctx(&sm, STATE_UNLOCKED, NULL);
+    HTTPRequest req = make_req("/api/sessions/abc-123", NULL, NULL);
+
+    Session s = {0};
+    s.id = "abc-123";
+    s.title = "Chat Session";
+    s.created_at = "2024-01-01";
+    stub_load_result = &s;
+    stub_branch_info_json =
+        "[{\"message_id\":\"m1\",\"count\":2,\"active\":1}]";
+
+    handle_session_get(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_body, "\"branches\":"));
+    ck_assert(strstr(captured_body, "\"message_id\":\"m1\""));
+    ck_assert(strstr(captured_body, "\"active\":1"));
+
+    reset_stubs(); free_req(&req);
+    stub_branch_info_json = NULL;
+}
 
 /* ---------------------------------------------------------------------------
  * handle_session_delete
@@ -1047,6 +1080,7 @@ Suite *routes_session_handlers_suite(void)
     tcase_add_test(tc, test_handle_session_get_export_not_found);
     tcase_add_test(tc, test_handle_session_get_debug_export);
     tcase_add_test(tc, test_handle_session_get_success);
+    tcase_add_test(tc, test_handle_session_get_includes_branches);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("handle_session_delete");

@@ -88,6 +88,10 @@ static ToolCall fake_tools[2] = {0};
 static Session fake_session = {0};
 static Message fake_session_msgs[1] = {0};
 
+static void reset_fork_stubs(void);
+static int stub_switch_rc;
+static const char *stub_branch_info_json;
+
 static void reset_capture(void)
 {
     captured_ws_send_count = 0;
@@ -121,6 +125,9 @@ static void setup(void)
     stub_agent_cancel_calls = 0;
     stub_agent_clear_sm_calls = 0;
     stub_session_manager_free_calls = 0;
+    reset_fork_stubs();
+    stub_switch_rc = 0;
+    stub_branch_info_json = NULL;
     free((char *)stub_agent_set_model_name);
     stub_agent_set_model_name = NULL;
 
@@ -234,7 +241,7 @@ void agent_cancel(Agent *a) { (void)a; stub_agent_cancel_calls++; }
 void agent_destroy(Agent *a) {
     if (!a) return;
     free(a->session_id);
-    free(a->messages);
+    message_free_all(a->messages, a->messages_count);
     free(a);
 }
 
@@ -310,9 +317,162 @@ void session_manager_free(SessionManager *sm)
 int session_manager_truncate_history(SessionManager *sm, const char *sid, int idx)
 { (void)sm; (void)sid; (void)idx; return 0; }
 
-int message_copy(Message *dst, const Message *src) { (void)dst; (void)src; return 0; }
-void message_free_all(Message *msgs, int count) { (void)msgs; (void)count; }
-void message_clear(Message *msg) { (void)msg; }
+/* Branch-API stubs. The real fork_branch hands the caller ownership of the
+ * result's strings; mirror that so ws_run_fork's frees are balanced. */
+static int stub_fork_rc = 0;
+static const char *stub_fork_branch_id = NULL;
+static const char *stub_fork_message_id = NULL;
+static const char *stub_fork_group_id = NULL;
+static const char *stub_fork_content = NULL;
+static int stub_tag_rc = 0;
+static const char *stub_tag_id = NULL;
+
+static void reset_fork_stubs(void)
+{
+    stub_fork_rc = 0;
+    stub_fork_branch_id = NULL;
+    stub_fork_message_id = NULL;
+    stub_fork_group_id = NULL;
+    stub_fork_content = NULL;
+    stub_tag_rc = 0;
+    stub_tag_id = NULL;
+}
+
+int session_manager_fork_branch(SessionManager *sm, const char *sid,
+                                const char *message_id, int index,
+                                const char *new_content,
+                                SessionManagerForkResult *out)
+{
+    (void)sm; (void)sid; (void)message_id; (void)index; (void)new_content;
+    memset(out, 0, sizeof(*out));
+    if (stub_fork_rc != 0) return stub_fork_rc;
+    out->branch_id = stub_fork_branch_id ? str_dup(stub_fork_branch_id) : NULL;
+    out->fork_message_id = stub_fork_message_id ? str_dup(stub_fork_message_id) : NULL;
+    out->fork_group_id = stub_fork_group_id ? str_dup(stub_fork_group_id) : NULL;
+    if (stub_fork_content)
+    {
+        out->fork_message.role = str_dup("user");
+        out->fork_message.content = str_dup(stub_fork_content);
+    }
+    return 0;
+}
+
+static int stub_switch_rc = 0;
+int session_manager_switch_branch(SessionManager *sm, const char *sid,
+                                  const char *bid)
+{ (void)sm; (void)sid; (void)bid; return stub_switch_rc; }
+
+char *session_manager_tag_message(SessionManager *sm, const char *sid,
+                                  int index, const char *fork_group_id)
+{
+    (void)sm; (void)sid; (void)index; (void)fork_group_id;
+    if (stub_tag_rc != 0) return NULL;
+    return stub_tag_id ? str_dup(stub_tag_id) : NULL;
+}
+
+static const char *stub_branch_info_json = NULL;
+char *session_manager_branch_info_alloc(SessionManager *sm, const char *sid)
+{
+    (void)sm; (void)sid;
+    return str_dup(stub_branch_info_json ? stub_branch_info_json : "[]");
+}
+
+void message_free(Message *msg)
+{
+    if (!msg) return;
+    message_clear(msg);
+    free(msg);
+}
+
+void message_clear(Message *msg)
+{
+    if (!msg) return;
+    free(msg->role);
+    free(msg->content);
+    free(msg->id);
+    free(msg->parent_id);
+    free(msg->fork_group_id);
+    free(msg->tool_call_id);
+    free(msg->tool_name);
+    free(msg->error_category);
+    free(msg->thinking);
+    free(msg->phase);
+    free(msg->provider_state);
+    if (msg->tool_calls)
+    {
+        for (int i = 0; i < msg->tool_calls_count; i++)
+            tool_call_free(&msg->tool_calls[i]);
+        free(msg->tool_calls);
+    }
+    msg->role = NULL;
+    msg->content = NULL;
+    msg->id = NULL;
+    msg->parent_id = NULL;
+    msg->fork_group_id = NULL;
+    msg->tool_call_id = NULL;
+    msg->tool_name = NULL;
+    msg->error_category = NULL;
+    msg->thinking = NULL;
+    msg->phase = NULL;
+    msg->provider_state = NULL;
+    msg->tool_calls = NULL;
+    msg->tool_calls_count = 0;
+}
+
+void message_free_all(Message *msgs, int count)
+{
+    for (int i = 0; i < count; i++)
+        message_clear(&msgs[i]);
+    free(msgs);
+}
+
+void tool_call_free(ToolCall *call)
+{
+    if (!call) return;
+    free(call->id);
+    free(call->name);
+    free(call->arguments);
+    free(call->result_content);
+    free(call->result_error);
+}
+
+int message_copy(Message *dst, const Message *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    dst->role = src->role ? str_dup(src->role) : NULL;
+    dst->content = src->content ? str_dup(src->content) : NULL;
+    dst->id = src->id ? str_dup(src->id) : NULL;
+    dst->parent_id = src->parent_id ? str_dup(src->parent_id) : NULL;
+    dst->fork_group_id = src->fork_group_id ? str_dup(src->fork_group_id) : NULL;
+    dst->tool_call_id = src->tool_call_id ? str_dup(src->tool_call_id) : NULL;
+    dst->tool_name = src->tool_name ? str_dup(src->tool_name) : NULL;
+    dst->error_category = src->error_category ? str_dup(src->error_category) : NULL;
+    dst->thinking = src->thinking ? str_dup(src->thinking) : NULL;
+    dst->phase = src->phase ? str_dup(src->phase) : NULL;
+    dst->provider_state = src->provider_state ? str_dup(src->provider_state) : NULL;
+    dst->tool_calls_count = src->tool_calls_count;
+    dst->tool_calls = NULL;
+    return 0;
+}
+
+LLMResponse *agent_run_streaming_context(Agent *agent,
+                                         void (*on_chunk)(const char *, void *),
+                                         void *userdata)
+{
+    (void)agent;
+    stub_agent_run_streaming_count++;
+    if (stub_close_ws && stub_close_ctx)
+    {
+        WSClient *close_ws = stub_close_ws;
+        WSChatCtx *close_ctx = stub_close_ctx;
+        stub_close_ws = NULL;
+        stub_close_ctx = NULL;
+        ws_chat_on_close(close_ws, close_ctx);
+    }
+    for (int i = 0; i < stub_streaming_chunk_count; i++)
+        if (on_chunk) on_chunk(stub_streaming_chunks[i], userdata);
+    return stub_agent_run_streaming_resp;
+}
 
 void session_free(Session *s)
 {
@@ -1506,7 +1666,7 @@ START_TEST(test_on_message_session_id_new)
     c.active_session_id = NULL;
     free(c.agent->session_id);
     c.agent->session_id = NULL;
-    free(c.agent->messages);
+    message_free_all(c.agent->messages, c.agent->messages_count);
     c.agent->messages = NULL;
     c.agent->messages_count = 0;
 }
@@ -1562,16 +1722,17 @@ START_TEST(test_on_message_message_agent_gets_session_id)
 }
 END_TEST
 
-START_TEST(test_on_message_edit_truncate)
+START_TEST(test_on_message_edit_forks)
 {
     WSChatCtx c = {0};
     Agent agent = {0};
-    Message msgs[2] = {0};
-    msgs[0].role = "system";
-    msgs[0].content = "You are a helpful assistant.";
-    msgs[1].role = "user";
-    msgs[1].content = "original message";
-    agent.session_id = "edit-sess";
+    Message *msgs = calloc(2, sizeof(Message));
+    ck_assert_ptr_nonnull(msgs);
+    msgs[0].role = str_dup("system");
+    msgs[0].content = str_dup("You are a helpful assistant.");
+    msgs[1].role = str_dup("user");
+    msgs[1].content = str_dup("original message");
+    agent.session_id = str_dup("edit-sess");
     agent.messages = msgs;
     agent.messages_count = 2;
     c.agent = &agent;
@@ -1580,30 +1741,42 @@ START_TEST(test_on_message_edit_truncate)
     char dummy_ws = 0;
     c.ws = (WSClient *)&dummy_ws;
     stub_agent_run_streaming_resp = &fake_resp_basic;
+    stub_fork_message_id = "m_fresh1";
+    stub_fork_group_id = "fg_fresh1";
+    stub_fork_content = "replacement";
     ws_chat_on_message((WSClient *)&dummy_ws,
         "{\"type\":\"edit\",\"index\":1,\"content\":\"replacement\"}", 54, &c);
     ck_assert_int_eq(stub_agent_run_streaming_count, 1);
     ck_assert_str_eq(c.active_session_id, "edit-sess");
+    /* fork: keep=1+system_prefix(1)=2, so the 2-message context is kept
+     * as-is and the minted fork message is appended as the new tail. */
+    ck_assert_int_eq(agent.messages_count, 3);
+    ck_assert_str_eq(agent.messages[2].content, "replacement");
+    ck_assert_str_eq(agent.messages[2].role, "user");
+    /* done frame carries the fresh fork identity for the pill. */
     ck_assert(strstr(captured_ws_json, "\"type\":\"done\""));
-    /* truncation: index=1, system_prefix=1, keep=2, so no clearing needed */
+    ck_assert(strstr(captured_ws_json, "\"fork_message_id\":\"m_fresh1\""));
+    ck_assert(strstr(captured_ws_json, "\"fork_group_id\":\"fg_fresh1\""));
     reset_capture();
     free(c.active_session_id);
     c.active_session_id = NULL;
+    message_free_all(agent.messages, agent.messages_count);
+    free(agent.session_id);
 }
-END_TEST
 
-START_TEST(test_on_message_edit_truncate_clears)
+START_TEST(test_on_message_edit_clears_tail_then_appends_fork)
 {
     WSChatCtx c = {0};
     Agent agent = {0};
-    Message msgs[3] = {0};
-    msgs[0].role = "system";
-    msgs[0].content = "system prompt";
-    msgs[1].role = "user";
-    msgs[1].content = "msg1";
-    msgs[2].role = "assistant";
-    msgs[2].content = "reply1";
-    agent.session_id = "edit-sess-2";
+    Message *msgs = calloc(3, sizeof(Message));
+    ck_assert_ptr_nonnull(msgs);
+    msgs[0].role = str_dup("system");
+    msgs[0].content = str_dup("system prompt");
+    msgs[1].role = str_dup("user");
+    msgs[1].content = str_dup("msg1");
+    msgs[2].role = str_dup("assistant");
+    msgs[2].content = str_dup("reply1");
+    agent.session_id = str_dup("edit-sess-2");
     agent.messages = msgs;
     agent.messages_count = 3;
     c.agent = &agent;
@@ -1612,18 +1785,159 @@ START_TEST(test_on_message_edit_truncate_clears)
     char dummy_ws = 0;
     c.ws = (WSClient *)&dummy_ws;
     stub_agent_run_streaming_resp = NULL;
+    stub_fork_content = "new msg";
     ws_chat_on_message((WSClient *)&dummy_ws,
         "{\"type\":\"edit\",\"index\":1,\"content\":\"new msg\"}", 49, &c);
     ck_assert_int_eq(stub_agent_run_streaming_count, 1);
-    /* truncation: index=1, system_prefix=1, keep=2, clears msg[2] */
-    ck_assert_int_eq(agent.messages_count, 2);
-    /* null resp → error frame sent */
+    /* truncation: index=1, system_prefix=1, keep=2 — the old assistant
+     * tail is dropped, then the fork message replaces it. */
+    ck_assert_int_eq(agent.messages_count, 3);
+    ck_assert_str_eq(agent.messages[2].content, "new msg");
+    ck_assert_str_eq(agent.messages[2].role, "user");
+    /* null resp → error frame sent after the fork committed */
     ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
     reset_capture();
     free(c.active_session_id);
     c.active_session_id = NULL;
+    message_free_all(agent.messages, agent.messages_count);
+    free(agent.session_id);
 }
 END_TEST
+
+START_TEST(test_on_message_regenerate_forks_at_previous_user_turn)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    Message *msgs = calloc(3, sizeof(Message));
+    ck_assert_ptr_nonnull(msgs);
+    msgs[0].role = str_dup("system");
+    msgs[0].content = str_dup("system prompt");
+    msgs[1].role = str_dup("user");
+    msgs[1].content = str_dup("ask one");
+    msgs[2].role = str_dup("assistant");
+    msgs[2].content = str_dup("reply one");
+    agent.session_id = str_dup("regen-sess");
+    agent.messages = msgs;
+    agent.messages_count = 3;
+    c.agent = &agent;
+    c.sm = (SessionManager *)&c;
+    c.ready = 0;
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    stub_agent_run_streaming_resp = &fake_resp_basic;
+    stub_fork_message_id = "m_regen";
+    stub_fork_group_id = "fg_regen";
+    /* regenerate keeps the original user-turn content (content=NULL path) */
+    stub_fork_content = "ask one";
+    /* DB index of the assistant reply is 1 (0-based, system msg excluded) —
+     * the handler steps back to the user turn at DB index 0. */
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"type\":\"regenerate\",\"index\":1}", 31, &c);
+    ck_assert_int_eq(stub_agent_run_streaming_count, 1);
+    /* fork point = user turn (DB index 0), system_prefix=1 → agent keep=1:
+     * the old user/assistant tail is dropped and the fork message (the
+     * re-issued user turn) is appended. */
+    ck_assert_int_eq(agent.messages_count, 2);
+    ck_assert_str_eq(agent.messages[1].role, "user");
+    ck_assert_str_eq(agent.messages[1].content, "ask one");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"done\""));
+    ck_assert(strstr(captured_ws_json, "\"fork_message_id\":\"m_regen\""));
+    reset_capture();
+    free(c.active_session_id);
+    c.active_session_id = NULL;
+    message_free_all(agent.messages, agent.messages_count);
+    free(agent.session_id);
+}
+
+START_TEST(test_on_message_regenerate_invalid_index_errors)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    agent.session_id = str_dup("regen-sess-2");
+    agent.messages = NULL;
+    agent.messages_count = 0;
+    c.agent = &agent;
+    c.sm = (SessionManager *)&c;
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"type\":\"regenerate\",\"index\":5}", 29, &c);
+    ck_assert_int_eq(stub_agent_run_streaming_count, 0);
+    ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
+    ck_assert(strstr(captured_ws_json, "invalid index"));
+    reset_capture();
+    free(agent.session_id);
+}
+
+START_TEST(test_on_message_branch_switch_success)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    agent.session_id = str_dup("switch-sess");
+    c.agent = &agent;
+    c.sm = (SessionManager *)&c;
+    c.ready = 1;
+    c.active_session_id = str_dup("switch-sess");
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    stub_switch_rc = 0;
+    stub_branch_info_json =
+        "[{\"message_id\":\"m1\",\"count\":2,\"active\":2}]";
+    stub_session_load_result = &fake_session;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"type\":\"branch_switch\",\"branch_id\":\"br_x\"}", 48, &c);
+    /* the loaded chain is re-sent as history and agent context swapped */
+    ck_assert(strstr(captured_ws_json, "\"type\":\"history\""));
+    ck_assert(strstr(captured_ws_json, "\"content\":\"Hello\""));
+    ck_assert_int_eq(agent.messages_count, 1);
+    ck_assert_str_eq(agent.messages[0].content, "Hello");
+    ck_assert(strstr(captured_ws_json, "\"type\":\"branch_info\""));
+    ck_assert(strstr(captured_ws_json, "\"active\":2"));
+    reset_capture();
+    free(c.active_session_id);
+    message_free_all(agent.messages, agent.messages_count);
+    free(agent.session_id);
+}
+
+START_TEST(test_on_message_branch_switch_not_found)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    agent.session_id = str_dup("switch-sess-2");
+    c.agent = &agent;
+    c.sm = (SessionManager *)&c;
+    c.ready = 1;
+    c.active_session_id = str_dup("switch-sess-2");
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    stub_switch_rc = -1;
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"type\":\"branch_switch\",\"branch_id\":\"br_missing\"}", 51, &c);
+    ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
+    ck_assert(strstr(captured_ws_json, "branch not found"));
+    ck_assert_int_eq(agent.messages_count, 0);
+    reset_capture();
+    free(c.active_session_id);
+    free(agent.session_id);
+}
+
+START_TEST(test_on_message_branch_info_request)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    agent.session_id = str_dup("info-sess");
+    c.agent = &agent;
+    c.sm = (SessionManager *)&c;
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    stub_branch_info_json = "[{\"message_id\":\"m9\",\"count\":1,\"active\":1}]";
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"type\":\"branch_info\"}", 20, &c);
+    ck_assert(strstr(captured_ws_json, "\"type\":\"branch_info\""));
+    ck_assert(strstr(captured_ws_json, "\"message_id\":\"m9\""));
+    reset_capture();
+    free(agent.session_id);
+}
 
 /* ==================================================================
  * routes_ws_chat_init tests
@@ -1845,9 +2159,14 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_session_id_stale);
     tcase_add_test(tc, test_on_message_session_id_not_found);
     tcase_add_test(tc, test_on_message_message_agent_gets_session_id);
-    tcase_add_test(tc, test_on_message_edit_truncate);
-    tcase_add_test(tc, test_on_message_edit_truncate_clears);
+    tcase_add_test(tc, test_on_message_edit_forks);
+    tcase_add_test(tc, test_on_message_edit_clears_tail_then_appends_fork);
     tcase_add_test(tc, test_on_message_edit_disconnect_during_run_is_safe);
+    tcase_add_test(tc, test_on_message_regenerate_forks_at_previous_user_turn);
+    tcase_add_test(tc, test_on_message_regenerate_invalid_index_errors);
+    tcase_add_test(tc, test_on_message_branch_switch_success);
+    tcase_add_test(tc, test_on_message_branch_switch_not_found);
+    tcase_add_test(tc, test_on_message_branch_info_request);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("routes_ws_chat_init");

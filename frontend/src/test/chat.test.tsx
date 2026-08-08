@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatProvider, useChat } from '../context';
+import { BranchPill } from '../components/BranchPill';
 
 const { mockApi, wsCalls, wsOnOpenTimers } = vi.hoisted(() => ({
   mockApi: {
@@ -1078,5 +1079,388 @@ describe('Reasoning effort setting', () => {
     await waitFor(() => {
       expect(screen.getByTestId('effort').textContent).toBe('');
     });
+  });
+});
+
+describe('Branching (edit/regenerate/switch)', () => {
+  /* Custom WebSocket mock that exposes the onmessage handler so tests can
+   * push server frames (history, branch_info, done) and still records
+   * client sends in wsCalls. */
+  let onmessageHandler: ((event: { data: string }) => void) | null;
+
+  function installControlledWebSocketMock(): void {
+    onmessageHandler = null;
+    /* Regular function (not an arrow) so `new WebSocket(...)` works; the
+     * returned object replaces `this`, mimicking the real API. */
+    vi.stubGlobal(
+      'WebSocket',
+      Object.assign(
+        vi.fn(function () {
+          return {
+            send: vi.fn((data: string) => {
+              wsCalls.push(data);
+            }),
+            close: vi.fn(),
+            readyState: 1,
+            set onopen(fn: () => void) {
+              setTimeout(fn, 0);
+            },
+            get onmessage() {
+              return onmessageHandler;
+            },
+            set onmessage(fn: ((event: { data: string }) => void) | null) {
+              onmessageHandler = fn;
+            },
+          };
+        }),
+        MOCK_WS_STATICS
+      )
+    );
+  }
+
+  function pushFrame(frame: Record<string, unknown>): void {
+    if (!onmessageHandler) throw new Error('ws onmessage not registered');
+    onmessageHandler({ data: JSON.stringify(frame) });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    wsOnOpenTimers.splice(0).forEach(clearTimeout);
+    installControlledWebSocketMock();
+    if (typeof localStorage !== 'undefined') localStorage.clear();
+    wsCalls.length = 0;
+    mockApi.getSessions.mockResolvedValue([]);
+    mockApi.getProviders.mockResolvedValue({
+      providers: ['ollama', 'openai'],
+      effortSupported: ['openai'],
+    });
+    mockApi.getModels.mockResolvedValue(['qwen3:4b-instruct']);
+    mockApi.getOpenAIOAuthStatus.mockResolvedValue({ state: 'signed_out' });
+    mockApi.loadSession.mockResolvedValue({ session_id: 's', title: 't', messages: [] });
+  });
+
+  it('hides the pill when count <= 1 and shows ‹ 1/2 › at count 2', () => {
+    const { rerender } = render(
+      <BranchPill
+        info={{ messageId: 'm-1', count: 1, active: 1, branchIds: [] }}
+        onSwitch={() => {}}
+      />
+    );
+    expect(screen.queryByTitle(/branches/)).toBeNull();
+
+    rerender(
+      <BranchPill
+        info={{ messageId: 'm-1', count: 2, active: 1, branchIds: ['br-1'] }}
+        onSwitch={() => {}}
+      />
+    );
+    expect(screen.getByText('1/2')).toBeInTheDocument();
+  });
+
+  it('disables the arrows at the bounds (no wrap-around)', () => {
+    render(
+      <BranchPill
+        info={{ messageId: 'm-1', count: 2, active: 1, branchIds: ['br-1'] }}
+        onSwitch={() => {}}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Previous branch' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next branch' })).toBeEnabled();
+  });
+
+  it('clicking › sends branch_switch with the target branch_id', async () => {
+    function PillHarness() {
+      const { branchInfo, switchBranch } = useChat();
+      const entry = branchInfo[0];
+      if (!entry) return null;
+      return <BranchPill info={entry} onSwitch={(d) => switchBranch(entry.messageId, d)} />;
+    }
+    render(
+      <ChatProvider>
+        <PillHarness />
+      </ChatProvider>
+    );
+    await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+    pushFrame({ type: 'ready', session_id: 's' });
+    pushFrame({
+      type: 'branch_info',
+      branches: [{ message_id: 'm-1', count: 2, active: 1, branch_ids: ['br-1'] }],
+    });
+
+    const next = await screen.findByRole('button', { name: 'Next branch' });
+    await userEvent.click(next);
+
+    await waitFor(() => {
+      expect(wsCalls.some((c) => c.includes('"type":"branch_switch"'))).toBe(true);
+    });
+    const frame = wsCalls
+      .map((c) => JSON.parse(c))
+      .find((f) => f.type === 'branch_switch');
+    expect(frame).toEqual({ type: 'branch_switch', session_id: 's', branch_id: 'br-1' });
+  });
+
+  it('updates the pill counter and active position on branch_info frames', async () => {
+    function PillHarness() {
+      const { branchInfo, switchBranch } = useChat();
+      const entry = branchInfo[0];
+      if (!entry) return null;
+      return <BranchPill info={entry} onSwitch={(d) => switchBranch(entry.messageId, d)} />;
+    }
+    render(
+      <ChatProvider>
+        <PillHarness />
+      </ChatProvider>
+    );
+    await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+    pushFrame({ type: 'ready', session_id: 's' });
+    pushFrame({
+      type: 'branch_info',
+      branches: [{ message_id: 'm-1', count: 2, active: 1, branch_ids: ['br-1'] }],
+    });
+    expect(await screen.findByText('1/2')).toBeInTheDocument();
+
+    pushFrame({
+      type: 'branch_info',
+      branches: [
+        { message_id: 'm-1', count: 3, active: 2, branch_ids: ['br-1', 'br-2'] },
+      ],
+    });
+    expect(await screen.findByText('2/3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous branch' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Next branch' })).toBeEnabled();
+  });
+
+  it('renders the regenerate button on the last assistant message and sends regenerate', async () => {
+    const { MessageList } = await import('../components/MessageList');
+    render(
+      <ChatProvider>
+        <MessageList />
+      </ChatProvider>
+    );
+    await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+    pushFrame({ type: 'ready', session_id: 's' });
+    pushFrame({
+      type: 'history',
+      messages: [
+        { role: 'user', content: 'question', id: 'm-1' },
+        { role: 'assistant', content: 'answer', id: 'm-2' },
+      ],
+    });
+
+    const regenerate = await screen.findByTitle('Regenerate');
+    await userEvent.click(regenerate);
+
+    await waitFor(() => {
+      expect(wsCalls.some((c) => c.includes('"type":"regenerate"'))).toBe(true);
+    });
+    const frame = wsCalls
+      .map((c) => JSON.parse(c))
+      .find((f) => f.type === 'regenerate');
+    expect(frame.message_id).toBe('m-2');
+  });
+
+  it('edit payload includes message_id when the message has an id', async () => {
+    const { MessageList } = await import('../components/MessageList');
+    render(
+      <ChatProvider>
+        <MessageList />
+      </ChatProvider>
+    );
+    await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+    pushFrame({ type: 'ready', session_id: 's' });
+    pushFrame({
+      type: 'history',
+      messages: [
+        { role: 'user', content: 'original', id: 'm-1' },
+        { role: 'assistant', content: 'answer', id: 'm-2' },
+      ],
+    });
+
+    await userEvent.click(await screen.findByTitle('Edit'));
+    const textarea = screen.getByRole('textbox');
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, 'edited');
+    await userEvent.click(screen.getByText('Regenerate (Ctrl+Enter)'));
+
+    await waitFor(() => {
+      expect(wsCalls.some((c) => c.includes('"type":"edit"'))).toBe(true);
+    });
+    const frame = wsCalls
+      .map((c) => JSON.parse(c))
+      .find((f) => f.type === 'edit');
+    expect(frame.content).toBe('edited');
+    expect(frame.message_id).toBe('m-1');
+  });
+
+  it('edit without an id sends an index-only payload (no message_id key)', async () => {
+    const { MessageList } = await import('../components/MessageList');
+    render(
+      <ChatProvider>
+        <MessageList />
+      </ChatProvider>
+    );
+    await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+    pushFrame({ type: 'ready', session_id: 's' });
+    pushFrame({
+      type: 'history',
+      messages: [
+        { role: 'user', content: 'original' },
+        { role: 'assistant', content: 'answer' },
+      ],
+    });
+
+    await userEvent.click(await screen.findByTitle('Edit'));
+    const textarea = screen.getByRole('textbox');
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, 'edited');
+    await userEvent.click(screen.getByText('Regenerate (Ctrl+Enter)'));
+
+    await waitFor(() => {
+      expect(wsCalls.some((c) => c.includes('"type":"edit"'))).toBe(true);
+    });
+    const frame = wsCalls
+      .map((c) => JSON.parse(c))
+      .find((f) => f.type === 'edit');
+    expect(frame.content).toBe('edited');
+    expect(Object.prototype.hasOwnProperty.call(frame, 'message_id')).toBe(false);
+  });
+
+  it('attaches the pill to the edited USER message (fork_role user)', async () => {
+    const { MessageList } = await import('../components/MessageList');
+    render(
+      <ChatProvider>
+        <MessageList />
+      </ChatProvider>
+    );
+    await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+    pushFrame({ type: 'ready', session_id: 's' });
+    pushFrame({
+      type: 'history',
+      messages: [
+        { role: 'user', content: 'original', id: 'm-1' },
+        { role: 'assistant', content: 'answer', id: 'm-2' },
+      ],
+    });
+
+    await userEvent.click(await screen.findByTitle('Edit'));
+    const textarea = screen.getByRole('textbox');
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, 'edited');
+    await userEvent.click(screen.getByText('Regenerate (Ctrl+Enter)'));
+
+    pushFrame({ type: 'content', content: 'fresh reply' });
+    pushFrame({
+      type: 'done',
+      content: 'fresh reply',
+      fork_message_id: 'm-9',
+      fork_group_id: 'fg-9',
+      fork_role: 'user',
+    });
+    pushFrame({
+      type: 'branch_info',
+      branches: [{ message_id: 'm-9', count: 2, active: 2, branch_ids: ['br-1'] }],
+    });
+
+    await waitFor(() => {
+      const userMsg = document.querySelector('.message-user');
+      const assistantMsg = document.querySelector('.message-assistant');
+      expect(userMsg?.textContent).toContain('edited');
+      expect(assistantMsg?.textContent).toContain('fresh reply');
+      /* the pill keys on the fork point's fresh id, which sits on the edited
+       * user message — NOT on the assistant reply */
+      expect(userMsg?.querySelector('.branch-pill')).not.toBeNull();
+      expect(assistantMsg?.querySelector('.branch-pill')).toBeNull();
+    });
+  });
+
+  it('attaches the pill to the regenerated ASSISTANT response (fork_role assistant)', async () => {
+    const { MessageList } = await import('../components/MessageList');
+    render(
+      <ChatProvider>
+        <MessageList />
+      </ChatProvider>
+    );
+    await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+    pushFrame({ type: 'ready', session_id: 's' });
+    pushFrame({
+      type: 'history',
+      messages: [
+        { role: 'user', content: 'question', id: 'm-1' },
+        { role: 'assistant', content: 'answer', id: 'm-2' },
+      ],
+    });
+
+    await userEvent.click(await screen.findByTitle('Regenerate'));
+
+    pushFrame({ type: 'content', content: 'new answer' });
+    pushFrame({
+      type: 'done',
+      content: 'new answer',
+      fork_message_id: 'm-9',
+      fork_group_id: 'fg-9',
+      fork_role: 'assistant',
+    });
+    pushFrame({
+      type: 'branch_info',
+      branches: [{ message_id: 'm-9', count: 2, active: 2, branch_ids: ['br-1'] }],
+    });
+
+    await waitFor(() => {
+      const userMsg = document.querySelector('.message-user');
+      const assistantMsg = document.querySelector('.message-assistant');
+      expect(userMsg?.textContent).toContain('question');
+      expect(assistantMsg?.textContent).toContain('new answer');
+      expect(assistantMsg?.querySelector('.branch-pill')).not.toBeNull();
+      expect(userMsg?.querySelector('.branch-pill')).toBeNull();
+    });
+  });
+
+  it('keeps the pill across a branch switch and back', async () => {
+    const { MessageList } = await import('../components/MessageList');
+    render(
+      <ChatProvider>
+        <MessageList />
+      </ChatProvider>
+    );
+    await waitFor(() => expect(wsCalls.length).toBeGreaterThan(0));
+    pushFrame({ type: 'ready', session_id: 's' });
+    /* old chain: the fork point carries the shared group and the original
+     * message id */
+    pushFrame({
+      type: 'history',
+      messages: [
+        { role: 'user', content: 'original', id: 'm-1', fork_group_id: 'fg-9' },
+        { role: 'assistant', content: 'answer', id: 'm-2' },
+      ],
+    });
+    pushFrame({
+      type: 'branch_info',
+      branches: [{ message_id: 'm-1', count: 2, active: 1, branch_ids: ['br-2'] }],
+    });
+    await waitFor(() => {
+      const oldMsg = document.querySelector('.message-user');
+      expect(oldMsg?.textContent).toContain('original');
+      expect(oldMsg?.querySelector('.branch-pill')).not.toBeNull();
+    });
+    expect(await screen.findByText('1/2')).toBeInTheDocument();
+
+    /* switch back to the edited chain: history carries the edited fork id */
+    pushFrame({
+      type: 'history',
+      messages: [
+        { role: 'user', content: 'edited', id: 'm-9', fork_group_id: 'fg-9' },
+        { role: 'assistant', content: 'fresh', id: 'm-10' },
+      ],
+    });
+    pushFrame({
+      type: 'branch_info',
+      branches: [{ message_id: 'm-9', count: 2, active: 2, branch_ids: ['br-1'] }],
+    });
+    await waitFor(() => {
+      const editedMsg = document.querySelector('.message-user');
+      expect(editedMsg?.textContent).toContain('edited');
+      expect(editedMsg?.querySelector('.branch-pill')).not.toBeNull();
+    });
+    expect(await screen.findByText('2/2')).toBeInTheDocument();
   });
 });

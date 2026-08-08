@@ -14,7 +14,15 @@ typedef struct {
 typedef struct {
     char *role;
     char *content;
+    /* Stable message identity. id is NULL for legacy messages that were
+     * created before id-minting existed; fork points get ids minted at
+     * fork time. parent_id is the id of the preceding message in this
+     * message's chain (NULL for the chain root or when the parent has no
+     * id). fork_group_id is the logical node identity shared by every
+     * chain's copy of the same fork point; NULL for non-fork messages. */
     char *id;
+    char *parent_id;
+    char *fork_group_id;
     ToolCall *tool_calls;
     int tool_calls_count;
     char *tool_call_id;

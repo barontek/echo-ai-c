@@ -1,5 +1,5 @@
 import { createContext, type Context } from 'react';
-import type { ApprovalRequest, ToolCall } from '../types';
+import type { ApprovalRequest, BranchInfo, ToolCall } from '../types';
 
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
 
@@ -29,6 +29,8 @@ export interface ChatContextValue {
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
     id?: string;
+    parent_id?: string;
+    fork_group_id?: string;
     timestamp?: string;
     thinking?: string;
     has_tools?: boolean;
@@ -37,6 +39,8 @@ export interface ChatContextValue {
     tool_name?: string;
     error?: string;
   }>;
+  /* Fork-point counters for the active chain, keyed by message id. */
+  branchInfo: BranchInfo[];
   connectionStatus: ConnectionStatus;
   isConnected: boolean;
   isStreaming: boolean;
@@ -46,7 +50,8 @@ export interface ChatContextValue {
   sendMessage: (content: string) => void;
   stopGeneration: () => void;
   editMessage: (index: number, newText: string, msgId?: string) => void;
-  retryMessage: (index: number) => void;
+  regenerateMessage: (index: number, msgId?: string) => void;
+  switchBranch: (messageId: string, direction: -1 | 1) => void;
   createSession: () => void;
   selectSession: (sessionId: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;

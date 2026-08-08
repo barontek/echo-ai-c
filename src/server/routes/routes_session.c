@@ -200,6 +200,18 @@ void handle_session_get(HTTPRequest *req, Client *client, ServerContext *ctx)
         cJSON_AddItemToArray(arr, m);
     }
     cJSON_AddItemToObject(resp, "messages", arr);
+    /* Branch metadata: [{message_id,count,active},...] for each live-chain
+     * fork point. Omitted on OOM — the WS branch_info frame covers it. */
+    char *branches = session_manager_branch_info_alloc(ctx->sm, sid);
+    if (branches)
+    {
+        cJSON *barr = cJSON_Parse(branches);
+        if (barr && cJSON_IsArray(barr))
+            cJSON_AddItemToObject(resp, "branches", barr);
+        else if (barr)
+            cJSON_Delete(barr);
+        free(branches);
+    }
     char *str = cJSON_PrintUnformatted(resp);
     server_response_json(client, 200, str);
     free(str);

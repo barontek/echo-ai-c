@@ -1,6 +1,7 @@
 export { Header } from './Header';
 export { Sidebar } from './Sidebar';
 export { MessageList } from './MessageList';
+export { BranchPill } from './BranchPill';
 export { ChatInput } from './ChatInput';
 export { ApprovalDialog } from './ApprovalDialog';
 export { AskUserDialog } from './AskUserDialog';

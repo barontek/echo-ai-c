@@ -123,7 +123,11 @@ WS_STATIC void ws_chat_on_chunk(const char *chunk, void *userdata)
     cJSON_Delete(frame);
 }
 
-WS_STATIC void ws_send_done(WSClient *ws, const char *session_id, const char *title, LLMResponse *resp)
+WS_STATIC void ws_send_done_forked(WSClient *ws, const char *session_id,
+                                   const char *title, LLMResponse *resp,
+                                   const char *fork_message_id,
+                                   const char *fork_group_id,
+                                   const char *fork_role)
 {
     cJSON *done = cJSON_CreateObject();
     cJSON_AddStringToObject(done, "type", "done");
@@ -133,6 +137,19 @@ WS_STATIC void ws_send_done(WSClient *ws, const char *session_id, const char *ti
         cJSON_AddStringToObject(done, "session_id", session_id);
     if (title)
         cJSON_AddStringToObject(done, "title", title);
+    /* After an edit/regenerate fork the edited message's id changes; the
+     * frontend keys the branch pill by message id, so it needs the fresh
+     * identity to match the following branch_info frame. fork_role tells
+     * the frontend WHICH message carries that identity: the edit fork
+     * point is the edited user message, while a regenerate fork point is
+     * the regenerated assistant response — the pill must land on that
+     * message, not on the last assistant message blindly. */
+    if (fork_message_id)
+        cJSON_AddStringToObject(done, "fork_message_id", fork_message_id);
+    if (fork_group_id)
+        cJSON_AddStringToObject(done, "fork_group_id", fork_group_id);
+    if (fork_role)
+        cJSON_AddStringToObject(done, "fork_role", fork_role);
     if (resp)
     {
         cJSON_AddBoolToObject(done, "has_tools", resp->tool_calls_count > 0);
@@ -157,6 +174,11 @@ WS_STATIC void ws_send_done(WSClient *ws, const char *session_id, const char *ti
     if (str) ws_send_json(ws, str);
     free(str);
     cJSON_Delete(done);
+}
+
+WS_STATIC void ws_send_done(WSClient *ws, const char *session_id, const char *title, LLMResponse *resp)
+{
+    ws_send_done_forked(ws, session_id, title, resp, NULL, NULL, NULL);
 }
 
 WS_STATIC void ws_chat_flush_queue(WSChatCtx *c)
@@ -221,6 +243,208 @@ WS_STATIC void ws_chat_enqueue(WSChatCtx *c, const char *data)
     else
         c->msg_queue = q;
     c->msg_queue_tail = q;
+}
+
+/* Emits {"type":"branch_info","branches":[{message_id,count,active},...]}
+ * for the active session's live chain. Silent on OOM/absence (the pill just
+ * doesn't render until the next frame). */
+WS_STATIC void ws_emit_branch_info(WSChatCtx *c)
+{
+    if (!c || !c->ws || !c->sm || !c->agent || !c->agent->session_id) return;
+    char *branches = session_manager_branch_info_alloc(c->sm, c->agent->session_id);
+    if (!branches) return;
+    cJSON *arr = cJSON_Parse(branches);
+    free(branches);
+    if (!arr || !cJSON_IsArray(arr))
+    {
+        if (arr) cJSON_Delete(arr);
+        return;
+    }
+    cJSON *frame = cJSON_CreateObject();
+    if (!frame) { cJSON_Delete(arr); return; }
+    cJSON_AddStringToObject(frame, "type", "branch_info");
+    cJSON_AddItemToObject(frame, "branches", arr);
+    char *str = cJSON_PrintUnformatted(frame);
+    if (str) ws_send_json(c->ws, str);
+    free(str);
+    cJSON_Delete(frame);
+}
+
+/* Frees agent->messages and deep-copies s->messages in (mirrors the
+ * selectSession block). Returns 0 on success, -1 on OOM (agent context is
+ * empty afterwards). */
+WS_STATIC int ws_swap_agent_messages(WSChatCtx *c, Session *s)
+{
+    if (!c->agent) return -1;
+    if (c->agent->messages)
+    {
+        message_free_all(c->agent->messages, c->agent->messages_count);
+        c->agent->messages = NULL;
+        c->agent->messages_count = 0;
+    }
+    if (s->messages_count <= 0) return 0;
+    c->agent->messages = calloc((size_t)s->messages_count, sizeof(Message));
+    if (!c->agent->messages) return -1;
+    for (int i = 0; i < s->messages_count; i++)
+    {
+        if (message_copy(&c->agent->messages[i], &s->messages[i]) != 0)
+        {
+            message_free_all(c->agent->messages, i);
+            c->agent->messages = NULL;
+            c->agent->messages_count = 0;
+            return -1;
+        }
+    }
+    c->agent->messages_count = s->messages_count;
+    return 0;
+}
+
+/* Shared body of the edit and regenerate handlers: forks the DB chain at
+ * `idx` (DB-side index), truncates the agent's in-memory context to the
+ * fork point (J2 system-prefix offset), and runs the streaming loop
+ * against that context. content == NULL means regenerate. regen_mode
+ * decides where the fork point is and what the pill attaches to:
+ *  - edit (regen_mode == 0): the fork point is the edited message itself
+ *    (a user message). The minted fork copy is appended as the last
+ *    context entry and the run appends the fresh assistant response after
+ *    it — the copy persists in the DB live chain, so its minted identity
+ *    is what branch_info reports.
+ *  - regenerate (regen_mode == 1): the fork point is the regenerated
+ *    assistant response. agent_run_loop only ever APPENDS, so appending
+ *    the fork copy would leave it as a ghost in the DB after the wholesale
+ *    agent_save_session. Instead the context is truncated at the fork
+ *    point WITHOUT the copy; the run appends the new response, and
+ *    session_manager_tag_message re-applies the fork group plus a minted
+ *    id to it afterwards. Emits done with the fresh fork identity and the
+ *    fork point's role (fork_role) so the frontend places the pill on the
+ *    right message. */
+WS_STATIC void ws_run_fork(WSChatCtx *c, const char *message_id, int idx,
+                           const char *content, int regen_mode)
+{
+    SessionManagerForkResult fork_res;
+    if (session_manager_fork_branch(c->sm, c->agent->session_id, message_id,
+                                    idx, content, &fork_res) != 0)
+    {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "type", "error");
+        cJSON_AddStringToObject(err, "content", "fork failed");
+        char *s = cJSON_PrintUnformatted(err);
+        if (s) ws_send_json(c->ws, s);
+        free(s);
+        cJSON_Delete(err);
+        return;
+    }
+
+    /* J2: `idx` is a DB-side index — the in-memory array usually has a
+     * `system` message at index 0, so the agent-side keep is offset. */
+    int system_prefix = 0;
+    while (system_prefix < c->agent->messages_count &&
+           strcmp(c->agent->messages[system_prefix].role, "system") == 0)
+        system_prefix++;
+    int keep = idx + system_prefix;
+    if (keep > c->agent->messages_count)
+        keep = c->agent->messages_count;
+    for (int i = keep; i < c->agent->messages_count; i++)
+        message_clear(&c->agent->messages[i]);
+    c->agent->messages_count = keep;
+
+    int append_ok = 1;
+    if (!regen_mode)
+    {
+        /* Append the minted fork message so the run context ends at the
+         * fork point (agent_run_streaming_context does NOT append a user
+         * turn). In regenerate mode the fork copy must NOT be appended:
+         * the run would append the response AFTER it and the wholesale
+         * agent_save_session would leave the copy as a ghost chain entry
+         * (the response is tagged instead, below). */
+        Message *fork_msg = calloc(1, sizeof(Message));
+        append_ok = 0;
+        if (fork_msg && message_copy(fork_msg, &fork_res.fork_message) == 0)
+        {
+            Message *new_msgs = realloc(c->agent->messages,
+                                        sizeof(Message) * (size_t)(keep + 1));
+            if (new_msgs)
+            {
+                c->agent->messages = new_msgs;
+                c->agent->messages[keep] = *fork_msg;
+                c->agent->messages_count = keep + 1;
+                append_ok = 1;
+                free(fork_msg);
+            }
+        }
+        if (!append_ok && fork_msg) message_free(fork_msg);
+    }
+    if (!append_ok)
+    {
+        /* Context could not carry the fork message — abort the run; the DB
+         * fork is already committed and will render on reload. */
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "type", "error");
+        cJSON_AddStringToObject(err, "content", "out of memory");
+        char *s = cJSON_PrintUnformatted(err);
+        if (s) ws_send_json(c->ws, s);
+        free(s);
+        cJSON_Delete(err);
+        message_clear(&fork_res.fork_message);
+        free(fork_res.branch_id);
+        free(fork_res.fork_message_id);
+        free(fork_res.fork_group_id);
+        return;
+    }
+
+    c->active_runs++;
+    LLMResponse *resp = agent_run_streaming_context(c->agent, ws_chat_on_chunk, c);
+    c->active_runs--;
+    if (c->closing)
+    {
+        llm_response_free(resp);
+        message_clear(&fork_res.fork_message);
+        free(fork_res.branch_id);
+        free(fork_res.fork_message_id);
+        free(fork_res.fork_group_id);
+        ws_chat_ctx_destroy(c);
+        return;
+    }
+    if (!c->active_session_id && c->agent && c->agent->session_id)
+    {
+        free(c->active_session_id);
+        c->active_session_id = str_dup(c->agent->session_id);
+    }
+
+    /* In regenerate mode the fork copy was dropped from the live chain by
+     * the wholesale save; tag the fresh response with the fork group and
+     * a minted id so branch_info's message_id points at it. On tag failure
+     * fall back to the fork copy's id (degraded: the pill won't attach
+     * until reload). */
+    char *tagged_id = NULL;
+    if (resp && regen_mode && c->active_session_id)
+        tagged_id = session_manager_tag_message(c->sm, c->active_session_id,
+                                                idx, fork_res.fork_group_id);
+
+    if (resp)
+    {
+        ws_send_done_forked(c->ws, c->active_session_id, NULL, resp,
+                            tagged_id ? tagged_id : fork_res.fork_message_id,
+                            fork_res.fork_group_id,
+                            fork_res.fork_message.role);
+        llm_response_free(resp);
+    }
+    else
+    {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "type", "error");
+        cJSON_AddStringToObject(err, "content", "no response");
+        char *s = cJSON_PrintUnformatted(err);
+        if (s) ws_send_json(c->ws, s);
+        free(s);
+        cJSON_Delete(err);
+    }
+    ws_emit_branch_info(c);
+    free(tagged_id);
+    message_clear(&fork_res.fork_message);
+    free(fork_res.branch_id);
+    free(fork_res.fork_message_id);
+    free(fork_res.fork_group_id);
 }
 
 WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void *userdata)
@@ -304,6 +528,7 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                  * `}` and `session_free` on the same column hid the
                  * control-flow boundary. Split onto its own line for
                  * review readability. */
+                ws_emit_branch_info(c);
                 session_free(s);
             }
             else
@@ -478,67 +703,124 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
         {
             cJSON *idx_item = cJSON_GetObjectItem(json, "index");
             cJSON *content_item = cJSON_GetObjectItem(json, "content");
+            cJSON *msgid_item = cJSON_GetObjectItem(json, "message_id");
             if (idx_item && cJSON_IsNumber(idx_item) && content_item && content_item->valuestring
                 && c->sm && c->agent)
             {
                 int idx = (int)idx_item->valuedouble;
-                int trunc_rc = session_manager_truncate_history(c->sm, c->agent->session_id, idx);
-                if (trunc_rc == 0 && c->agent->messages_count > 0)
+                ws_run_fork(c, msgid_item && msgid_item->valuestring
+                                ? msgid_item->valuestring : NULL,
+                            idx, content_item->valuestring, 0);
+            }
+            cJSON_Delete(json);
+            return;
+        }
+        if (strcmp(type_item->valuestring, "regenerate") == 0)
+        {
+            cJSON *idx_item = cJSON_GetObjectItem(json, "index");
+            cJSON *msgid_item = cJSON_GetObjectItem(json, "message_id");
+            if (c->sm && c->agent)
+            {
+                int idx = (idx_item && cJSON_IsNumber(idx_item))
+                              ? (int)idx_item->valuedouble : -1;
+                /* Resolve the fork index the way fork_branch does: by
+                 * message id when provided, else by index. The agent's
+                 * array may carry a leading system message, so map agent
+                 * positions to DB indices via the system-prefix offset. */
+                int system_prefix = 0;
+                while (system_prefix < c->agent->messages_count &&
+                       strcmp(c->agent->messages[system_prefix].role, "system") == 0)
+                    system_prefix++;
+                int fi = -1;
+                if (msgid_item && msgid_item->valuestring)
                 {
-                    /* J2: `idx` is a DB-side index — i.e. "keep the first
-                     * `idx` non-system messages". The in-memory
-                     * `agent->messages` array usually has a `system` message
-                     * at index 0 (injected by inject_system_with_summary
-                     * during agent_run_streaming), so an agent-side keep of
-                     * `idx` would drop one message too many — agent keeps
-                     * [system, m1..m(idx-2)] while DB keeps [m1..m(idx-1)].
-                     * Count the leading system message(s) and offset keep
-                     * so both sides end up with the same non-system
-                     * messages. */
-                    int system_prefix = 0;
-                    while (system_prefix < c->agent->messages_count &&
-                           strcmp(c->agent->messages[system_prefix].role, "system") == 0)
-                        system_prefix++;
-                    int keep = idx + system_prefix;
-                    if (keep > c->agent->messages_count)
-                        keep = c->agent->messages_count;
-                    for (int i = keep; i < c->agent->messages_count; i++)
-                        message_clear(&c->agent->messages[i]);
-                    c->agent->messages_count = keep;
+                    for (int i = 0; i < c->agent->messages_count; i++)
+                    {
+                        if (c->agent->messages[i].id &&
+                            strcmp(c->agent->messages[i].id,
+                                   msgid_item->valuestring) == 0)
+                        { fi = i - system_prefix; break; }
+                    }
                 }
-
-                c->active_runs++;
-                LLMResponse *resp = agent_run_streaming(c->agent, content_item->valuestring,
-                                                         ws_chat_on_chunk, c);
-                c->active_runs--;
-                if (c->closing)
-                {
-                    llm_response_free(resp);
-                    cJSON_Delete(json);
-                    ws_chat_ctx_destroy(c);
-                    return;
-                }
-                if (!c->active_session_id && c->agent && c->agent->session_id)
-                {
-                    free(c->active_session_id);
-                    c->active_session_id = str_dup(c->agent->session_id);
-                }
-                if (resp)
-                {
-                    ws_send_done(c->ws, c->active_session_id, NULL, resp);
-                    llm_response_free(resp);
-                }
+                if (fi < 0) fi = idx;
+                /* Regenerating an assistant message forks AT that message:
+                 * the fresh response becomes the new chain's fork point
+                 * (the pill lands on it via fork_role=assistant). No
+                 * step-back — re-running the user turn is what truncating
+                 * the context at the fork point already does. */
+                if (fi >= 0 && fi + system_prefix < c->agent->messages_count)
+                    ws_run_fork(c, NULL, fi, NULL, 1);
                 else
                 {
                     cJSON *err = cJSON_CreateObject();
                     cJSON_AddStringToObject(err, "type", "error");
-                    cJSON_AddStringToObject(err, "content", "no response");
+                    cJSON_AddStringToObject(err, "content", "invalid index");
                     char *s = cJSON_PrintUnformatted(err);
                     if (s) ws_send_json(c->ws, s);
                     free(s);
                     cJSON_Delete(err);
                 }
             }
+            cJSON_Delete(json);
+            return;
+        }
+        if (strcmp(type_item->valuestring, "branch_switch") == 0)
+        {
+            cJSON *sid_item = cJSON_GetObjectItem(json, "session_id");
+            cJSON *bid_item = cJSON_GetObjectItem(json, "branch_id");
+            if (c->sm && c->agent && bid_item && bid_item->valuestring &&
+                c->active_session_id &&
+                (!sid_item || !sid_item->valuestring ||
+                 strcmp(sid_item->valuestring, c->active_session_id) == 0))
+            {
+                if (session_manager_switch_branch(c->sm, c->active_session_id,
+                                                  bid_item->valuestring) == 0)
+                {
+                    Session *s = session_manager_load_session(c->sm,
+                                                              c->active_session_id);
+                    if (s)
+                    {
+                        int swap_rc = ws_swap_agent_messages(c, s);
+                        if (swap_rc == 0 && s->messages_count > 0)
+                        {
+                            cJSON *hist = cJSON_CreateObject();
+                            cJSON_AddStringToObject(hist, "type", "history");
+                            cJSON *arr = cJSON_CreateArray();
+                            for (int i = 0; i < s->messages_count; i++)
+                            {
+                                cJSON *m = cJSON_CreateObject();
+                                ws_add_message_to_json(m, &s->messages[i]);
+                                cJSON_AddItemToArray(arr, m);
+                            }
+                            cJSON_AddItemToObject(hist, "messages", arr);
+                            char *hist_str = cJSON_PrintUnformatted(hist);
+                            if (hist_str) ws_send_json(c->ws, hist_str);
+                            free(hist_str);
+                            cJSON_Delete(hist);
+                        }
+                        session_free(s);
+                        ws_emit_branch_info(c);
+                    }
+                }
+                else
+                {
+                    cJSON *err = cJSON_CreateObject();
+                    cJSON_AddStringToObject(err, "type", "error");
+                    cJSON_AddStringToObject(err, "content", "branch not found");
+                    char *s = cJSON_PrintUnformatted(err);
+                    if (s) ws_send_json(c->ws, s);
+                    free(s);
+                    cJSON_Delete(err);
+                }
+            }
+            cJSON_Delete(json);
+            return;
+        }
+
+        if (strcmp(type_item->valuestring, "branch_info") == 0)
+        {
+            if (c->sm && c->agent)
+                ws_emit_branch_info(c);
             cJSON_Delete(json);
             return;
         }
@@ -919,6 +1201,8 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
                         free(hist_str);
                         cJSON_Delete(hist);
                     }
+
+                    ws_emit_branch_info(c);
 
                     session_free(s);
                 }

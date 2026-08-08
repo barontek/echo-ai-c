@@ -168,11 +168,23 @@ class ApiClient {
     session_id: string;
     title: string | null;
     messages: Message[];
+    branches?: Array<{
+      message_id: string;
+      count: number;
+      active: number;
+      branch_ids?: string[];
+    }>;
   }> {
     const res = await this.client.get<{
       session_id: string;
       title: string | null;
       messages: Message[];
+      branches?: Array<{
+        message_id: string;
+        count: number;
+        active: number;
+        branch_ids?: string[];
+      }>;
     }>(`/api/sessions/${sessionId}`);
     return res.data;
   }

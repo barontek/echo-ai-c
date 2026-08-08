@@ -15,6 +15,17 @@ void ws_add_message_to_json(cJSON *m, const Message *msg)
     cJSON_AddStringToObject(m, "role", msg->role ? msg->role : "unknown");
     cJSON_AddStringToObject(m, "content", msg->content ? msg->content : "");
 
+    /* Branching identity: emit only when present so legacy chains (no
+     * ids minted yet) keep the same wire shape as before. */
+    if (msg->id)
+        cJSON_AddStringToObject(m, "id", msg->id);
+
+    if (msg->parent_id)
+        cJSON_AddStringToObject(m, "parent_id", msg->parent_id);
+
+    if (msg->fork_group_id)
+        cJSON_AddStringToObject(m, "fork_group_id", msg->fork_group_id);
+
     if (msg->thinking)
         cJSON_AddStringToObject(m, "thinking", msg->thinking);
 

@@ -40,6 +40,8 @@ int message_copy(Message *dst, const Message *src)
     dst->role = str_dup(src->role);
     dst->content = str_dup(src->content);
     dst->id = str_dup(src->id);
+    dst->parent_id = str_dup(src->parent_id);
+    dst->fork_group_id = str_dup(src->fork_group_id);
     dst->tool_call_id = str_dup(src->tool_call_id);
     dst->tool_name = str_dup(src->tool_name);
     dst->error_category = str_dup(src->error_category);
@@ -49,7 +51,9 @@ int message_copy(Message *dst, const Message *src)
     dst->timestamp = src->timestamp;
 
     if ((src->role && !dst->role) || (src->content && !dst->content) ||
-        (src->id && !dst->id) || (src->tool_call_id && !dst->tool_call_id) ||
+        (src->id && !dst->id) || (src->parent_id && !dst->parent_id) ||
+        (src->fork_group_id && !dst->fork_group_id) ||
+        (src->tool_call_id && !dst->tool_call_id) ||
         (src->tool_name && !dst->tool_name) ||
         (src->error_category && !dst->error_category) ||
         (src->thinking && !dst->thinking) || (src->phase && !dst->phase) ||
@@ -84,6 +88,8 @@ cleanup:
     free(dst->role);
     free(dst->content);
     free(dst->id);
+    free(dst->parent_id);
+    free(dst->fork_group_id);
     free(dst->tool_call_id);
     free(dst->tool_name);
     free(dst->error_category);
@@ -113,6 +119,8 @@ void message_clear(Message *msg)
     free(msg->role);
     free(msg->content);
     free(msg->id);
+    free(msg->parent_id);
+    free(msg->fork_group_id);
     free(msg->tool_call_id);
     free(msg->tool_name);
     free(msg->error_category);
@@ -130,6 +138,8 @@ void message_clear(Message *msg)
     msg->role = NULL;
     msg->content = NULL;
     msg->id = NULL;
+    msg->parent_id = NULL;
+    msg->fork_group_id = NULL;
     msg->tool_call_id = NULL;
     msg->tool_name = NULL;
     msg->error_category = NULL;
@@ -234,6 +244,15 @@ cJSON *messages_to_json_array(Message *msgs, int count)
          * save. The deserializer reads it back into Message.id. */
         if (msgs[i].id)
             cJSON_AddStringToObject(item, "id", msgs[i].id);
+
+        /* Branching fields (parent_id, fork_group_id) — same emit-only-when-
+         * present rule; legacy blobs never carried them and stay shape-
+         * equivalent until the next fork. */
+        if (msgs[i].parent_id)
+            cJSON_AddStringToObject(item, "parent_id", msgs[i].parent_id);
+
+        if (msgs[i].fork_group_id)
+            cJSON_AddStringToObject(item, "fork_group_id", msgs[i].fork_group_id);
 
         /* Persist timestamp so reload preserves per-message timing. Emit only
          * when non-zero to keep legacy blobs (which never carried a timestamp)

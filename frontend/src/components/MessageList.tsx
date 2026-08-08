@@ -1,10 +1,11 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Pencil, Copy, Check } from 'lucide-react';
+import { Pencil, Copy, Check, RotateCcw } from 'lucide-react';
 import { useChat } from '../context';
 import { parseThinkBlocks } from '../utils/thinkBlockParser';
 import type { ToolCall } from '../types';
+import { BranchPill } from './BranchPill';
 
 interface SearchResult {
   title: string;
@@ -293,7 +294,8 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
 }
 
 export const MessageList = memo(function MessageList() {
-  const { messages, isStreaming, editMessage } = useChat();
+  const { messages, isStreaming, editMessage, regenerateMessage, switchBranch, branchInfo } =
+    useChat();
   const containerRef = useRef<HTMLDivElement>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState('');
@@ -429,7 +431,28 @@ export const MessageList = memo(function MessageList() {
                       </div>
                     )}
                   </div>
-                  <div className="message-footer">
+                  {(() => {
+                    const entry = msg.id
+                      ? branchInfo.find((b) => b.messageId === msg.id)
+                      : undefined;
+                    if (!entry || entry.count <= 1) return null;
+                    return (
+                      <BranchPill
+                        info={entry}
+                        onSwitch={(direction) => switchBranch(entry.messageId, direction)}
+                      />
+                    );
+                  })()}
+                  <div
+                    className={
+                      'message-footer' +
+                      (msg.role === 'assistant' &&
+                      !isStreaming &&
+                      idx === messages.length - 1
+                        ? ' message-footer-actions-visible'
+                        : '')
+                    }
+                  >
                     {msg.timestamp && <div className="message-time">{msg.timestamp}</div>}
                     {msg.role === 'assistant' && msg.content && (
                       <button
@@ -439,7 +462,7 @@ export const MessageList = memo(function MessageList() {
                             setCopiedIndex(idx);
                             if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
                             copyTimeoutRef.current = setTimeout(() => {
-                              setCopiedIndex(null);
+                              setCopiedIndex(-1);
                               copyTimeoutRef.current = null;
                             }, 2000);
                           };
@@ -471,6 +494,21 @@ export const MessageList = memo(function MessageList() {
                         {copiedIndex === idx ? <Check size={16} /> : <Copy size={16} />}
                       </button>
                     )}
+                    {msg.role === 'assistant' &&
+                      !isStreaming &&
+                      idx === messages.length - 1 && (
+                        /* Re-roll the last AI response — sits next to Copy;
+                         * the footer is forced visible on this message so
+                         * the action is discoverable without hovering. */
+                        <button
+                          className="icon-button"
+                          onClick={() => regenerateMessage(idx, msg.id)}
+                          title="Regenerate"
+                          aria-label="Regenerate response"
+                        >
+                          <RotateCcw size={16} />
+                        </button>
+                      )}
                     {msg.role === 'user' && !isStreaming && (
                       <button
                         className="icon-button"

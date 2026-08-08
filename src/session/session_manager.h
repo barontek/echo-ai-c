@@ -61,6 +61,60 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
                                  const char *role, const char *content,
                                  const char *tool_call_id, const char *tool_name);
 int session_manager_truncate_history(SessionManager *sm, const char *session_id, int index);
+
+/* Result of a fork: the old chain's snapshot record id plus the minted
+ * identity of the new fork message. All strings are caller-owned (free
+ * individually); fork_message is a deep copy the caller owns (message_clear
+ * it after use). */
+typedef struct {
+    char *branch_id;
+    char *fork_message_id;
+    char *fork_group_id;
+    Message fork_message;
+} SessionManagerForkResult;
+
+/* Forks the live chain of `session_id` at the message resolved from
+ * `message_id` (scan for id match) or, when NULL/not found, `index`
+ * (bounds-checked). The pre-fork chain is deep-copied into a snapshot
+ * record under metadata.branches.list (never mutated afterwards); the live
+ * array is truncated after the fork point; the fork message is replaced by
+ * a deep copy with freshly minted id + fork_group_id and (when non-NULL)
+ * new content; the pre-fork message at the fork point shares the same
+ * minted fork_group_id (and gets an id minted if it lacked one) so the
+ * pill renders on both chains. All-or-nothing: any allocation failure
+ * leaves the session unchanged on disk and returns -1 with *out zeroed.
+ * On success returns 0 and fills *out. */
+int session_manager_fork_branch(SessionManager *sm, const char *session_id,
+                                const char *message_id, int index,
+                                const char *new_content,
+                                SessionManagerForkResult *out);
+
+/* Switches the live chain of `session_id` to the snapshot stored under
+ * `branch_id`. The current live chain is first snapshotted (a fresh record
+ * is appended — records are never replaced by anchor match, since sibling
+ * chains share the fork point's id), so no chain is ever lost. Switching
+ * to the chain that is already live is a no-op. Returns 0 on success, -1
+ * on unknown branch / load / allocation failure (session unchanged). */
+int session_manager_switch_branch(SessionManager *sm, const char *session_id,
+                                  const char *branch_id);
+
+/* Tags the message at `index` of the live chain of `session_id` with
+ * `fork_group_id` plus a freshly minted id, marking it as the chain's fork
+ * point (used for the regenerated assistant response after a regenerate
+ * fork). A message that already carries a fork_group_id keeps it. Returns
+ * the minted message id (caller frees) on success, NULL on failure —
+ * all-or-nothing, session unchanged on disk on failure. */
+char *session_manager_tag_message(SessionManager *sm, const char *session_id,
+                                  int index, const char *fork_group_id);
+
+/* Builds the branch_info JSON array for the live chain of `session_id`:
+ * [{message_id, count, active}] — one entry per fork point on the live
+ * chain (message carrying a fork_group_id). count = number of chains
+ * (snapshot records + live) containing a message with that fork_group_id;
+ * active = 1-based position of the live chain among them, ordered by chain
+ * creation time. Returns a caller-freed string, or NULL on OOM/error.
+ * Sessions without metadata.branches yield an empty array. */
+char *session_manager_branch_info_alloc(SessionManager *sm, const char *session_id);
 char *session_manager_export_session(SessionManager *sm, const char *session_id);
 Session *session_manager_import_session(SessionManager *sm, const char *json_str);
 int session_manager_purge_sessions(SessionManager *sm, int older_than_days);

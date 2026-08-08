@@ -6,7 +6,7 @@ import {
   type ConnectionStatus,
 } from './ChatContext';
 import { api } from '../api/client';
-import type { ApprovalRequest, StreamEvent } from '../types';
+import type { ApprovalRequest, BranchInfo, StreamEvent } from '../types';
 
 const DEBUG = import.meta.env.DEV;
 
@@ -92,6 +92,27 @@ function combineAssistantMessages(
   return combined;
 }
 
+/* Wire format of branch_info frames and the REST branches array:
+ * {message_id, count, active, branch_ids?}. */
+type BranchEntry = {
+  message_id: string;
+  count: number;
+  active: number;
+  branch_ids?: string[];
+};
+
+function toBranchInfo(branches?: BranchEntry[]): BranchInfo[] {
+  if (!branches) return [];
+  return branches
+    .filter((b) => b && typeof b.message_id === 'string' && b.message_id.length > 0)
+    .map((b) => ({
+      messageId: b.message_id,
+      count: b.count,
+      active: b.active,
+      branchIds: Array.isArray(b.branch_ids) ? b.branch_ids : [],
+    }));
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<ChatContextValue['sessions']>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -115,6 +136,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
    * accepted effort values. */
   const [currentEffort, setCurrentEffort] = useState<string>('');
   const [messages, setMessages] = useState<ChatContextValue['messages']>([]);
+  const [branchInfo, setBranchInfo] = useState<BranchInfo[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [isConnected, setIsConnected] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -366,61 +388,98 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               }
               setIsStreaming(false);
               isReadyRef.current = true;
-              // Find last assistant message and update it (not user message)
-              setMessages((prev) => {
-                const lastAssistantIdx = prev.findLastIndex((m) => m.role === 'assistant');
-                if (lastAssistantIdx >= 0) {
-                  const last = prev[lastAssistantIdx];
+              {
+                /* After an edit/regenerate fork the fork point message got a
+                 * fresh identity; adopt it so the branch pill (keyed by
+                 * message id) attaches to the right message. fork_role tells
+                 * us which message that is: the edited user message (edit),
+                 * or the regenerated assistant response (regenerate). */
+                const forkMsgId = data.fork_message_id;
+                const forkGroupId = data.fork_group_id;
+                const isUserFork = !!(forkMsgId && data.fork_role === 'user');
+                setMessages((prev) => {
+                  const lastAssistantIdx = prev.findLastIndex((m) => m.role === 'assistant');
+                  /* For an edit the fork point is the edited user message
+                   * (the last user message of the rebuilt chain); anything
+                   * else — regenerate and plain chat completions — lands on
+                   * the last assistant message. */
+                  const targetIdx = isUserFork
+                    ? prev.findLastIndex((m) => m.role === 'user')
+                    : lastAssistantIdx;
+                  if (targetIdx >= 0) {
+                    const last = prev[targetIdx];
 
-                  const mergedToolCalls = (last.tool_calls || []).map((existing) => {
-                    const doneMatch =
-                      data.tool_calls?.find(
-                        (dtc: { name?: string }) => dtc.name === existing.name
-                      );
-                    if (doneMatch && (doneMatch as { result_content?: string; result_error?: string }).result_content) {
-                      return {
-                        ...existing,
-                        result: {
-                          content: (doneMatch as { result_content?: string; result_error?: string }).result_content || '',
-                          error: (doneMatch as { result_content?: string; result_error?: string }).result_error || null,
+                    if (isUserFork) {
+                      /* The edited message's content was already applied
+                       * locally at submit; the done content is the assistant
+                       * reply and must NOT overwrite the user message. Only
+                       * the fork identity is adopted — and the tail (the
+                       * freshly streamed assistant reply) is preserved. */
+                      return [
+                        ...prev.slice(0, targetIdx),
+                        {
+                          ...last,
+                          id: forkMsgId,
+                          fork_group_id: forkGroupId,
                         },
-                      };
+                        ...prev.slice(targetIdx + 1),
+                      ];
                     }
-                    return existing;
-                  });
 
-                  /* Only use data.tool_calls to enrich existing tool_calls
-                   * (mergedToolCalls path above). Never add tool_calls
-                   * to a message that didn't already have them — the
-                   * backend may attach stale tool_calls from previous
-                   * turns onto a text-only response. */
-                  const finalToolCalls =
-                    mergedToolCalls.length > 0
-                      ? mergedToolCalls
-                      : last.tool_calls || [];
+                    const mergedToolCalls = (last.tool_calls || []).map((existing) => {
+                      const doneMatch =
+                        data.tool_calls?.find(
+                          (dtc: { name?: string }) => dtc.name === existing.name
+                        );
+                      if (doneMatch && (doneMatch as { result_content?: string; result_error?: string }).result_content) {
+                        return {
+                          ...existing,
+                          result: {
+                            content: (doneMatch as { result_content?: string; result_error?: string }).result_content || '',
+                            error: (doneMatch as { result_content?: string; result_error?: string }).result_error || null,
+                          },
+                        };
+                      }
+                      return existing;
+                    });
 
+                    /* Only use data.tool_calls to enrich existing tool_calls
+                     * (mergedToolCalls path above). Never add tool_calls
+                     * to a message that didn't already have them — the
+                     * backend may attach stale tool_calls from previous
+                     * turns onto a text-only response. */
+                    const finalToolCalls =
+                      mergedToolCalls.length > 0
+                        ? mergedToolCalls
+                        : last.tool_calls || [];
+
+                    return [
+                      ...prev.slice(0, targetIdx),
+                      {
+                        ...last,
+                        content: data.content || last.content,
+                        has_tools: data.has_tools ?? (finalToolCalls.length > 0),
+                        tool_calls: finalToolCalls,
+                        timestamp: data.timestamp || last.timestamp,
+                        id: forkMsgId || last.id,
+                        fork_group_id: forkGroupId || last.fork_group_id,
+                      },
+                    ];
+                  }
                   return [
-                    ...prev.slice(0, lastAssistantIdx),
+                    ...prev,
                     {
-                      ...last,
-                      content: data.content || last.content,
-                      has_tools: data.has_tools ?? (finalToolCalls.length > 0),
-                      tool_calls: finalToolCalls,
-                      timestamp: data.timestamp || last.timestamp,
+                      role: 'assistant',
+                      content: data.content || '',
+                      has_tools: data.has_tools,
+                      tool_calls: data.tool_calls,
+                      timestamp: data.timestamp,
+                      id: forkMsgId,
+                      fork_group_id: forkGroupId,
                     },
                   ];
-                }
-                return [
-                  ...prev,
-                  {
-                    role: 'assistant',
-                    content: data.content || '',
-                    has_tools: data.has_tools,
-                    tool_calls: data.tool_calls,
-                    timestamp: data.timestamp,
-                  },
-                ];
-              });
+                });
+              }
               if (data.session_id) {
                 setActiveSessionId(data.session_id);
               }
@@ -437,6 +496,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 const combined = combineAssistantMessages(data.messages);
                 setMessages(combined);
               }
+              break;
+
+            case 'branch_info':
+              debugLog('branch_info', { branches: data.branches?.length });
+              setBranchInfo(toBranchInfo(data.branches));
               break;
 
             case 'error':
@@ -559,6 +623,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         .loadSession(activeSessionIdRef.current)
         .then((data) => {
           setMessages(combineAssistantMessages(data.messages));
+          setBranchInfo(toBranchInfo(data.branches));
         })
         .catch(console.error);
     }
@@ -767,6 +832,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     activeSessionIdRef.current = null;
     setActiveSessionId(null);
     setMessages([]);
+    setBranchInfo([]);
     messageQueueRef.current = [];
     // Session is created lazily on the backend when the first message is sent.
   }, [stopGeneration]);
@@ -783,6 +849,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       setActiveSessionId(sessionId);
       setMessages(combinedMessages);
+      setBranchInfo(toBranchInfo(data.branches));
     } catch (err) {
       console.error('[Chat] Failed to load session:', err);
     }
@@ -796,6 +863,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (activeSessionId === sessionId) {
           setActiveSessionId(null);
           setMessages([]);
+          setBranchInfo([]);
         }
         const sessionsData = await api.getSessions();
         setSessions(sessionsData);
@@ -906,15 +974,62 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [modelByProvider, currentEffort, effortOptionsByProvider]
   );
 
-  const retryMessage = useCallback(
-    (index: number) => {
-      const msg = messages[index];
-      if (msg && msg.role === 'user') {
-        setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, error: undefined } : m)));
-        sendMessage(msg.content);
+  /* Regenerate the assistant message at `index`: the backend forks AT that
+   * message (the fresh response becomes the new chain's fork point, pill
+   * included) and streams a new answer. The local tail from the message
+   * onwards is dropped so stale content doesn't bleed into the new
+   * stream — dropping the old message itself is what lets the content
+   * frames stream into a fresh assistant message. */
+  const regenerateMessage = useCallback(
+    (index: number, msgId?: string) => {
+      setMessages((prev) => {
+        if (index < 0 || index >= prev.length) return prev;
+        return prev.slice(0, index);
+      });
+      setIsStreaming(true);
+
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: 'regenerate',
+            index: index,
+            session_id: activeSessionId,
+            message_id: msgId || undefined,
+          })
+        );
       }
     },
-    [messages, sendMessage]
+    [activeSessionId]
+  );
+
+  /* Move the active chain one step in `direction` at the fork point of the
+   * message identified by `messageId`. The target position's branch_id is
+   * resolved from the branchInfo entry (branch_ids omits the live chain,
+   * which has no record). */
+  const switchBranch = useCallback(
+    (messageId: string, direction: -1 | 1) => {
+      const entry = branchInfo.find((b) => b.messageId === messageId);
+      if (!entry || entry.count <= 1) return;
+      const target = entry.active + direction;
+      if (target < 1 || target > entry.count || target === entry.active) return;
+      /* branch_ids[k] is the chain at position (k < active ? k+1 : k+2). */
+      const branchIndex = target < entry.active ? target - 1 : target - 2;
+      const branchId = entry.branchIds[branchIndex];
+      if (!branchId) return;
+
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: 'branch_switch',
+            session_id: activeSessionId,
+            branch_id: branchId,
+          })
+        );
+      }
+    },
+    [branchInfo, activeSessionId]
   );
 
   const supportsEffort = effortSupportedProviders.includes(currentProvider);
@@ -933,6 +1048,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       selectEffort,
       supportsEffort,
       messages,
+      branchInfo,
       connectionStatus,
       isConnected,
       isStreaming,
@@ -942,7 +1058,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sendMessage,
       stopGeneration,
       editMessage,
-      retryMessage,
+      regenerateMessage,
+      switchBranch,
       createSession,
       selectSession,
       deleteSession,
@@ -967,6 +1084,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       selectEffort,
       supportsEffort,
       messages,
+      branchInfo,
       connectionStatus,
       isConnected,
       isStreaming,
@@ -974,7 +1092,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sendMessage,
       stopGeneration,
       editMessage,
-      retryMessage,
+      regenerateMessage,
+      switchBranch,
       createSession,
       selectSession,
       deleteSession,
