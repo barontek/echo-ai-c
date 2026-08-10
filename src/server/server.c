@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdint.h>
 #include <cjson/cJSON.h>
 
 #include "server.h"
