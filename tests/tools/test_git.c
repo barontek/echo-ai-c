@@ -40,7 +40,7 @@ static void git_setup(void)
 static void git_teardown(void)
 {
     if (!repo_dir[0]) return;
-    chdir(old_cwd);
+    ck_assert_int_eq(chdir(old_cwd), 0);
     char cmd[700];
     snprintf(cmd, sizeof(cmd), "rm -rf %s", repo_dir);
     ck_assert_int_eq(system(cmd), 0);
