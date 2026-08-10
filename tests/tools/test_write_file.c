@@ -188,6 +188,10 @@ START_TEST(test_write_file_snapshots_previous_content_to_change_tracker)
 
     ck_assert_int_eq(ct.undo_count, 1);
     ck_assert_str_eq(ct.undo_stack[0].previous_content, "before");
+    /* ct_snapshot mallocs the entry fields; the stack tracker never
+     * frees them (Linux LSan caught this — invisible on macOS). */
+    free(ct.undo_stack[0].file_path);
+    free(ct.undo_stack[0].previous_content);
 
     tool->destroy(tool);
     safety_config_free(safety);

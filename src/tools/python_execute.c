@@ -37,6 +37,7 @@ static ToolResult *python_execute_execute(Tool *self, const char *args_json)
 
     char *code = str_dup(cJSON_GetStringValue(code_json));
     cJSON_Delete(args);
+    if (!code) return tool_result_error("oom", "execution_error");
 
     int stdin_pipe[2];
     int stdout_pipe[2];
@@ -70,6 +71,10 @@ static ToolResult *python_execute_execute(Tool *self, const char *args_json)
         execlp("python", "python", "-c", code, NULL);
         _exit(127);
     }
+
+    /* code is only needed by the child (execlp); free it in the parent,
+     * which otherwise leaks it on every exit path (caught by Linux LSan). */
+    free(code);
 
     close(stdin_pipe[0]);
     close(stdin_pipe[1]);

@@ -20,9 +20,21 @@ Tool *tool_git_create(SafetyConfig *safety);
 static char repo_dir[64];
 static char old_cwd[1024];
 
+static int git_available(void)
+{
+    static int checked = 0;
+    static int available = 0;
+    if (!checked)
+    {
+        available = system("command -v git >/dev/null 2>&1") == 0;
+        checked = 1;
+    }
+    return available;
+}
+
 static void git_setup(void)
 {
-    if (system("command -v git >/dev/null 2>&1") != 0) return;
+    if (!git_available()) return;
     snprintf(repo_dir, sizeof(repo_dir), "/tmp/echo_git_XXXXXX");
     ck_assert_ptr_nonnull(mkdtemp(repo_dir));
     ck_assert_ptr_nonnull(getcwd(old_cwd, sizeof(old_cwd)));
@@ -49,6 +61,7 @@ static void git_teardown(void)
 
 START_TEST(test_git_status_reports_clean)
 {
+    if (!git_available()) return;
     Tool *tool = tool_git_create(NULL);
     ck_assert_ptr_nonnull(tool);
     ToolResult *r = tool->execute(tool, "{\"operation\":\"status\"}");
@@ -63,6 +76,7 @@ END_TEST
 
 START_TEST(test_git_log_shows_commit)
 {
+    if (!git_available()) return;
     Tool *tool = tool_git_create(NULL);
     ck_assert_ptr_nonnull(tool);
     ToolResult *r = tool->execute(tool, "{\"operation\":\"log\",\"count\":5}");
@@ -76,6 +90,7 @@ END_TEST
 
 START_TEST(test_git_diff_shows_uncommitted_change)
 {
+    if (!git_available()) return;
     FILE *f = fopen("file.txt", "a");
     ck_assert_ptr_nonnull(f);
     fputs("\nmore", f);
@@ -97,6 +112,7 @@ END_TEST
 
 START_TEST(test_git_unknown_operation_is_validation_error)
 {
+    if (!git_available()) return;
     Tool *tool = tool_git_create(NULL);
     ck_assert_ptr_nonnull(tool);
     ToolResult *r = tool->execute(tool, "{\"operation\":\"frobnicate\"}");
