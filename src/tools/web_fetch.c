@@ -1,3 +1,11 @@
+/*
+ * web_fetch.c - URL fetch tool: downloads a page via libcurl with a
+ * socket-policy hook and a size cap, extracts text for the LLM, and
+ * retries WAF challenge pages through a curl-impersonate binary when one
+ * is on PATH. Depends on: tool.h, libcurl, safety, string_utils,
+ * html_extract, logging.
+ */
+
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -469,6 +477,14 @@ static void web_fetch_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_web_fetch_create - construct the web_fetch tool
+ * @safety: borrowed SafetyConfig consulted on every execution; not owned
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_web_fetch_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));
@@ -497,19 +513,45 @@ Tool *tool_web_fetch_create(SafetyConfig *safety)
  * without any network or a real curl-impersonate install. */
 #include <netinet/in.h>
 
+/**
+ * web_fetch_test_looks_like_challenge - scan a body for WAF challenge-page
+ * markers
+ * @data: body bytes; NULL-safe
+ * @len: length of data
+ *
+ * Return: 1 when a challenge marker is found, 0 otherwise.
+ */
 int web_fetch_test_looks_like_challenge(const char *data, size_t len)
 {
     return looks_like_challenge(data, len);
 }
 
+/**
+ * web_fetch_test_binary_on_path - probe PATH for an executable
+ * @name: executable name to look up; NULL-safe
+ *
+ * Return: 1 when an executable of that name exists on PATH, 0 otherwise.
+ */
 int web_fetch_test_binary_on_path(const char *name)
 {
     return binary_on_path(name);
 }
 
-/* Runs the single-binary challenge retry on caller-owned buffers: on
- * success *data is replaced (caller frees the new buffer) and 1 is
- * returned; on failure *data is untouched and 0 is returned. */
+/**
+ * web_fetch_test_retry_challenge - run the single-binary challenge retry
+ * @data: in/out body buffer; on success *data is replaced (caller frees
+ * the new buffer), on failure *data is untouched
+ * @len: in/out body length
+ * @max_len: size cap enforced during the retry fetch
+ * @ctype: in/out content-type string (replaced with "text/html" on
+ * success); caller frees
+ * @url: URL to refetch
+ * @binary: impersonator binary to use
+ * @imp_flag: curl-impersonate flag string, or NULL
+ * @timeout_s: subprocess timeout in seconds
+ *
+ * Return: 1 when the body was replaced, 0 otherwise.
+ */
 int web_fetch_test_retry_challenge(char **data, size_t *len, size_t max_len,
                                    char **ctype, const char *url,
                                    const char *binary, const char *imp_flag,
@@ -527,9 +569,23 @@ int web_fetch_test_retry_challenge(char **data, size_t *len, size_t max_len,
     return replaced;
 }
 
-/* Runs the error-path gate on caller-owned buffers.  Same contract as
- * web_fetch_test_retry_challenge, with the gate's two suppression inputs
- * mapped to booleans (resolve_failed -> CURLE_COULDNT_RESOLVE_HOST). */
+/**
+ * web_fetch_test_error_path_retry - run the error-path impersonator gate
+ * @data: in/out body buffer; on success *data is replaced (caller frees
+ * the new buffer), on failure *data is untouched
+ * @len: in/out body length
+ * @max_len: size cap enforced during the retry fetch
+ * @ctype: in/out content-type string (replaced with "text/html" on
+ * success); caller frees
+ * @url: URL to refetch
+ * @timeout_s: subprocess timeout in seconds
+ * @policy_rejected: simulate the socket policy having rejected an address
+ * (suppresses the retry)
+ * @resolve_failed: simulate a resolve failure (maps to
+ * CURLE_COULDNT_RESOLVE_HOST, which also suppresses the retry)
+ *
+ * Return: 1 when the body was replaced, 0 otherwise.
+ */
 int web_fetch_test_error_path_retry(char **data, size_t *len, size_t max_len,
                                     char **ctype, const char *url,
                                     int timeout_s, int policy_rejected,
@@ -549,10 +605,15 @@ int web_fetch_test_error_path_retry(char **data, size_t *len, size_t max_len,
     return replaced;
 }
 
-/* Runs the real open_socket_cb against a fabricated address, returning the
- * callback's flag state.  s_addr_be is in network byte order.  A successful
- * callback opens a real socket in *out (test closes it); a rejected one
- * leaves CURL_SOCKET_BAD. */
+/**
+ * web_fetch_test_open_socket_addr - run the real socket-policy callback
+ * against a fabricated IPv4 address
+ * @s_addr_be: address in network byte order
+ * @out: receives the callback's socket, or CURL_SOCKET_BAD when rejected
+ * (test must close a successful socket)
+ *
+ * Return: 1 when the socket policy rejected the address, 0 otherwise.
+ */
 int web_fetch_test_open_socket_addr(unsigned int s_addr_be,
                                     curl_socket_t *out)
 {
@@ -575,6 +636,15 @@ int web_fetch_test_open_socket_addr(unsigned int s_addr_be,
     return fc.socket_policy_rejected;
 }
 
+/**
+ * web_fetch_test_open_socket_addr6 - run the real socket-policy callback
+ * against a fabricated IPv6 address
+ * @s6: 16-byte address in network byte order
+ * @out: receives the callback's socket, or CURL_SOCKET_BAD when rejected
+ * (test must close a successful socket)
+ *
+ * Return: 1 when the socket policy rejected the address, 0 otherwise.
+ */
 int web_fetch_test_open_socket_addr6(const unsigned char s6[16],
                                      curl_socket_t *out)
 {

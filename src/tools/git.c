@@ -1,3 +1,9 @@
+/*
+ * git.c - git operations tool: runs status/diff/log/add/commit/push/pull/
+ * branch/stash in a subprocess with a timeout and returns the output.
+ * Depends on: tool.h, safety, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -241,6 +247,13 @@ static void git_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_git_create - construct the git tool
+ * @safety: accepted for interface uniformity only; ignored by this tool
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy().
+ */
 Tool *tool_git_create(SafetyConfig *safety)
 {
     (void)safety;

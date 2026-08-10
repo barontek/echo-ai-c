@@ -1,3 +1,10 @@
+/*
+ * write_file.c - file writing tool: writes model-provided content to a
+ * file, snapshotting the pre-write state through the change tracker so
+ * edits can be reverted. Depends on: tool.h, safety, change_tracker,
+ * string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -99,6 +106,14 @@ static void write_file_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_write_file_create - construct the write_file tool
+ * @safety: borrowed SafetyConfig consulted on every execution; not owned
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_write_file_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));
@@ -122,6 +137,15 @@ Tool *tool_write_file_create(SafetyConfig *safety)
     return t;
 }
 
+/**
+ * tool_write_file_set_change_tracker - attach the change tracker used for
+ * pre-write snapshots
+ * @tool: tool returned by tool_write_file_create(); may be NULL
+ * @ct: borrowed ChangeTracker; not owned, and may be NULL to disable
+ * snapshots
+ *
+ * Return: void. Accepts NULL for either argument as a no-op.
+ */
 void tool_write_file_set_change_tracker(Tool *tool, ChangeTracker *ct)
 {
     if (!tool || !tool->ctx) return;

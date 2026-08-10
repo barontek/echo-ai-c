@@ -1,19 +1,63 @@
+/*
+ * string_utils.h - common string helpers: trimming, duplication,
+ * splitting, JSON sanitizing, and truncation. Depends on: none.
+ */
+
 #ifndef ECHO_STRING_UTILS_H
 #define ECHO_STRING_UTILS_H
 
+/**
+ * str_trim - strip leading and trailing whitespace in place
+ * @str: NUL-terminated buffer to trim in place; NULL yields NULL.
+ *
+ * Leading whitespace is memmoved away, so the returned pointer always
+ * equals the passed buffer (an interior pointer is never returned).
+ * The input buffer is mutated and must be writable.
+ *
+ * Return: the passed @str pointer (points into the caller's buffer,
+ * which the caller still owns and frees). NULL only when @str is NULL.
+ * Never fails; thread-safe as long as the buffer is not shared.
+ */
 char *str_trim(char *str);
 
-/* Duplicate `str` into a freshly malloc'd NUL-terminated buffer the caller
- * must `free`. Returns NULL when:
- *   - `str` is NULL (the function is a NULL-tolerant no-op, not an error)
- *   - malloc fails (true OOM, distinct from the legitimate-NULL case above)
- * Callers that distinguish the two cases (e.g. parsing optional JSON keys
- * where a missing key legitimately yields NULL) can safely pass the NULL
- * through; callers that treat NULL as OOM (e.g. `session_create`'s title,
- * `save_session_core`'s serialize OOM path) MUST check the return — the
- * F1/F3 split is a known design point in this codebase. */
+/**
+ * str_dup - duplicate a string into a fresh buffer
+ * @str: NUL-terminated input.
+ *
+ * Duplicate @str into a freshly malloc'd NUL-terminated buffer the
+ * caller must free.
+ *
+ * Return: NULL when @str is NULL (a NULL-tolerant no-op, not an error)
+ * or when malloc fails (true OOM, distinct from the legitimate-NULL
+ * case above). Callers that distinguish the two cases (e.g. parsing
+ * optional JSON keys where a missing key legitimately yields NULL) can
+ * safely pass the NULL through; callers that treat NULL as OOM (e.g.
+ * session_create's title, save_session_core's serialize OOM path) MUST
+ * check the return — the F1/F3 split is a known design point in this
+ * codebase. Thread-safe; no shared state.
+ */
 char *str_dup(const char *str);
+
+/**
+ * str_starts_with - prefix test
+ * @str: string to test; NULL yields 0.
+ * @prefix: prefix to look for; NULL yields 0. The empty string
+ *   matches any @str.
+ *
+ * Return: 1 when @str begins with @prefix, 0 otherwise. Never fails;
+ * thread-safe.
+ */
 int str_starts_with(const char *str, const char *prefix);
+
+/**
+ * str_ends_with - suffix test
+ * @str: string to test; NULL yields 0.
+ * @suffix: suffix to look for; NULL yields 0. The empty string matches
+ *   any @str.
+ *
+ * Return: 1 when @str ends with @suffix, 0 otherwise. Never fails;
+ * thread-safe.
+ */
 int str_ends_with(const char *str, const char *suffix);
 
 typedef struct {
@@ -21,15 +65,61 @@ typedef struct {
     int count;
 } StrArray;
 
+/**
+ * str_split - split a string on a delimiter into fresh copies
+ * @str: NUL-terminated string to split; NULL yields {NULL, 0}.
+ * @delimiter: byte to split on.
+ *
+ * Every segment is a freshly malloc'd copy, including empty segments
+ * (delimiter runs and leading/trailing delimiters produce "" items).
+ * On allocation failure the result degrades silently: a failed segment
+ * copy is skipped, and a failed items-array grow frees everything and
+ * returns {NULL, 0}.
+ *
+ * Return: StrArray of @count caller-owned item strings. Release every
+ * item and the array with str_array_free(). Thread-safe; no shared
+ * state; the input is only read.
+ */
 StrArray str_split(const char *str, char delimiter);
+
+/**
+ * str_array_free - free a StrArray and all its items
+ * @arr: array to free; NULL, or a {NULL, 0} array, is a safe no-op.
+ *
+ * Resets @arr to {NULL, 0} after freeing so it can be reused or freed
+ * again safely.
+ *
+ * Return: void; never fails.
+ */
 void str_array_free(StrArray *arr);
 
+/**
+ * sanitize_json - normalize an LLM-produced JSON fragment
+ * @str: NUL-terminated input; NULL yields NULL.
+ *
+ * Removes surrounding whitespace, optional ``` (or ```json) markdown
+ * fences, whitespace/newlines outside string literals, and trailing
+ * commas that precede a closing bracket.
+ *
+ * Return: freshly malloc'd NUL-terminated string owned by the caller
+ * (free with free()), or NULL on allocation failure. Thread-safe; no
+ * shared state.
+ */
 char *sanitize_json(const char *str);
 
-/* Hard-truncate `text` to at most `max_chars` bytes, appending a
- * "[... truncated, N chars omitted ...]" marker when anything was cut.
- * Returns a freshly malloc'd NUL-terminated string the caller must free;
- * returns NULL only on allocation failure. NULL input yields NULL. */
+/**
+ * str_truncate_ellipsis - hard-truncate a string with an omission marker
+ * @text: NUL-terminated input; NULL yields NULL.
+ * @max_chars: maximum byte length of the result.
+ *
+ * Text at most @max_chars bytes is duplicated unchanged. Longer text
+ * keeps its head and appends "[... truncated, N chars omitted ...]"
+ * when the marker fits, otherwise it is hard-cut to @max_chars.
+ *
+ * Return: freshly malloc'd NUL-terminated string owned by the caller
+ * (free with free()), or NULL on allocation failure. Thread-safe; no
+ * shared state.
+ */
 char *str_truncate_ellipsis(const char *text, size_t max_chars);
 
 #endif

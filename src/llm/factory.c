@@ -1,3 +1,11 @@
+/*
+ * factory.c - provider factory: name-based provider construction and
+ * the static metadata tables (available names, default endpoints,
+ * reasoning-effort support). Depends on: provider.h, openai, openai_oauth,
+ * openai_compatible; declares ollama_provider_create and
+ * opencode_zen_provider_create via extern.
+ */
+
 #include <string.h>
 #include <stdlib.h>
 

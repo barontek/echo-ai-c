@@ -1,3 +1,9 @@
+/*
+ * tool_sqlite_schema.c - database schema tool: lists all tables of the
+ * session database with their CREATE SQL and per-column info, as JSON.
+ * Depends on: tool.h, registry, sqlite3, cJSON, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,6 +100,15 @@ static void sqlite_schema_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_sqlite_schema_create - construct the sqlite_schema tool
+ * @safety: borrowed SafetyConfig; retained in the tool's context but not
+ * consulted by the execute path
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_sqlite_schema_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

@@ -1,3 +1,10 @@
+/*
+ * routes.c - HTTP route table and shared route helpers: message-to-JSON
+ * serialization for REST and WS paths, and prefix/exact path matching.
+ * Depends on: cJSON, routes_auth/openai_auth/session/chat/general handler
+ * modules (omitted under ROUTES_TEST so the test binary links only this).
+ */
+
 #include <string.h>
 #include <cjson/cJSON.h>
 

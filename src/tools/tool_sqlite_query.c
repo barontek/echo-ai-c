@@ -1,3 +1,10 @@
+/*
+ * tool_sqlite_query.c - SQL query tool: executes a read-only SELECT (or
+ * PRAGMA/EXPLAIN) against the session database and returns the rows as
+ * JSON. Depends on: tool.h, registry, sqlite3, cJSON, string_utils,
+ * logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -134,6 +141,15 @@ static void sqlite_query_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_sqlite_query_create - construct the sqlite_query tool
+ * @safety: borrowed SafetyConfig; retained in the tool's context but not
+ * consulted by the execute path
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_sqlite_query_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

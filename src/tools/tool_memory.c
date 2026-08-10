@@ -1,3 +1,10 @@
+/*
+ * tool_memory.c - memory facts tool: get/set/delete/list persistent
+ * user-memory facts through the session manager's SQLite-backed memory
+ * module. Depends on: tool.h, registry, session/memory, string_utils,
+ * logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,6 +132,15 @@ static void memory_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_memory_create - construct the memory tool
+ * @safety: borrowed SafetyConfig; retained in the tool's context but not
+ * consulted by the execute path
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_memory_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

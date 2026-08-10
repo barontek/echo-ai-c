@@ -1,3 +1,9 @@
+/*
+ * search_brave.c - Brave Search provider: queries the Brave web search
+ * API with an API key and returns the top results as JSON. Depends on:
+ * search_provider.h, libcurl, cJSON, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,6 +145,15 @@ static void search_brave_destroy(SearchProvider *self)
     free(self);
 }
 
+/**
+ * search_provider_brave_create - construct the Brave search provider
+ * @api_key: Brave API key; duplicated into the provider (owned by it)
+ * @base_url: API endpoint override, or NULL for the default
+ *
+ * Return: heap-allocated SearchProvider, or NULL when api_key is NULL or
+ * on OOM. Caller owns the provider and must release it via its destroy
+ * function pointer.
+ */
 SearchProvider *search_provider_brave_create(const char *api_key, const char *base_url)
 {
     if (!api_key) return NULL;

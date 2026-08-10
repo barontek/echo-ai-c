@@ -1,3 +1,9 @@
+/*
+ * opencode_zen.c - OpenCode Zen provider: thin wrapper that points the
+ * OpenAI-compatible client at opencode.ai/zen/v1 with a Bearer token.
+ * Depends on: openai_compatible.
+ */
+
 #include <string.h>
 
 #include "opencode_zen.h"

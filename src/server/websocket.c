@@ -1,3 +1,9 @@
+/*
+ * websocket.c - RFC 6455 server-side websocket layer on libuv: upgrade
+ * handshake, frame masking/unmasking, fragmentation, and keepalive pings.
+ * Depends on: libuv, OpenSSL (SHA-1), websocket.h.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

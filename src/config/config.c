@@ -1,3 +1,9 @@
+/*
+ * config.c - INI-style config parser: [section] keys, continuation
+ * lines, and [providers] token lookup.
+ * Depends on: string_utils, stdio file I/O.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -109,6 +115,7 @@ Conf *conf_load(const char *path)
                 { free(full_key); continue; }
             }
 
+            /* fixed-size table: entries past MAX_ENTRIES are silently dropped */
             if (conf->count < MAX_ENTRIES)
             {
                 char *k = str_dup(full_key);

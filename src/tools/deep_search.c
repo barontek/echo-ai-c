@@ -1,3 +1,10 @@
+/*
+ * deep_search.c - multi-step research tool: searches the web through the
+ * web_search tool, fetches the top pages with web_fetch, and returns the
+ * combined findings as JSON. Depends on: tool.h, registry, safety,
+ * string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,6 +148,13 @@ static void deep_search_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_deep_search_create - construct the deep_search tool
+ * @safety: accepted for interface uniformity only; ignored by this tool
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy().
+ */
 Tool *tool_deep_search_create(SafetyConfig *safety)
 {
     (void)safety;

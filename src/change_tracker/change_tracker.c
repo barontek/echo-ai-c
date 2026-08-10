@@ -1,3 +1,9 @@
+/*
+ * change_tracker.c - undo/redo stacks that snapshot file contents before
+ * edits and restore them on demand.
+ * Depends on: string_utils, stdio file I/O.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,6 +89,7 @@ int ct_snapshot(ChangeTracker *ct, const char *file_path)
     ct->undo_stack[idx].previous_content = content;
     ct->undo_stack[idx].content_len = (size_t)read;
 
+    /* a new snapshot invalidates the redo history */
     for (int i = 0; i < ct->redo_count; i++)
     {
         free(ct->redo_stack[i].file_path);
@@ -118,6 +125,9 @@ int ct_undo(ChangeTracker *ct)
         fclose(f);
     }
 
+    /* restore the file before pushing the redo entry: if the redo-push
+     * allocation below fails, the file is already restored and the undo
+     * entry is retained */
     f = fopen(entry->file_path, "w");
     if (!f)
     {

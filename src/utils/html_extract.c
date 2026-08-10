@@ -1,3 +1,10 @@
+/*
+ * html_extract.c - readable-text extraction from raw HTML (Crawl4AI-style
+ * pipeline: tag classification, frame scoring, entity decoding, citation
+ * footer, head-biased truncation) plus Content-Type dispatch for fetched
+ * web bytes. Depends on: string_utils.h, libc (ctype/math/stdio/stdlib).
+ */
+
 #include <ctype.h>
 #include <math.h>
 #include <stdint.h>

@@ -1,3 +1,9 @@
+/*
+ * bash.c - shell command execution tool with safety checks and a hard
+ * timeout on the child process group. Depends on: tool.h, safety,
+ * string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -234,6 +240,14 @@ static void bash_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_bash_create - construct the bash tool
+ * @safety: borrowed SafetyConfig consulted on every execution; not owned
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_bash_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

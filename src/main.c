@@ -1,3 +1,9 @@
+/*
+ * main.c - entry point: parses CLI flags, loads config, wires up the agent,
+ * session manager, safety config, and tools, then starts the HTTP server.
+ * Depends on: config, agent, session, safety, server, utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

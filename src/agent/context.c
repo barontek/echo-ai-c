@@ -1,3 +1,9 @@
+/*
+ * context.c - context-window management: message trimming, prioritization,
+ * and thinking-content splitting for the agent's message list.
+ * Depends on: message.h, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +27,8 @@ char *split_thinking_content(const char *raw)
         const char *close = strstr(open, "</think>");
         if (!close)
         {
+            /* unterminated trailing block: drop everything after the last
+             * closed block — think_end keeps the last close position */
             open = NULL;
             break;
         }

@@ -1,3 +1,9 @@
+/*
+ * session.c - in-memory Session lifecycle: create/free, and JSON
+ * serialization/deserialization of messages, metadata, and events.
+ * Depends on: cJSON, agent/message.h, utils (string_utils, json).
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +27,8 @@ Session *session_create(const char *title)
     time_t now = time(NULL);
     if (asprintf(&s->id, "%ld", (long)now) < 0) { free(s); return NULL; }
     {
+        /* The timestamp prefix alone collides for sessions created in the
+         * same second; a random suffix makes ids practically unique. */
         int unique = rand() % 1000000;
         char *tmp = NULL;
         if (asprintf(&tmp, "%s-%d", s->id, unique) < 0) { free(s->id); free(s); return NULL; }

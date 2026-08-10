@@ -1,3 +1,10 @@
+/*
+ * openai_oauth.c - OAuth manager for the ChatGPT Codex provider: device
+ * and localhost-callback login flows, PKCE, single-flight token refresh,
+ * and encrypted credential persistence via SessionManager.
+ * Depends on: libcurl, cJSON, OpenSSL, pthread, SessionManager, logging.
+ */
+
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <ctype.h>

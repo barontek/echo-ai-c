@@ -1,3 +1,11 @@
+/*
+ * routes_general.c - misc HTTP endpoints: status/health probes, agent
+ * config, model and provider discovery, metrics rendering, and the
+ * undo/redo change-tracker endpoints. Depends on: libcurl, cJSON,
+ * config, provider registry, openai_oauth, session_manager, logging,
+ * string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

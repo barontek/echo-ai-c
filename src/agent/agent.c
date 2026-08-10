@@ -1,3 +1,10 @@
+/*
+ * agent.c - the agent loop: LLM calls, tool execution, context windowing,
+ * session persistence, and title generation for one conversation.
+ * Depends on: tools/registry.h, session_manager.h, memory.h, logging,
+ * string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -133,6 +140,8 @@ static int agent_append_message(Agent *agent, Message *msg)
     return idx;
 }
 
+/* Declared here, not in agent.h: non-static only so the save test can
+ * link against it (tests/agent/test_agent_save.c). Not part of the API. */
 void agent_save_session(Agent *agent);
 static void agent_generate_title(Agent *agent);
 static void agent_perform_summarization(Agent *agent, int original_count);
@@ -334,6 +343,9 @@ static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
     return 0;
 }
 
+/* Rebuilds the system prompt (cwd, time, persistent memory, summary) and
+ * replaces the existing system message on every LLM call, so the dynamic
+ * context never goes stale across a long tool-using conversation. */
 static void inject_system_with_summary(Agent *agent)
 {
     char *sys = NULL;

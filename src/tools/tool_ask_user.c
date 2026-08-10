@@ -1,3 +1,10 @@
+/*
+ * tool_ask_user.c - interactive prompt tool: asks the user a question
+ * through the registry's ask-user callback when one is registered,
+ * otherwise falls back to reading a line from stdin. Depends on: tool.h,
+ * registry, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,6 +81,15 @@ static void ask_user_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_ask_user_create - construct the ask_user tool
+ * @safety: borrowed SafetyConfig; retained in the tool's context but not
+ * consulted by the execute path
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_ask_user_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

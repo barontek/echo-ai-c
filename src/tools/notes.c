@@ -1,3 +1,10 @@
+/*
+ * notes.c - personal notes tool: list/read/write/delete markdown notes
+ * stored under the user's config dir, with strict name validation and
+ * symlink-free file access. Depends on: tool.h, safety, string_utils,
+ * logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -246,6 +253,14 @@ static void notes_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_notes_create - construct the notes tool
+ * @safety: borrowed SafetyConfig consulted on every execution; not owned
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_notes_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

@@ -1,3 +1,9 @@
+/*
+ * openai_compatible.c - OpenAI-compatible chat client for servers exposing
+ * the /v1/chat/completions API (LM Studio, vLLM, llama.cpp server, ...).
+ * Depends on: libcurl, cJSON, logging, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

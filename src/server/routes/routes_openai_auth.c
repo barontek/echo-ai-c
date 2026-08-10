@@ -1,3 +1,9 @@
+/*
+ * routes_openai_auth.c - HTTP handlers for the OpenAI OAuth flow: status
+ * polling, starting a browser login, and sign-out/cancel.
+ * Depends on: cJSON, openai_oauth, routes.h.
+ */
+
 #include <stdlib.h>
 #include <string.h>
 

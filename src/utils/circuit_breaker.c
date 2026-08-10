@@ -1,3 +1,9 @@
+/*
+ * circuit_breaker.c - fail-fast trip state for repeated LLM/provider
+ * failures, with a half-open cooldown driven by CLOCK_MONOTONIC.
+ * Depends on: time.h (clock_gettime), stdlib.
+ */
+
 #define _GNU_SOURCE
 #include <stdlib.h>
 #include <time.h>
@@ -29,6 +35,9 @@ int cb_is_available(CircuitBreaker *cb)
         return 1;
     case CB_OPEN:
     {
+        /* Trip expiry promotes OPEN to HALF_OPEN: exactly one probe
+         * request gets through, and its outcome (success vs failure)
+         * decides whether the breaker closes or re-trips. */
         long long now = cb_now_ms();
         if (now - cb->opened_at_ms >= cb->half_open_timeout_ms)
         {

@@ -1,3 +1,9 @@
+/*
+ * middleware.c - request-gating helpers shared by the HTTP and websocket
+ * paths: constant-time token comparison, unlock-state checks, and request
+ * header extraction. Depends on: OpenSSL, middleware.h, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

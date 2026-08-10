@@ -1,3 +1,10 @@
+/*
+ * web_search.c - web search tool: dispatches a query to the configured
+ * search provider (Brave, DuckDuckGo or Tavily) via the registry and
+ * returns the raw results. Depends on: tool.h, registry, safety,
+ * string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +67,15 @@ static void web_search_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_web_search_create - construct the web_search tool
+ * @safety: borrowed SafetyConfig; retained in the tool's context but not
+ * consulted by the execute path
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_web_search_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

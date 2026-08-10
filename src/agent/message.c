@@ -1,3 +1,9 @@
+/*
+ * message.c - message/tool-call data structures with ownership helpers,
+ * LLM response types, and JSON serialization for chat payloads.
+ * Depends on: cJSON, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

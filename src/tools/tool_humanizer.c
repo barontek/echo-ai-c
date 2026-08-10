@@ -1,3 +1,9 @@
+/*
+ * tool_humanizer.c - content formatting tool: restyles text as a
+ * paragraph, bulleted list, or 500-character summary. Depends on:
+ * tool.h, registry, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,6 +129,15 @@ static void humanizer_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_humanizer_create - construct the humanizer tool
+ * @safety: borrowed SafetyConfig; retained in the tool's context but not
+ * consulted by the execute path
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_humanizer_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

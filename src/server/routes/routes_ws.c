@@ -1,3 +1,11 @@
+/*
+ * routes_ws.c - per-connection WebSocket chat: the WSChatCtx lifecycle,
+ * the message protocol (chat, provider switch, approval, ask_user, edit,
+ * regenerate, branch_switch, stop), and JSON frame emission.
+ * Depends on: cJSON, websocket, agent, provider registry, safety,
+ * session_manager, logging, string_utils, tools/registry.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

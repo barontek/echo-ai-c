@@ -1,3 +1,11 @@
+/*
+ * server.c - libuv HTTP server core: connection accept, streaming request
+ * parser with size limits, static file serving, and the response helpers
+ * the route handlers use.
+ * Depends on: libuv, cJSON, routes/, websocket.h, middleware.h,
+ * utils/ (logging, string_utils, rate_limiter).
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,6 +170,11 @@ static void sse_write_done(uv_write_t *req, int status)
     free(req);
 }
 
+/* SSE frame writer for streaming routes: data is duplicated into a
+ * self-freeing uv_write request, so the caller can hand back stack
+ * buffers. Declared in routes/routes.h; HTTP only — websocket clients
+ * are ignored. Failures (allocation, queue full) drop the frame silently.
+ * Non-atomic per frame; the loop serializes writes per handle. */
 void server_sse_write(Client *client, const char *data)
 {
     if (!client || client->is_ws) return;

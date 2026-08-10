@@ -1,3 +1,9 @@
+/*
+ * rate_limiter.c - per-IP request throttling (fixed window) and
+ * unlock-attempt throttling (rolling 60 s window), persisted in SQLite;
+ * all error paths fail open (allow). Depends on: sqlite3, logging.h.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +83,8 @@ int rate_limiter_allow(RateLimiter *rl, const char *ip)
     const char *select_sql = "SELECT window_start, count FROM rate_buckets WHERE ip = ?";
     if (sqlite3_prepare_v2(rl->db, select_sql, -1, &stmt, NULL) != SQLITE_OK)
     {
+        /* Fail open: a broken/throttled store must not take the whole
+         * service down with it — the request is allowed, loudly logged. */
         log_error("rate_limiter: select prep", "err", sqlite3_errmsg(rl->db), NULL);
         return 1;
     }
@@ -113,6 +121,9 @@ int rate_limiter_allow(RateLimiter *rl, const char *ip)
 
     sqlite3_finalize(stmt);
 
+    /* OR IGNORE absorbs the race where two requests for a fresh IP both
+     * try to insert the same primary key; the row that wins owns the
+     * window and the loser's increment is dropped for this request. */
     const char *insert_sql = "INSERT OR IGNORE INTO rate_buckets (ip, window_start, count) VALUES (?, ?, 1)";
     if (sqlite3_prepare_v2(rl->db, insert_sql, -1, &stmt, NULL) != SQLITE_OK) return 1;
     sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_TRANSIENT);

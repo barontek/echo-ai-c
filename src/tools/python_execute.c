@@ -1,3 +1,9 @@
+/*
+ * python_execute.c - Python execution tool: runs model-provided code in a
+ * subprocess with a hard timeout and returns its stdout/stderr.
+ * Depends on: tool.h, safety, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -152,6 +158,13 @@ static void python_execute_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_python_execute_create - construct the python_execute tool
+ * @safety: accepted for interface uniformity only; ignored by this tool
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy().
+ */
 Tool *tool_python_execute_create(SafetyConfig *safety)
 {
     (void)safety;

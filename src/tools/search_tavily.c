@@ -1,3 +1,9 @@
+/*
+ * search_tavily.c - Tavily Search provider: queries the Tavily API with
+ * an API key and returns the top results as JSON. Depends on:
+ * search_provider.h, libcurl, cJSON, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,6 +131,14 @@ static void search_tavily_destroy(SearchProvider *self)
     free(self);
 }
 
+/**
+ * search_provider_tavily_create - construct the Tavily search provider
+ * @api_key: Tavily API key; duplicated into the provider (owned by it)
+ *
+ * Return: heap-allocated SearchProvider, or NULL when api_key is NULL or
+ * on OOM. Caller owns the provider and must release it via its destroy
+ * function pointer.
+ */
 SearchProvider *search_provider_tavily_create(const char *api_key)
 {
     if (!api_key) return NULL;

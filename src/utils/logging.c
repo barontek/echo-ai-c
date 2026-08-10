@@ -1,3 +1,8 @@
+/*
+ * logging.c - leveled JSON-lines logging to stderr with key/value
+ * context pairs. Depends on: libc (stdio, time, stdarg).
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,3 +1,9 @@
+/*
+ * glob_tool.c - glob pattern matching tool: expands a pattern against the
+ * workspace directory and lists the matches, dropping any that fall
+ * outside the workspace. Depends on: tool.h, safety, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +83,14 @@ static void glob_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_glob_create - construct the glob tool
+ * @safety: borrowed SafetyConfig consulted on every execution; not owned
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_glob_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

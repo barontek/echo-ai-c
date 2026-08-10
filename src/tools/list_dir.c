@@ -1,3 +1,9 @@
+/*
+ * list_dir.c - directory listing tool: returns one entry per line with a
+ * trailing slash on directories, filtered through the safety policy's
+ * path rules. Depends on: tool.h, safety, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +71,14 @@ static void list_dir_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_list_dir_create - construct the list_dir tool
+ * @safety: borrowed SafetyConfig consulted on every execution; not owned
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_list_dir_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

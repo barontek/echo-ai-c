@@ -1,3 +1,10 @@
+/*
+ * string_utils.c - common string helpers: in-place trim, duplication,
+ * prefix/suffix tests, splitting into fresh copies, JSON sanitizing
+ * (markdown fences, stray whitespace, trailing commas), and
+ * ellipsis-marked truncation. Depends on: libc only.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

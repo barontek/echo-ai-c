@@ -1,3 +1,8 @@
+/*
+ * callbacks.c - synchronous dispatch registry for run/LLM/tool lifecycle
+ * hooks (start/end/error). Depends on: callbacks.h, stdlib.
+ */
+
 #define _GNU_SOURCE
 #include <stdlib.h>
 

@@ -1,3 +1,12 @@
+/*
+ * session_manager.c - refcounted, mutex-protected session store: sqlite
+ * persistence of encrypted session blobs, oauth credential storage,
+ * message append/truncate, branch fork/switch, import/export, purge, and
+ * event logging.
+ * Depends on: sqlite3, pthreads, encryption, migration, memory, session,
+ * utils (logging, string_utils).
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,6 +147,8 @@ static unsigned char *sm_test_encrypt(const EncryptionKey *key,
 #define encryption_encrypt sm_test_encrypt
 #define oauth_malloc       sm_oauth_malloc
 #else
+/* Production builds route oauth result allocation through plain malloc so
+ * the TEST-only name stays callable from both branches. */
 #define oauth_malloc       malloc
 #endif
 

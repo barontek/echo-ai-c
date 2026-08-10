@@ -1,3 +1,9 @@
+/*
+ * ingest_document.c - document ingestion tool: adds a file's or raw
+ * content's text to the semantic search index for later retrieval.
+ * Depends on: tool.h, semantic_search, safety, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,6 +106,14 @@ static void ingest_document_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_ingest_document_create - construct the ingest_document tool
+ * @safety: borrowed SafetyConfig consulted on every execution; not owned
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_ingest_document_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

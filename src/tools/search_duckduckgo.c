@@ -1,3 +1,9 @@
+/*
+ * search_duckduckgo.c - DuckDuckGo search provider: scrapes the HTML
+ * results page (no API key) and returns the top results as JSON.
+ * Depends on: search_provider.h, libcurl, cJSON, string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -181,6 +187,13 @@ static void search_duckduckgo_destroy(SearchProvider *self)
     free(self);
 }
 
+/**
+ * search_provider_duckduckgo_create - construct the DuckDuckGo search
+ * provider (no API key required)
+ *
+ * Return: heap-allocated SearchProvider, or NULL on OOM. Caller owns the
+ * provider and must release it via its destroy function pointer.
+ */
 SearchProvider *search_provider_duckduckgo_create(void)
 {
     SearchProvider *p = calloc(1, sizeof(SearchProvider));

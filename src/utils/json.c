@@ -1,3 +1,9 @@
+/*
+ * json.c - thin helpers over cJSON: string escaping, keyed adds with
+ * NULL-tolerant values, and unformatted serialization.
+ * Depends on: cJSON, stdlib.
+ */
+
 #include <stdlib.h>
 #include <string.h>
 

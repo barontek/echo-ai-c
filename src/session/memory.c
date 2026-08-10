@@ -1,3 +1,9 @@
+/*
+ * memory.c - persistent user-memory key/value store (user_memory table in
+ * the session DB) for user-defined facts injected into the agent's prompt.
+ * Depends on: sqlite3, logging, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +23,9 @@ void memory_test_set_alloc_fail(int nth_allocation)
     mem_alloc_fail_at = nth_allocation;
 }
 
+/* Test-only allocator shim: forces the Nth str_dup to return NULL so the
+ * allocation-failure paths (memory_list_all's mid-loop cleanup) can be
+ * proven; production builds never compile this (see AGENTS.md). */
 static char *memory_test_strdup(const char *s)
 {
     mem_alloc_counter++;

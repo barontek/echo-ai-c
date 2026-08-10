@@ -1,3 +1,10 @@
+/*
+ * routes_auth.c - setup/unlock/logout/change-password HTTP handlers. Manages
+ * the unlock token, the shared session manager, and the server auth state.
+ * Depends on: OpenSSL RAND, cJSON, middleware, session_manager + encryption,
+ * agent, safety, tools/registry, rate_limiter, logging, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>

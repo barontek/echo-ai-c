@@ -1,3 +1,10 @@
+/*
+ * registry.c - Owns the process-wide tool table and the shared singletons
+ * (search provider, session manager, OAuth, delegate config, ask-user
+ * callback). Depends on: every built-in tool module, change_tracker,
+ * string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,6 +99,8 @@ Tool *tool_sqlite_schema_create(SafetyConfig *safety);
 Tool *tool_ask_user_create(SafetyConfig *safety);
 Tool *tool_humanizer_create(SafetyConfig *safety);
 
+/* Test builds wire the registry by hand, so the real factories are skipped
+ * to keep the test binary from linking every built-in tool module. */
 #ifndef REGISTRY_TEST
 void registry_init(SafetyConfig *safety)
 {
@@ -196,6 +205,7 @@ int registry_count(void)
 }
 
 #ifndef REGISTRY_TEST
+/* Same test-build reason as registry_init: no write_file tool to wire up. */
 void registry_set_change_tracker(ChangeTracker *ct)
 {
     void tool_write_file_set_change_tracker(Tool *tool, ChangeTracker *ct);
@@ -251,6 +261,8 @@ void registry_set_delegate_config(const char *provider_name, const char *base_ur
     {
         free(pn); free(bu); free(tk); free(md); return;
     }
+    /* Commit only after every copy succeeded, so a failed set leaves the
+     * previously installed config intact instead of half-replaced. */
     free(delegate_config.provider_name);
     free(delegate_config.base_url);
     free(delegate_config.api_token);
@@ -303,6 +315,10 @@ int registry_has_ask_user_callback(void)
 
 void registry_destroy(void)
 {
+    /* Only registry-owned state is released: tools (via destroy), the
+     * search provider (destroyed), and the OAuth pointer (cleared). The
+     * borrowed session-manager reference and ask-user callback are left
+     * in place. */
     openai_oauth_global = NULL;
     for (int i = 0; i < tool_count; i++)
     {

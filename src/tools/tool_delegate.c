@@ -1,3 +1,11 @@
+/*
+ * tool_delegate.c - sub-agent delegation tool: spins up a second LLM
+ * provider with tool access and runs it in a loop, feeding tool results
+ * back, until the sub-agent stops calling tools or hits its iteration
+ * cap. Depends on: tool.h, registry, agent/message, llm/provider,
+ * string_utils, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,12 +26,20 @@ static int td_alloc_fail_at = -1;
 static int td_realloc_counter = 0;
 static int td_realloc_fail_at = -1;
 
+/**
+ * tool_delegate_test_set_alloc_fail - fault-injection hook: make the Nth
+ * str_dup inside delegate_execute return NULL (test builds only).
+ */
 void tool_delegate_test_set_alloc_fail(int nth_allocation)
 {
     td_alloc_counter = 0;
     td_alloc_fail_at = nth_allocation;
 }
 
+/**
+ * tool_delegate_test_set_realloc_fail - fault-injection hook: make the Nth
+ * realloc inside delegate_execute return NULL (test builds only).
+ */
 void tool_delegate_test_set_realloc_fail(int nth_allocation)
 {
     td_realloc_counter = 0;
@@ -349,6 +365,15 @@ static void delegate_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_delegate_create - construct the delegate tool
+ * @safety: borrowed SafetyConfig; retained in the tool's context but not
+ * consulted by the execute path
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_delegate_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

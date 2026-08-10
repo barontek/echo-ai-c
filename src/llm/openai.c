@@ -1,3 +1,10 @@
+/*
+ * openai.c - ChatGPT Codex provider: OAuth-authenticated Requests API
+ * client with SSE streaming, reasoning summaries, tool calls, and the
+ * model-catalog fetch. Depends on: libcurl, cJSON, OpenSSL, logging,
+ * string_utils, openai_oauth, provider types.
+ */
+
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <limits.h>
@@ -53,6 +60,9 @@ typedef struct {
     char *account;
 } Credentials;
 
+/* Streaming emits one function call across several events keyed
+ * differently (output_index, item id, or call id); the map binds all
+ * three keys to one ToolCall slot so deltas can append in place. */
 typedef struct {
     int output_index;
     int response_index;

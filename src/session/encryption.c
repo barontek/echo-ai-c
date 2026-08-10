@@ -1,3 +1,10 @@
+/*
+ * encryption.c - Fernet-based field-level encryption for session records:
+ * scrypt key derivation, AES-128-CBC encrypt/decrypt with HMAC-SHA256
+ * signing, and password/salt/verifier file handling.
+ * Depends on: openssl (evp, hmac, rand, err), logging, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,6 +79,9 @@ static int build_fernet_token(const unsigned char *aes_key, const unsigned char 
     EVP_CIPHER_CTX_free(ctx);
 
     uint64_t timestamp_be = (uint64_t)time(NULL);
+    /* htonl dance converts the 64-bit unix timestamp to big-endian byte
+     * order (Fernet layout); timestamp 0 is invalid per the Fernet spec,
+     * so clamp it to 1. */
     timestamp_be = ((uint64_t)htonl((uint32_t)(timestamp_be >> 32))) |
                    (((uint64_t)htonl((uint32_t)timestamp_be)) << 32);
     if (timestamp_be == 0) timestamp_be = 1;

@@ -1,3 +1,9 @@
+/*
+ * grep_tool.c - content search tool: recursively searches a directory for
+ * lines containing a pattern, skipping symlinks, binary-looking files and
+ * anything outside the workspace. Depends on: tool.h, safety, string_utils.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -146,6 +152,14 @@ static void grep_destroy(Tool *self)
     free(self);
 }
 
+/**
+ * tool_grep_create - construct the grep tool
+ * @safety: borrowed SafetyConfig consulted on every execution; not owned
+ *
+ * Return: heap-allocated Tool, or NULL on OOM. Caller owns the Tool and
+ * must release it with tool->destroy(); the safety pointer is borrowed,
+ * never freed by the tool.
+ */
 Tool *tool_grep_create(SafetyConfig *safety)
 {
     Tool *t = calloc(1, sizeof(Tool));

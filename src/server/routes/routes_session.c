@@ -1,3 +1,11 @@
+/*
+ * routes_session.c - REST handlers for session CRUD: list, create, get
+ * (with /export and /debug-export variants), delete, update, rename, and
+ * import. Depends on: cJSON, middleware, session_manager, logging,
+ * string_utils (omitted under ROUTES_SESSION_TEST so the test binary
+ * links only the path/id helpers).
+ */
+
 #include <stdlib.h>
 #include <string.h>
 #ifndef ROUTES_SESSION_TEST
@@ -111,6 +119,18 @@ void handle_create_session(HTTPRequest *req, Client *client, ServerContext *ctx)
 #endif /* ROUTES_SESSION_TEST */
 
 #ifdef ROUTES_SESSION_TEST
+/**
+ * session_id_from_path - extract the session id from a request path
+ * @path: request path, e.g. "/api/sessions/abc123" or
+ *   "/api/sessions/abc123/export".
+ *
+ * Test-only hook (static in production, exported under ROUTES_SESSION_TEST)
+ * stripping the "/api/sessions/" prefix.
+ *
+ * Return: pointer into @path just past the prefix, or NULL when the path
+ * does not start with the prefix or holds no id. Borrowed; valid as long
+ * as @path.
+ */
 const char *session_id_from_path(const char *path)
 #else
 static const char *session_id_from_path(const char *path)
@@ -124,6 +144,15 @@ static const char *session_id_from_path(const char *path)
 }
 
 #ifdef ROUTES_SESSION_TEST
+/**
+ * is_export_path - test whether a session id ends in an export suffix
+ * @sid: session id as produced by session_id_from_path.
+ *
+ * Test-only hook (static in production, exported under ROUTES_SESSION_TEST).
+ *
+ * Return: 1 when @sid ends in "/export" or "/debug-export", 0 otherwise.
+ * Never fails; thread-safe.
+ */
 int is_export_path(const char *sid)
 #else
 static int is_export_path(const char *sid)
@@ -135,6 +164,15 @@ static int is_export_path(const char *sid)
 }
 
 #ifdef ROUTES_SESSION_TEST
+/**
+ * export_suffix_len - length of the export suffix at the end of a session id
+ * @sid: session id as produced by session_id_from_path.
+ *
+ * Test-only hook (static in production, exported under ROUTES_SESSION_TEST).
+ *
+ * Return: 13 for "/debug-export", 7 for "/export", 0 when neither suffix
+ * is present. Never fails; thread-safe.
+ */
 size_t export_suffix_len(const char *sid)
 #else
 static size_t export_suffix_len(const char *sid)
