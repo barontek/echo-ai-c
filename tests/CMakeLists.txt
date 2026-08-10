@@ -96,6 +96,7 @@ if(HAS_LIBFUZZER)
 
     add_executable(fuzz_openai_compatible_stream
         ../src/llm/openai_compatible.c
+        ../src/utils/http_client.c
         ../src/agent/message.c
         ../src/utils/string_utils.c
         ../src/utils/logging.c
@@ -111,6 +112,7 @@ if(HAS_LIBFUZZER)
     foreach(OAUTH_FUZZ_TARGET IN ITEMS callback token jwt)
         add_executable(fuzz_openai_oauth_${OAUTH_FUZZ_TARGET}
             ../src/llm/openai_oauth.c
+            ../src/utils/http_client.c
             fuzz/openai_oauth_stubs.c
             fuzz/fuzz_openai_oauth_${OAUTH_FUZZ_TARGET}.c
         )
@@ -126,6 +128,7 @@ if(HAS_LIBFUZZER)
 
     add_executable(fuzz_openai_codex_stream
         ../src/llm/openai.c
+        ../src/utils/http_client.c
         ../src/agent/message.c
         ../src/utils/string_utils.c
         fuzz/openai_provider_stubs.c

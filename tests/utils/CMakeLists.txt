@@ -9,6 +9,11 @@ target_include_directories(test_string PRIVATE ../../src)
 target_link_libraries(test_string PRIVATE echo_ai_test_deps)
 add_test(NAME test_string COMMAND test_string)
 
+add_executable(test_http_client ../../src/utils/http_client.c test_http_client.c)
+target_include_directories(test_http_client PRIVATE ../../src)
+target_link_libraries(test_http_client PRIVATE echo_ai_test_deps)
+add_test(NAME test_http_client COMMAND test_http_client)
+
 add_executable(test_html_extract ../../src/utils/html_extract.c ../../src/utils/string_utils.c test_html_extract.c)
 target_compile_definitions(test_html_extract PRIVATE HTML_EXTRACT_TEST=1)
 target_include_directories(test_html_extract PRIVATE ../../src)

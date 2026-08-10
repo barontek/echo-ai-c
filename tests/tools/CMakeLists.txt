@@ -75,6 +75,7 @@ add_executable(test_web_fetch
     ../../src/tools/tool.c
     ../../src/safety/safety.c
     ../../src/config/config.c
+    ../../src/utils/http_client.c
     ../../src/utils/string_utils.c
     ../../src/utils/html_extract.c
     test_web_fetch.c

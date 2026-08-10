@@ -19,6 +19,7 @@ add_executable(test_factory
     ../../src/llm/factory.c
     ../../src/llm/ollama.c
     ../../src/llm/openai.c
+    ../../src/utils/http_client.c
     ../../src/llm/openai_compatible.c
     ../../src/llm/opencode_zen.c
     ../../src/agent/message.c
@@ -33,6 +34,7 @@ add_test(NAME test_factory COMMAND test_factory)
 
 add_executable(test_openai_compatible
     ../../src/llm/openai_compatible.c
+    ../../src/utils/http_client.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
@@ -45,6 +47,7 @@ add_test(NAME test_openai_compatible COMMAND test_openai_compatible)
 
 add_executable(test_openai
     ../../src/llm/openai.c
+    ../../src/utils/http_client.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     test_openai.c
@@ -56,6 +59,7 @@ add_test(NAME test_openai COMMAND test_openai)
 
 add_executable(test_openai_oauth
     ../../src/llm/openai_oauth.c
+    ../../src/utils/http_client.c
     test_openai_oauth.c
 )
 target_compile_definitions(test_openai_oauth PRIVATE OPENAI_OAUTH_TEST=1)

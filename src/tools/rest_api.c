@@ -13,20 +13,13 @@
 
 #include "tool.h"
 #include "../safety/safety.h"
+#include "../utils/http_client.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 
 typedef struct {
     SafetyConfig *safety;
 } RestCtx;
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-    size_t max_len;
-    int too_large;
-} WriteBuf;
 
 static curl_socket_t open_socket_cb(void *userdata, curlsocktype purpose,
                                     struct curl_sockaddr *address)
@@ -36,32 +29,6 @@ static curl_socket_t open_socket_cb(void *userdata, curlsocktype purpose,
     if (!safety_check_socket_address((const struct sockaddr *)&address->addr))
         return CURL_SOCKET_BAD;
     return socket(address->family, address->socktype, address->protocol);
-}
-
-static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
-{
-    WriteBuf *buf = userdata;
-    if (size != 0 && nmemb > SIZE_MAX / size) return 0;
-    size_t total = size * nmemb;
-    if (total > buf->max_len - buf->len)
-    {
-        buf->too_large = 1;
-        return 0;
-    }
-    if (total > SIZE_MAX - buf->len - 1) return 0;
-    size_t needed = buf->len + total + 1;
-    if (needed > buf->cap)
-    {
-        size_t new_cap = needed > SIZE_MAX / 2 ? needed : needed * 2;
-        char *new = realloc(buf->data, new_cap);
-        if (!new) return 0;
-        buf->data = new;
-        buf->cap = new_cap;
-    }
-    memcpy(buf->data + buf->len, ptr, total);
-    buf->len += total;
-    buf->data[buf->len] = '\0';
-    return total;
 }
 
 static ToolResult *rest_api_execute(Tool *self, const char *args_json)
@@ -177,8 +144,8 @@ static ToolResult *rest_api_execute(Tool *self, const char *args_json)
             curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body_str);
     }
 
-    WriteBuf buf = {.max_len = ctx->safety->max_file_size};
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    HttpBuffer buf = {.limit = ctx->safety->max_file_size};
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_buffer_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
 
     long http_code = 0;

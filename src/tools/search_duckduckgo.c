@@ -12,32 +12,9 @@
 #include <cjson/cJSON.h>
 
 #include "search_provider.h"
+#include "../utils/http_client.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} WriteBuf;
-
-static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
-{
-    WriteBuf *buf = userdata;
-    size_t total = size * nmemb;
-    size_t needed = buf->len + total + 1;
-    if (needed > buf->cap)
-    {
-        buf->cap = needed * 2;
-        char *new = realloc(buf->data, buf->cap);
-        if (!new) return 0;
-        buf->data = new;
-    }
-    memcpy(buf->data + buf->len, ptr, total);
-    buf->len += total;
-    buf->data[buf->len] = '\0';
-    return total;
-}
 
 static char *html_extract(const char *html, const char *start_tag, const char *end_tag,
                           const char *skip)
@@ -116,8 +93,8 @@ static char *search_duckduckgo_search(SearchProvider *self, const char *query, i
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
-    WriteBuf buf = {0};
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    HttpBuffer buf = {0};
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_buffer_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
 
     CURLcode res = curl_easy_perform(curl);

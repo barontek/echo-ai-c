@@ -20,6 +20,7 @@
 
 #include "openai.h"
 #include "openai_oauth.h"
+#include "../utils/http_client.h"
 #include "../utils/logging.h"
 #include "../utils/string_utils.h"
 
@@ -49,13 +50,6 @@ typedef struct {
 } OpenAICtx;
 
 typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-    size_t limit;
-} Buffer;
-
-typedef struct {
     char *token;
     char *account;
 } Credentials;
@@ -76,7 +70,7 @@ typedef struct {
     char *line;
     size_t line_len;
     size_t line_cap;
-    Buffer event_data;
+    HttpBuffer event_data;
     void (*on_chunk)(const char *, void *);
     void *userdata;
     size_t received_bytes;
@@ -90,7 +84,7 @@ typedef struct {
 typedef struct {
     CURL *curl;
     long status;
-    Buffer error_body;
+    HttpBuffer error_body;
     StreamParser parser;
 } LiveContext;
 
@@ -111,49 +105,6 @@ static void credentials_clear(Credentials *credentials)
     clear_secret(&credentials->token);
     free(credentials->account);
     credentials->account = NULL;
-}
-
-static int buffer_append(Buffer *buffer, const void *bytes, size_t length)
-{
-    if (!buffer || (!bytes && length != 0)) return -1;
-    if (length > buffer->limit || buffer->len > buffer->limit - length) return -1;
-    if (buffer->len + length == SIZE_MAX) return -1;
-    size_t needed = buffer->len + length + 1;
-    if (needed > buffer->cap)
-    {
-        size_t capacity = buffer->cap ? buffer->cap : 1024U;
-        while (capacity < needed)
-        {
-            if (capacity > (buffer->limit + 1U) / 2U)
-            {
-                capacity = buffer->limit + 1U;
-                break;
-            }
-            capacity *= 2U;
-        }
-        if (capacity < needed) return -1;
-        char *grown = realloc(buffer->data, capacity);
-        if (!grown) return -1;
-        buffer->data = grown;
-        buffer->cap = capacity;
-    }
-    if (length != 0) memcpy(buffer->data + buffer->len, bytes, length);
-    buffer->len += length;
-    buffer->data[buffer->len] = '\0';
-    return 0;
-}
-
-static int append_text(char **target, const char *value)
-{
-    if (!target || !value) return -1;
-    size_t old_length = *target ? strlen(*target) : 0U;
-    size_t add_length = strlen(value);
-    if (add_length > SIZE_MAX - old_length - 1U) return -1;
-    char *grown = realloc(*target, old_length + add_length + 1U);
-    if (!grown) return -1;
-    memcpy(grown + old_length, value, add_length + 1U);
-    *target = grown;
-    return 0;
 }
 
 static int json_add_item(cJSON *object, const char *name, cJSON *item)
@@ -227,9 +178,9 @@ static int append_instruction(char **instructions, const char *text)
         current > OPENAI_MAX_REQUEST_BYTES - added ||
         (current != 0U && current + added == OPENAI_MAX_REQUEST_BYTES))
         return -1;
-    if (*instructions && (*instructions)[0] != '\0' && append_text(instructions, "\n") != 0)
+    if (*instructions && (*instructions)[0] != '\0' && str_append(instructions, "\n") != 0)
         return -1;
-    return append_text(instructions, text);
+    return str_append(instructions, text);
 }
 
 static int add_message_content(cJSON *input, const char *role,
@@ -899,14 +850,6 @@ fail:
     return -1;
 }
 
-static size_t models_write_cb(void *ptr, size_t size, size_t nmemb,
-                              void *userdata)
-{
-    if (size != 0U && nmemb > SIZE_MAX / size) return 0U;
-    size_t total = size * nmemb;
-    return buffer_append(userdata, ptr, total) == 0 ? total : 0U;
-}
-
 static int models_request_once(const Credentials *credentials, char **body_out,
                                long *status_out)
 {
@@ -914,7 +857,7 @@ static int models_request_once(const Credentials *credentials, char **body_out,
     *status_out = 0L;
     CURL *curl = curl_easy_init();
     struct curl_slist *headers = NULL;
-    Buffer body = {.limit = OPENAI_MAX_MODELS_RESPONSE_BYTES};
+    HttpBuffer body = {.limit = OPENAI_MAX_MODELS_RESPONSE_BYTES};
     char url[512] = {0};
     char version_header[128] = {0};
     int url_len = snprintf(url, sizeof(url), "%s?client_version=%s",
@@ -930,7 +873,7 @@ static int models_request_once(const Credentials *credentials, char **body_out,
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) == CURLE_OK &&
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L) == CURLE_OK &&
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, models_write_cb) == CURLE_OK &&
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_buffer_write_cb) == CURLE_OK &&
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body) == CURLE_OK;
     CURLcode performed = setup_ok ? curl_easy_perform(curl) : CURLE_FAILED_INIT;
     if (performed == CURLE_OK &&
@@ -1115,7 +1058,7 @@ static int parse_message_item(LLMResponse *response, const cJSON *item)
             strcmp(type_value, "refusal") != 0)
             continue;
         if (!cJSON_IsString(text) ||
-            append_text(&response->content, cJSON_GetStringValue(text)) != 0)
+            str_append(&response->content, cJSON_GetStringValue(text)) != 0)
             return -1;
     }
     return 0;
@@ -1170,14 +1113,14 @@ static LLMResponse *parse_response(const char *raw)
             char *summary = reasoning_summary_join(item);
             if (summary)
             {
-                if ((reasoning_text && append_text(&reasoning_text, "\n") != 0) ||
-                    append_text(&reasoning_text, summary) != 0)
+                if ((reasoning_text && str_append(&reasoning_text, "\n") != 0) ||
+                    str_append(&reasoning_text, summary) != 0)
                 { free(summary); goto fail; }
                 free(summary);
             }
         }
     }
-    if (!response->content && append_text(&response->content, "") != 0) goto fail;
+    if (!response->content && str_append(&response->content, "") != 0) goto fail;
     if (reasoning_text && reasoning_text[0])
     {
         char *tagged = NULL;
@@ -1356,7 +1299,7 @@ static int parse_argument_delta(StreamParser *parser, const cJSON *event,
     ToolCall *call = &parser->response->tool_calls[
         parser->calls[map_index].response_index];
     return done ? replace_call_field(&call->arguments, value, 0)
-                : append_text(&call->arguments, value);
+                : str_append(&call->arguments, value);
 }
 
 static int merge_completed_output(StreamParser *parser, const cJSON *response)
@@ -1441,11 +1384,11 @@ static int emit_thinking_text(StreamParser *parser, const char *text)
     if (!text || !text[0]) return 0;
     if (!parser->thinking_open)
     {
-        if (append_text(&parser->response->content, "<think>\n") != 0) return -1;
+        if (str_append(&parser->response->content, "<think>\n") != 0) return -1;
         if (parser->on_chunk) parser->on_chunk("<think>\n", parser->userdata);
         parser->thinking_open = 1;
     }
-    if (append_text(&parser->response->content, text) != 0) return -1;
+    if (str_append(&parser->response->content, text) != 0) return -1;
     if (parser->on_chunk) parser->on_chunk(text, parser->userdata);
     return 0;
 }
@@ -1453,7 +1396,7 @@ static int emit_thinking_text(StreamParser *parser, const char *text)
 static int close_thinking_block(StreamParser *parser)
 {
     if (!parser->thinking_open) return 0;
-    if (append_text(&parser->response->content, "\n</think>\n\n") != 0) return -1;
+    if (str_append(&parser->response->content, "\n</think>\n\n") != 0) return -1;
     if (parser->on_chunk) parser->on_chunk("\n</think>\n\n", parser->userdata);
     parser->thinking_open = 0;
     return 0;
@@ -1481,8 +1424,8 @@ static char *reasoning_summary_join(const cJSON *item)
         }
         else
         {
-            if (append_text(&joined, "\n") != 0 ||
-                append_text(&joined, part) != 0)
+            if (str_append(&joined, "\n") != 0 ||
+                str_append(&joined, part) != 0)
             { free(joined); return NULL; }
         }
     }
@@ -1538,7 +1481,7 @@ static int parse_stream_event(StreamParser *parser, const char *text)
         cJSON *delta = cJSON_GetObjectItemCaseSensitive(event, "delta");
         if (!cJSON_IsString(delta) ||
             close_thinking_block(parser) != 0 ||
-            append_text(&parser->response->content,
+            str_append(&parser->response->content,
                         cJSON_GetStringValue(delta)) != 0)
             result = -1;
         else if (parser->on_chunk)
@@ -1612,7 +1555,7 @@ static int parse_stream_event(StreamParser *parser, const char *text)
         cJSON *delta = cJSON_GetObjectItemCaseSensitive(event, "delta");
         if (!cJSON_IsString(delta) ||
             close_thinking_block(parser) != 0 ||
-            append_text(&parser->response->content,
+            str_append(&parser->response->content,
                         cJSON_GetStringValue(delta)) != 0)
             result = -1;
         else if (parser->on_chunk)
@@ -1660,9 +1603,9 @@ static int stream_process_line(StreamParser *parser)
     const char *data = parser->line + 5U;
     if (*data == ' ') data++;
     if (parser->event_data.len != 0U &&
-        buffer_append(&parser->event_data, "\n", 1U) != 0)
+        http_buffer_append(&parser->event_data, "\n", 1U) != 0)
         return -1;
-    return buffer_append(&parser->event_data, data, strlen(data));
+    return http_buffer_append(&parser->event_data, data, strlen(data));
 }
 
 static int stream_feed(StreamParser *parser, const void *bytes, size_t length)
@@ -1726,7 +1669,7 @@ static int stream_finish(StreamParser *parser)
      * truncated summary) must close the tag so the saved message parses. */
     if (close_thinking_block(parser) != 0) return -1;
     if (!parser->response->content &&
-        append_text(&parser->response->content, "") != 0)
+        str_append(&parser->response->content, "") != 0)
         return -1;
     return 0;
 }
@@ -1772,7 +1715,7 @@ static size_t live_write_cb(void *ptr, size_t size, size_t nmemb,
     if (size != 0U && nmemb > SIZE_MAX / size) return 0;
     size_t total = size * nmemb;
     if (context->status < 200L || context->status >= 300L)
-        return buffer_append(&context->error_body, ptr, total) == 0 ? total : 0;
+        return http_buffer_append(&context->error_body, ptr, total) == 0 ? total : 0;
     return stream_feed(&context->parser, ptr, total) == 0 ? total : 0;
 }
 
@@ -2007,10 +1950,10 @@ int openai_test_request_metadata(const char *token, const char *account,
         if (curl) curl_easy_cleanup(curl);
         return -1;
     }
-    Buffer joined = {.limit = OPENAI_MAX_TOKEN_BYTES + OPENAI_MAX_ACCOUNT_BYTES + 256U};
+    HttpBuffer joined = {.limit = OPENAI_MAX_TOKEN_BYTES + OPENAI_MAX_ACCOUNT_BYTES + 256U};
     for (struct curl_slist *header = headers; header; header = header->next)
-        if (buffer_append(&joined, header->data, strlen(header->data)) != 0 ||
-            buffer_append(&joined, "\n", 1U) != 0)
+        if (http_buffer_append(&joined, header->data, strlen(header->data)) != 0 ||
+            http_buffer_append(&joined, "\n", 1U) != 0)
         {
             free(joined.data);
             headers_free(headers);

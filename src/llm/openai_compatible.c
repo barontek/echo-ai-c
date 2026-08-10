@@ -13,6 +13,7 @@
 #include <cjson/cJSON.h>
 
 #include "openai_compatible.h"
+#include "../utils/http_client.h"
 #include "../utils/logging.h"
 #include "../utils/string_utils.h"
 
@@ -21,43 +22,6 @@ typedef struct {
     char *api_token;
     char *effort; /* owned; NULL = API default ("low"/"medium"/"high"/"max"/"none") */
 } OpenAICompatCtx;
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} WriteBuf;
-
-static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
-{
-    WriteBuf *buf = userdata;
-    size_t total = size * nmemb;
-    size_t needed = buf->len + total + 1;
-    if (needed > buf->cap)
-    {
-        buf->cap = needed * 2;
-        char *new = realloc(buf->data, buf->cap);
-        if (!new) return 0;
-        buf->data = new;
-    }
-    memcpy(buf->data + buf->len, ptr, total);
-    buf->len += total;
-    buf->data[buf->len] = '\0';
-    return total;
-}
-
-static int append_text(char **dst, const char *text)
-{
-    if (!text) return 0;
-    size_t old_len = *dst ? strlen(*dst) : 0;
-    size_t add_len = strlen(text);
-    if (add_len > SIZE_MAX - old_len - 1) return -1;
-    char *new_value = realloc(*dst, old_len + add_len + 1);
-    if (!new_value) return -1;
-    memcpy(new_value + old_len, text, add_len + 1);
-    *dst = new_value;
-    return 0;
-}
 
 static int ensure_tool_call(LLMResponse *resp, int index)
 {
@@ -85,11 +49,11 @@ static int forward_reasoning_delta(LLMResponse *resp, int *thinking_open,
     if (!text || !text[0]) return 0;
     if (!*thinking_open)
     {
-        if (append_text(&resp->content, "<think>\n") != 0) return -1;
+        if (str_append(&resp->content, "<think>\n") != 0) return -1;
         if (on_chunk) on_chunk("<think>\n", userdata);
         *thinking_open = 1;
     }
-    if (append_text(&resp->content, text) != 0) return -1;
+    if (str_append(&resp->content, text) != 0) return -1;
     if (on_chunk) on_chunk(text, userdata);
     return 0;
 }
@@ -132,7 +96,7 @@ static int parse_stream_event(LLMResponse *resp, const char *json_text,
         const char *chunk = cJSON_GetStringValue(content);
         if (*thinking_open)
         {
-            if (append_text(&resp->content, "\n</think>\n\n") != 0)
+            if (str_append(&resp->content, "\n</think>\n\n") != 0)
             {
                 cJSON_Delete(json);
                 return -1;
@@ -140,7 +104,7 @@ static int parse_stream_event(LLMResponse *resp, const char *json_text,
             if (on_chunk) on_chunk("\n</think>\n\n", userdata);
             *thinking_open = 0;
         }
-        if (append_text(&resp->content, chunk) != 0)
+        if (str_append(&resp->content, chunk) != 0)
         {
             cJSON_Delete(json);
             return -1;
@@ -168,11 +132,11 @@ static int parse_stream_event(LLMResponse *resp, const char *json_text,
             cJSON *name = function ? cJSON_GetObjectItem(function, "name") : NULL;
             cJSON *arguments = function ? cJSON_GetObjectItem(function, "arguments") : NULL;
             if ((id && cJSON_IsString(id) &&
-                 append_text(&call->id, cJSON_GetStringValue(id)) != 0) ||
+                 str_append(&call->id, cJSON_GetStringValue(id)) != 0) ||
                 (name && cJSON_IsString(name) &&
-                 append_text(&call->name, cJSON_GetStringValue(name)) != 0) ||
+                 str_append(&call->name, cJSON_GetStringValue(name)) != 0) ||
                 (arguments && cJSON_IsString(arguments) &&
-                 append_text(&call->arguments, cJSON_GetStringValue(arguments)) != 0))
+                 str_append(&call->arguments, cJSON_GetStringValue(arguments)) != 0))
             {
                 cJSON_Delete(json);
                 return -1;
@@ -251,7 +215,7 @@ static int stream_parser_finish(StreamParser *p)
      * arrived) must still close the tag so the saved message parses */
     if (p->thinking_open)
     {
-        if (append_text(&p->resp->content, "\n</think>\n\n") != 0) return -1;
+        if (str_append(&p->resp->content, "\n</think>\n\n") != 0) return -1;
         if (p->on_chunk) p->on_chunk("\n</think>\n\n", p->userdata);
         p->thinking_open = 0;
     }
@@ -576,8 +540,8 @@ static char *openai_compatible_chat_request(const char *base_url,
         return NULL;
     }
 
-    WriteBuf buf = {0};
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    HttpBuffer buf = {0};
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_buffer_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
 
     CURLcode res = curl_easy_perform(curl);
@@ -614,7 +578,7 @@ static char *openai_compatible_chat_request(const char *base_url,
 
 typedef struct {
     CURL *curl;
-    WriteBuf raw;         /* error-body capture only */
+    HttpBuffer raw;         /* error-body capture only */
     StreamParser parser;
     int status_checked;
     int failed;           /* non-2xx: buffer raw, never emit chunks */
@@ -637,7 +601,7 @@ static size_t live_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata
     if (ctx->failed)
     {
         /* Error body: keep raw bytes for the error log only. */
-        if (write_cb(ptr, size, nmemb, &ctx->raw) == 0) return 0;
+        if (http_buffer_write_cb(ptr, size, nmemb, &ctx->raw) == 0) return 0;
         return total;
     }
 

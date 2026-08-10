@@ -30,6 +30,7 @@
 #include <curl/curl.h>
 
 #include "openai_oauth.h"
+#include "../utils/http_client.h"
 #include "../utils/logging.h"
 
 #define OPENAI_ISSUER "https://auth.openai.com"
@@ -48,12 +49,6 @@
 #define OAUTH_RESPONSE_MAX (1024U * 1024U)
 #define OAUTH_VALUE_MAX (256U * 1024U)
 #define OAUTH_QUERY_FIELDS_MAX 16
-
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} OAuthBuffer;
 
 typedef struct {
     char *access_token;
@@ -177,35 +172,6 @@ static void set_error_locked(OpenAIOAuth *auth, const char *message)
 static uint64_t next_generation(uint64_t value)
 {
     return value == UINT64_MAX ? 1 : value + 1;
-}
-
-static size_t oauth_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
-{
-    OAuthBuffer *buffer = userdata;
-    if (size != 0 && nmemb > SIZE_MAX / size) return 0;
-    size_t total = size * nmemb;
-    if (total > OAUTH_RESPONSE_MAX - buffer->len) return 0;
-    if (total > SIZE_MAX - buffer->len - 1) return 0;
-    size_t needed = buffer->len + total + 1;
-    if (needed > buffer->cap)
-    {
-        size_t cap = buffer->cap ? buffer->cap : 1024;
-        while (cap < needed)
-        {
-            if (cap > OAUTH_RESPONSE_MAX / 2) { cap = OAUTH_RESPONSE_MAX + 1; break; }
-            cap *= 2;
-        }
-        if (cap > OAUTH_RESPONSE_MAX + 1) cap = OAUTH_RESPONSE_MAX + 1;
-        if (cap < needed) return 0;
-        char *grown = realloc(buffer->data, cap);
-        if (!grown) return 0;
-        buffer->data = grown;
-        buffer->cap = cap;
-    }
-    memcpy(buffer->data + buffer->len, ptr, total);
-    buffer->len += total;
-    buffer->data[buffer->len] = '\0';
-    return total;
 }
 
 static int is_url_char(unsigned char value)
@@ -792,7 +758,7 @@ static int curl_cancel_cb(void *userdata, curl_off_t download_total,
 }
 
 static int curl_set_common(CURL *curl, const char *url, const char *body,
-                           OAuthBuffer *buffer, OAuthCancelContext *cancel)
+                           HttpBuffer *buffer, OAuthCancelContext *cancel)
 {
     if (!curl || !url || !body || !buffer || !cancel) return -1;
     if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
@@ -800,7 +766,7 @@ static int curl_set_common(CURL *curl, const char *url, const char *body,
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, oauth_write_cb) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_buffer_write_cb) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, buffer) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_cancel_cb) != CURLE_OK ||
@@ -860,7 +826,7 @@ static OpenAIOAuthTokenResult exchange_token(OpenAIOAuth *auth, uint64_t generat
     char *body = token_request_body(grant_type, value, redirect_uri, verifier);
     if (!body) return OPENAI_OAUTH_TOKEN_TRANSIENT;
     CURL *curl = curl_easy_init();
-    OAuthBuffer buffer = {0};
+    HttpBuffer buffer = {.limit = OAUTH_RESPONSE_MAX};
     OAuthCancelContext cancel = {.auth = auth, .generation = generation};
     struct curl_slist *headers = curl_slist_append(NULL,
         "Content-Type: application/x-www-form-urlencoded");
@@ -915,7 +881,7 @@ static OpenAIOAuthTokenResult device_post(OpenAIOAuth *auth, uint64_t generation
     char *url = NULL;
     if (asprintf(&url, OPENAI_ISSUER "%s", path) < 0) return OPENAI_OAUTH_TOKEN_TRANSIENT;
     CURL *curl = curl_easy_init();
-    OAuthBuffer buffer = {0};
+    HttpBuffer buffer = {.limit = OAUTH_RESPONSE_MAX};
     OAuthCancelContext cancel = {.auth = auth, .generation = generation};
     struct curl_slist *headers = curl_slist_append(NULL, "Content-Type: application/json");
     CURLcode curl_result = CURLE_FAILED_INIT;

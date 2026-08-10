@@ -36,6 +36,19 @@ char *str_dup(const char *str)
     return copy;
 }
 
+int str_append(char **target, const char *value)
+{
+    if (!target || !value) return -1;
+    size_t old_length = *target ? strlen(*target) : 0U;
+    size_t add_length = strlen(value);
+    if (add_length > SIZE_MAX - old_length - 1U) return -1;
+    char *grown = realloc(*target, old_length + add_length + 1U);
+    if (!grown) return -1;
+    memcpy(grown + old_length, value, add_length + 1U);
+    *target = grown;
+    return 0;
+}
+
 int str_starts_with(const char *str, const char *prefix)
 {
     if (!str || !prefix) return 0;

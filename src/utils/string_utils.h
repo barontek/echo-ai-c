@@ -39,6 +39,24 @@ char *str_trim(char *str);
 char *str_dup(const char *str);
 
 /**
+ * str_append - append text onto the end of a heap string
+ * @target: pointer to the string to grow; must be non-NULL. The pointee
+ *   may be NULL (an empty string) — the result is then a fresh copy of
+ *   @value. Ownership of the pointee passes through: the caller's
+ *   pointer is updated to the new allocation on success.
+ * @value: NUL-terminated text to append; must be non-NULL.
+ *
+ * Grows the string in place with realloc, keeping it NUL-terminated.
+ * Refuses an append whose combined length would overflow size_t.
+ *
+ * Return: 0 on success (the caller's *target now owns the new string),
+ * -1 on NULL arguments or allocation failure (on failure *target is
+ * unchanged and still owned by the caller). Thread-safe on distinct
+ * strings; no shared state.
+ */
+int str_append(char **target, const char *value);
+
+/**
  * str_starts_with - prefix test
  * @str: string to test; NULL yields 0.
  * @prefix: prefix to look for; NULL yields 0. The empty string

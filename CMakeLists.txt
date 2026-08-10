@@ -20,6 +20,7 @@ add_executable(echo-ai
     src/config/config.c
     src/utils/string_utils.c
     src/utils/html_extract.c
+    src/utils/http_client.c
     src/utils/logging.c
     src/utils/json.c
     src/agent/message.c

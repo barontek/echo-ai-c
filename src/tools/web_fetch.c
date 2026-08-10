@@ -21,6 +21,7 @@
 
 #include "tool.h"
 #include "../safety/safety.h"
+#include "../utils/http_client.h"
 #include "../utils/string_utils.h"
 #include "../utils/html_extract.h"
 #include "../utils/logging.h"
@@ -37,14 +38,6 @@ typedef struct {
     int socket_policy_rejected;
 } FetchCtx;
 
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-    size_t max_len;
-    int too_large;
-} WriteBuf;
-
 static curl_socket_t open_socket_cb(void *userdata, curlsocktype purpose,
                                     struct curl_sockaddr *address)
 {
@@ -56,39 +49,6 @@ static curl_socket_t open_socket_cb(void *userdata, curlsocktype purpose,
         return CURL_SOCKET_BAD;
     }
     return socket(address->family, address->socktype, address->protocol);
-}
-
-/* Appends to a WriteBuf, enforcing max_len. Returns 0 on OOM or overflow
- * (caller aborts the transfer). Shared by the libcurl write callback and
- * the impersonator subprocess reader so both paths obey the same cap. */
-static int buf_append(WriteBuf *buf, const void *ptr, size_t total)
-{
-    if (total > buf->max_len - buf->len)
-    {
-        buf->too_large = 1;
-        return 0;
-    }
-    if (total > SIZE_MAX - buf->len - 1) return 0;
-    size_t needed = buf->len + total + 1;
-    if (needed > buf->cap)
-    {
-        size_t new_cap = needed > SIZE_MAX / 2 ? needed : needed * 2;
-        char *new = realloc(buf->data, new_cap);
-        if (!new) return 0;
-        buf->data = new;
-        buf->cap = new_cap;
-    }
-    memcpy(buf->data + buf->len, ptr, total);
-    buf->len += total;
-    buf->data[buf->len] = '\0';
-    return 1;
-}
-
-static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
-{
-    if (size != 0 && nmemb > SIZE_MAX / size) return 0;
-    if (!buf_append(userdata, ptr, size * nmemb)) return 0;
-    return size * nmemb;
 }
 
 /* ---- Optional JS-challenge fallback ---------------------------------
@@ -162,7 +122,7 @@ static int binary_on_path(const char *name)
  * Protocol and redirect behavior mirror the libcurl path: http(s) only,
  * no redirect following (CURLOPT_FOLLOWLOCATION stays 0). */
 static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
-                                    const char *url, size_t max_len,
+                                    const char *url, size_t limit,
                                     int timeout_s, size_t *out_len)
 {
     int out_pipe[2];
@@ -201,7 +161,7 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
 
     close(out_pipe[1]);
 
-    WriteBuf buf = {.max_len = max_len};
+    HttpBuffer buf = {.limit = limit};
     int deadline_ms = timeout_s > 0 ? timeout_s * 1000 : 30000;
     int elapsed_ms = 0;
     int status = 0;
@@ -236,7 +196,7 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
         ssize_t n = read(out_pipe[0], chunk, sizeof(chunk));
         if (n > 0)
         {
-            if (!buf_append(&buf, chunk, (size_t)n))
+            if (http_buffer_append(&buf, chunk, (size_t)n) != 0)
             {
                 kill(pid, SIGKILL);          /* body exceeded the cap */
                 waitpid(pid, &status, 0);
@@ -252,7 +212,7 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
     {
         ssize_t n = read(out_pipe[0], chunk, sizeof(chunk));
         if (n <= 0) break;
-        if (!buf_append(&buf, chunk, (size_t)n))
+        if (http_buffer_append(&buf, chunk, (size_t)n) != 0)
         {
             free(buf.data);
             close(out_pipe[0]);
@@ -274,7 +234,7 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
  * and content type on success.  With require_challenge set the body must
  * first look like a challenge page; without it (libcurl-level failure)
  * any non-empty body counts as a win.  Returns 1 when replaced. */
-static int retry_with_impersonator_binary(WriteBuf *buf, char **ctype,
+static int retry_with_impersonator_binary(HttpBuffer *buf, char **ctype,
                                           const char *url, const char *binary,
                                           const char *imp_flag,
                                           int require_challenge,
@@ -284,7 +244,7 @@ static int retry_with_impersonator_binary(WriteBuf *buf, char **ctype,
         return 0;
     if (!binary_on_path(binary)) return 0;
     size_t ilen = 0;
-    char *ibody = fetch_via_impersonator(binary, imp_flag, url, buf->max_len,
+    char *ibody = fetch_via_impersonator(binary, imp_flag, url, buf->limit,
                                          timeout_s, &ilen);
     if (!ibody) return 0;
     free(buf->data);
@@ -302,7 +262,7 @@ static int retry_with_impersonator_binary(WriteBuf *buf, char **ctype,
 }
 
 /* Tries every known impersonator binary name until one succeeds. */
-static int retry_with_impersonator(WriteBuf *buf, char **ctype, const char *url,
+static int retry_with_impersonator(HttpBuffer *buf, char **ctype, const char *url,
                                    int require_challenge, int timeout_s)
 {
     static const struct
@@ -330,7 +290,7 @@ static int retry_with_impersonator(WriteBuf *buf, char **ctype, const char *url,
  * rejected an address, or when resolution failed (open_socket_cb never ran,
  * so no address was ever validated; the subprocess' second lookup could
  * answer differently). Bot walls never present as resolve failures. */
-static int error_path_retry_with_impersonator(WriteBuf *buf, char **ctype,
+static int error_path_retry_with_impersonator(HttpBuffer *buf, char **ctype,
                                               const char *url, CURLcode res,
                                               const FetchCtx *fc,
                                               int timeout_s)
@@ -401,8 +361,8 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
     FetchCtx fctx = {.safety = ctx->safety};
     curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, &fctx);
 
-    WriteBuf buf = {.max_len = ctx->safety->max_file_size};
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    HttpBuffer buf = {.limit = ctx->safety->max_file_size};
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_buffer_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
 
     CURLcode res = curl_easy_perform(curl);
@@ -542,7 +502,7 @@ int web_fetch_test_binary_on_path(const char *name)
  * @data: in/out body buffer; on success *data is replaced (caller frees
  * the new buffer), on failure *data is untouched
  * @len: in/out body length
- * @max_len: size cap enforced during the retry fetch
+ * @limit: size cap enforced during the retry fetch
  * @ctype: in/out content-type string (replaced with "text/html" on
  * success); caller frees
  * @url: URL to refetch
@@ -552,13 +512,13 @@ int web_fetch_test_binary_on_path(const char *name)
  *
  * Return: 1 when the body was replaced, 0 otherwise.
  */
-int web_fetch_test_retry_challenge(char **data, size_t *len, size_t max_len,
+int web_fetch_test_retry_challenge(char **data, size_t *len, size_t limit,
                                    char **ctype, const char *url,
                                    const char *binary, const char *imp_flag,
                                    int timeout_s)
 {
-    WriteBuf buf = {.data = *data, .len = *len, .cap = *len + 1,
-                    .max_len = max_len};
+    HttpBuffer buf = {.data = *data, .len = *len, .cap = *len + 1,
+                    .limit = limit};
     int replaced = retry_with_impersonator_binary(&buf, ctype, url, binary,
                                                   imp_flag, 1, timeout_s);
     if (replaced)
@@ -574,7 +534,7 @@ int web_fetch_test_retry_challenge(char **data, size_t *len, size_t max_len,
  * @data: in/out body buffer; on success *data is replaced (caller frees
  * the new buffer), on failure *data is untouched
  * @len: in/out body length
- * @max_len: size cap enforced during the retry fetch
+ * @limit: size cap enforced during the retry fetch
  * @ctype: in/out content-type string (replaced with "text/html" on
  * success); caller frees
  * @url: URL to refetch
@@ -586,13 +546,13 @@ int web_fetch_test_retry_challenge(char **data, size_t *len, size_t max_len,
  *
  * Return: 1 when the body was replaced, 0 otherwise.
  */
-int web_fetch_test_error_path_retry(char **data, size_t *len, size_t max_len,
+int web_fetch_test_error_path_retry(char **data, size_t *len, size_t limit,
                                     char **ctype, const char *url,
                                     int timeout_s, int policy_rejected,
                                     int resolve_failed)
 {
-    WriteBuf buf = {.data = *data, .len = *len, .cap = *len + 1,
-                    .max_len = max_len};
+    HttpBuffer buf = {.data = *data, .len = *len, .cap = *len + 1,
+                    .limit = limit};
     FetchCtx fc = {.socket_policy_rejected = policy_rejected};
     CURLcode res = resolve_failed ? CURLE_COULDNT_RESOLVE_HOST : CURLE_OK;
     int replaced = error_path_retry_with_impersonator(
