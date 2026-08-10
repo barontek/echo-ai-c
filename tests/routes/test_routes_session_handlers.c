@@ -6,6 +6,7 @@
 
 #include "../src/server/routes/routes.h"
 #include "../src/server/routes/routes_session.h"
+#include "../src/session/session_branch.h"
 #include "../src/utils/string_utils.h"
 
 /* ---------------------------------------------------------------------------

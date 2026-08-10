@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <sqlite3.h>
 #include "session/session_manager.h"
+#include "session/session_branch.h"
 #include "session/encryption.h"
 #include "session/memory.h"
 #include "utils/string_utils.h"

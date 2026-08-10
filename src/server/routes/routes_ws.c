@@ -20,6 +20,7 @@
 #include "../../llm/provider.h"
 #include "../../safety/safety.h"
 #include "../../session/session_manager.h"
+#include "../../session/session_branch.h"
 #include "../../utils/logging.h"
 #include "../../utils/string_utils.h"
 #include "../../tools/registry.h"

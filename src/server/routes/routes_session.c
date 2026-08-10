@@ -17,6 +17,7 @@
 #ifndef ROUTES_SESSION_TEST
 #include "../middleware.h"
 #include "../../session/session_manager.h"
+#include "../../session/session_branch.h"
 #include "../../utils/logging.h"
 #include "../../utils/string_utils.h"
 #endif

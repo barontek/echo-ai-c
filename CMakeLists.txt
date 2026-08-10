@@ -63,6 +63,7 @@ add_executable(echo-ai
     src/session/session.c
     src/session/encryption.c
     src/session/session_manager.c
+    src/session/session_branch.c
     src/session/memory.c
     src/session/migration.c
     src/utils/rate_limiter.c

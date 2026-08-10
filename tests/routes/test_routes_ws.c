@@ -14,6 +14,7 @@
 #include "../src/agent/message.h"
 #include "../src/session/session.h"
 #include "../src/session/session_manager.h"
+#include "../src/session/session_branch.h"
 #include "../src/utils/string_utils.h"
 
 /* WSChatCtx mirror — matches routes_ws.c */

@@ -11,6 +11,7 @@ add_test(NAME test_memory COMMAND test_memory)
 
 add_executable(test_session_manager
     ../../src/session/session_manager.c
+    ../../src/session/session_branch.c
     ../../src/session/session.c
     ../../src/session/encryption.c
     ../../src/session/migration.c
