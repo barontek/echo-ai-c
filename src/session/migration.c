@@ -261,6 +261,48 @@ static int legacy_key_evidence(const char *data_dir, const char *salt_path,
     return rc == SQLITE_DONE ? 0 : -1;
 }
 
+/* Finalizes a migration recovery: promotes the recovered key material,
+ * removes the marker, and syncs the data dir. All path strings are
+ * caller-owned; this function frees them. Returns 0 on success, -1 on
+ * any failure. */
+static int migration_finalize_recovery(SessionManager *sm, int committed,
+                                       char *marker, char *salt,
+                                       char *old_salt, char *verifier_new)
+{
+    struct stat st = {0};
+    int result = 0;
+    if (committed)
+    {
+        char *verifier = data_path(sm->data_dir, VERIFIER_FILE);
+        if (!verifier)
+            result = -1;
+        else if (stat(verifier_new, &st) == 0 &&
+                 rename(verifier_new, verifier) != 0)
+            result = -1;
+        free(verifier);
+        if (result == 0 && remove_if_exists(old_salt) != 0) result = -1;
+    }
+    else if (stat(old_salt, &st) == 0)
+    {
+        if (rename(old_salt, salt) != 0) result = -1;
+        if (result == 0 && remove_if_exists(verifier_new) != 0) result = -1;
+    }
+    else if (stat(salt, &st) != 0)
+    {
+        result = -1;
+    }
+    else if (remove_if_exists(verifier_new) != 0)
+    {
+        result = -1;
+    }
+
+    if (result == 0 && remove_if_exists(marker) != 0) result = -1;
+    if (result == 0 && sync_directory(sm->data_dir) != 0) result = -1;
+    free(marker); free(salt); free(old_salt); free(verifier_new);
+    if (result == 0) log_info("password migration recovery complete", NULL);
+    return result;
+}
+
 int migration_check_and_recover(SessionManager *sm, const char *password)
 {
     if (!sm || !sm->data_dir || !password) return -1;
@@ -369,38 +411,9 @@ int migration_check_and_recover(SessionManager *sm, const char *password)
         memset(&recovered_key, 0, sizeof(recovered_key));
     }
 
-    int result = 0;
-    if (committed)
-    {
-        char *verifier = data_path(sm->data_dir, VERIFIER_FILE);
-        if (!verifier)
-            result = -1;
-        else if (stat(verifier_new, &st) == 0 &&
-                 rename(verifier_new, verifier) != 0)
-            result = -1;
-        free(verifier);
-        if (result == 0 && remove_if_exists(old_salt) != 0) result = -1;
-    }
-    else if (stat(old_salt, &st) == 0)
-    {
-        if (rename(old_salt, salt) != 0) result = -1;
-        if (result == 0 && remove_if_exists(verifier_new) != 0) result = -1;
-    }
-    else if (stat(salt, &st) != 0)
-    {
-        result = -1;
-    }
-    else if (remove_if_exists(verifier_new) != 0)
-    {
-        result = -1;
-    }
-
-    if (result == 0 && remove_if_exists(marker) != 0) result = -1;
-    if (result == 0 && sync_directory(sm->data_dir) != 0) result = -1;
     memset(current_salt, 0, sizeof(current_salt));
-    free(marker); free(salt); free(old_salt); free(verifier_new);
-    if (result == 0) log_info("password migration recovery complete", NULL);
-    return result;
+    return migration_finalize_recovery(sm, committed, marker, salt,
+                                       old_salt, verifier_new);
 }
 
 static int migrate_sessions(SessionManager *sm, const EncryptionKey *old_key,
@@ -428,7 +441,7 @@ static int migrate_sessions(SessionManager *sm, const EncryptionKey *old_key,
         }
 
         sm->enc_key = *old_key;
-        Session *session = session_manager_load_session_nolock(sm, id);
+        Session *session = session_manager_load_session_nolock_alloc(sm, id);
         if (!session || !session->id || !session->title ||
             !session->created_at || !session->events || !session->metadata)
         {
@@ -577,24 +590,16 @@ static int restore_old_files(SessionManager *sm, const char *salt,
     return result;
 }
 
-int migration_change_password(SessionManager *sm, const char *new_password)
+/* Performs the password migration core while the manager lock is held:
+ * marker/salt dance, re-encryption of every session and OAuth record in a
+ * transaction, verifier activation, and rollback/restore on any failure.
+ * Returns 0 on success, -1 on failure (old key material restored), or
+ * -2 when the DB committed but the verifier could not be activated and
+ * the recovery retry also failed (the caller should ask for a restart). */
+static int migration_perform_change(SessionManager *sm, const char *new_password,
+                                    char *salt, char *old_salt, char *marker,
+                                    char *verifier, char *verifier_new)
 {
-    if (!sm || !sm->db || !sm->key_initialized || !new_password ||
-        !sm->data_dir)
-        return -1;
-
-    char *salt = data_path(sm->data_dir, SALT_FILE);
-    char *old_salt = salt ? path_suffix(salt, ".old") : NULL;
-    char *marker = data_path(sm->data_dir, MARKER_FILE);
-    char *verifier = data_path(sm->data_dir, VERIFIER_FILE);
-    char *verifier_new = data_path(sm->data_dir, VERIFIER_NEW_FILE);
-    if (!salt || !old_salt || !marker || !verifier || !verifier_new)
-    {
-        free(salt); free(old_salt); free(marker); free(verifier);
-        free(verifier_new);
-        return -1;
-    }
-
     int result = -1;
     int transaction_open = 0;
     int transaction_committed = 0;
@@ -602,7 +607,6 @@ int migration_change_password(SessionManager *sm, const char *new_password)
     EncryptionKey new_key = {{0}};
     unsigned char new_salt[64] = {0};
     int new_salt_len = 0;
-    session_manager_lock(sm);
     old_key = sm->enc_key;
 
     if (create_marker(marker) != 0 || sync_directory(sm->data_dir) != 0)
@@ -680,10 +684,35 @@ cleanup:
         (void)sqlite_exec_checked(sm->db, "ROLLBACK",
                                   "migration: cleanup rollback failed");
     if (result != 0 && !transaction_committed) sm->enc_key = old_key;
-    session_manager_unlock(sm);
     memset(&old_key, 0, sizeof(old_key));
     memset(&new_key, 0, sizeof(new_key));
     memset(new_salt, 0, sizeof(new_salt));
+    return result;
+}
+
+
+int migration_change_password(SessionManager *sm, const char *new_password)
+{
+    if (!sm || !sm->db || !sm->key_initialized || !new_password ||
+        !sm->data_dir)
+        return -1;
+
+    char *salt = data_path(sm->data_dir, SALT_FILE);
+    char *old_salt = salt ? path_suffix(salt, ".old") : NULL;
+    char *marker = data_path(sm->data_dir, MARKER_FILE);
+    char *verifier = data_path(sm->data_dir, VERIFIER_FILE);
+    char *verifier_new = data_path(sm->data_dir, VERIFIER_NEW_FILE);
+    if (!salt || !old_salt || !marker || !verifier || !verifier_new)
+    {
+        free(salt); free(old_salt); free(marker); free(verifier);
+        free(verifier_new);
+        return -1;
+    }
+
+    session_manager_lock(sm);
+    int result = migration_perform_change(sm, new_password, salt, old_salt,
+                                          marker, verifier, verifier_new);
+    session_manager_unlock(sm);
     free(salt); free(old_salt); free(marker); free(verifier);
     free(verifier_new);
     if (result == 0) log_info("password changed successfully", NULL);

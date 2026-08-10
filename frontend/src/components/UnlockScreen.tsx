@@ -5,6 +5,14 @@ interface Props {
   onUnlocked: () => void;
 }
 
+/**
+ * UnlockScreen - password gate shown when the vault is locked.
+ *
+ * @param props.onUnlocked - Called after a successful unlock.
+ *
+ * Submits to api.unlock(); maps the '__BACKEND_UNREACHABLE__' sentinel
+ * to a human "Backend is not running" message. Owns no effects.
+ */
 export function UnlockScreen({ onUnlocked }: Props) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);

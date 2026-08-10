@@ -30,7 +30,7 @@ static ToolResult *list_dir_execute(Tool *self, const char *args_json)
     char *dir_path = has_path ? str_dup(cJSON_GetStringValue(path_json)) : str_dup(".");
     cJSON_Delete(args);
 
-    char *resolved = safety_resolve_path(ctx->safety, dir_path);
+    char *resolved = safety_resolve_path_alloc(ctx->safety, dir_path);
     free(dir_path);
     if (!resolved) return tool_result_error("path resolution failed", "execution_error");
 

@@ -17,8 +17,9 @@
 #include "routes_general.h"
 #endif
 
-void ws_add_message_to_json(cJSON *m, const Message *msg)
+int ws_add_message_to_json(cJSON *m, const Message *msg)
 {
+    if (!m || !msg) return -1;
     cJSON_AddStringToObject(m, "role", msg->role ? msg->role : "unknown");
     cJSON_AddStringToObject(m, "content", msg->content ? msg->content : "");
 
@@ -63,6 +64,7 @@ void ws_add_message_to_json(cJSON *m, const Message *msg)
         cJSON_AddItemToObject(m, "tool_calls", tc_arr);
         cJSON_AddBoolToObject(m, "has_tools", 1);
     }
+    return 0;
 }
 
 #ifndef ROUTES_TEST

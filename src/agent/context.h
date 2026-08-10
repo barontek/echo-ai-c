@@ -10,7 +10,7 @@
 #include "message.h"
 
 /**
- * split_thinking_content - truncate a message at the last closed <think> block
+ * split_thinking_content_dup - truncate a message at the last closed <think> block
  * @raw: raw message text, borrowed for the duration of the call. NULL is
  *   accepted and returns NULL.
  *
@@ -22,7 +22,7 @@
  * Return: caller-owned malloc'd string (free with free()), or NULL on
  * allocation failure. Thread-safe; no shared state.
  */
-char *split_thinking_content(const char *raw);
+char *split_thinking_content_dup(const char *raw);
 
 /**
  * apply_context_window - trim a message list to message/char budgets
@@ -35,8 +35,8 @@ char *split_thinking_content(const char *raw);
  *   to a token budget at 4 chars/token.
  *
  * Returns msgs unchanged (and *count unchanged) when the list already fits
- * both budgets; otherwise deep-copies and trims via smart_select() and
- * trim_messages_by_tokens(). When a new array is returned the caller must
+ * both budgets; otherwise deep-copies and trims via smart_select_alloc() and
+ * trim_messages_by_tokens_new(). When a new array is returned the caller must
  * free it with message_free_all() and free the original msgs itself.
  *
  * Return: original msgs when already within budget or on any allocation
@@ -47,7 +47,7 @@ Message *apply_context_window(Message *msgs, int *count,
                               int max_messages, int max_chars);
 
 /**
- * smart_select - deep-copy a priority-selected subset of messages
+ * smart_select_alloc - deep-copy a priority-selected subset of messages
  * @msgs: source messages, borrowed; untouched and still owned by the
  *   caller.
  * @count: number of messages in msgs.
@@ -63,10 +63,10 @@ Message *apply_context_window(Message *msgs, int *count,
  * message_free_all()), or NULL on allocation failure or when nothing is
  * selected. Thread-safe; no shared state.
  */
-Message *smart_select(Message *msgs, int count, int keep_count);
+Message *smart_select_alloc(Message *msgs, int count, int keep_count);
 
 /**
- * trim_messages_by_tokens - drop oldest messages to fit a token budget
+ * trim_messages_by_tokens_new - drop oldest messages to fit a token budget
  * @msgs: message array to trim. On a successful trim this array is freed
  *   here (via message_free_all()) — ownership transfers to the returned
  *   array. When no trim happens the caller keeps ownership of msgs.
@@ -83,6 +83,21 @@ Message *smart_select(Message *msgs, int count, int keep_count);
  * otherwise a new caller-owned array with *count set. Thread-safe; no
  * shared state.
  */
-Message *trim_messages_by_tokens(Message *msgs, int *count, int max_tokens);
+Message *trim_messages_by_tokens_new(Message *msgs, int *count, int max_tokens);
+
+#ifdef CONTEXT_TEST
+/**
+ * context_test_set_alloc_fail - make the Nth allocation fail here
+ * @nth_allocation: 1-based index of the next calloc/str_dup/realloc call
+ *   to fail; -1 disables fault injection.
+ *
+ * Test-only hook. Resets the shared call counter, fails the Nth
+ * allocation (only that call), and leaves every other allocation to
+ * behave normally. Single-threaded tests only.
+ *
+ * Return: nothing.
+ */
+void context_test_set_alloc_fail(int nth_allocation);
+#endif
 
 #endif

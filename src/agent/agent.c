@@ -218,7 +218,7 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
         char *capped = NULL;
         if (agent->max_tool_result_chars > 0)
         {
-            capped = str_truncate_ellipsis(raw_content,
+            capped = str_truncate_ellipsis_dup(raw_content,
                                            (size_t)agent->max_tool_result_chars);
             if (capped) display = capped;
         }
@@ -518,50 +518,15 @@ static char *strip_think_tags(const char *str)
     return result;
 }
 
-static void agent_generate_title(Agent *agent)
+
+/* Runs the title-generation LLM call and post-processes the reply
+ * (trim, strip think tags, strip surrounding quotes) into a final title,
+ * falling back to the truncated user message when the model returns
+ * nothing usable. Returns a caller-owned string (never NULL). */
+static char *agent_title_from_model(LLMProvider *provider, const char *model,
+                                    const char *first_user_msg,
+                                    const char *fallback)
 {
-    if (!agent || !agent->provider) return;
-    if (!agent->sm || !agent->session_id) return;
-    if (agent->messages_count == 0) return;
-
-    Session *s = session_manager_load_session(agent->sm, agent->session_id);
-    if (!s || s->title_generation_attempted) { if (s) session_free(s); return; }
-    session_free(s);
-
-    s = session_manager_load_session(agent->sm, agent->session_id);
-    if (!s) return;
-    s->title_generation_attempted = 1;
-    session_manager_save_session(agent->sm, s);
-    session_free(s);
-
-    /* find first user message — matching Python version's approach:
-     * only the first user request, not the full conversation.
-     * full-conversation excerpts confuse small models into producing
-     * hallucinated placeholder titles like "(Waiting for ...)" */
-    const char *first_user_msg = NULL;
-    for (int i = 0; i < agent->messages_count; i++)
-    {
-        if (agent->messages[i].role && strcmp(agent->messages[i].role, "user") == 0
-            && agent->messages[i].content && agent->messages[i].content[0])
-        {
-            first_user_msg = agent->messages[i].content;
-            break;
-        }
-    }
-    if (!first_user_msg) return;
-
-    /* fallback: first 30 chars of user message, with "..." if truncated */
-    char *fallback = NULL;
-    size_t fblen = strlen(first_user_msg);
-    if (fblen <= 30) {
-        fallback = str_dup(first_user_msg);
-    } else {
-        if (asprintf(&fallback, "%.30s...", first_user_msg) < 0)
-            fallback = NULL;
-    }
-    if (!fallback) return;
-
-    /* prompt matching Python version — single user message, no system prompt */
     char *prompt = NULL;
     if (asprintf(&prompt,
                  "Summarize the following user request into a very short, "
@@ -570,8 +535,7 @@ static void agent_generate_title(Agent *agent)
                  "User request: %s",
                  first_user_msg) < 0)
     {
-        free(fallback);
-        return;
+        return NULL;
     }
 
     log_info("title prompt", "text", prompt, NULL);
@@ -583,13 +547,12 @@ static void agent_generate_title(Agent *agent)
     if (!title_msg.role)
     {
         free(prompt);
-        free(fallback);
-        return;
+        return NULL;
     }
 
-    LLMResponse *resp = agent->provider->chat(
-        agent->provider, &title_msg, 1,
-        agent->model, 0.3, 30, NULL);
+    LLMResponse *resp = provider->chat(
+        provider, &title_msg, 1,
+        model, 0.3, 30, NULL);
 
     free(title_msg.role);
     free(title_msg.content);
@@ -639,17 +602,74 @@ static void agent_generate_title(Agent *agent)
     if (!final_title)
         final_title = str_dup(fallback);
 
-    Session *s2 = session_manager_load_session(agent->sm, agent->session_id);
+    return final_title;
+}
+
+/* Persists a generated title on the session and notifies the title
+ * callback. No-op when the session cannot be reloaded. */
+static void agent_apply_title(Agent *agent, const char *title)
+{
+    Session *s2 = session_manager_load_session_alloc(agent->sm, agent->session_id);
     if (s2)
     {
         free(s2->title);
-        s2->title = str_dup(final_title);
+        s2->title = str_dup(title);
         session_manager_save_session(agent->sm, s2);
         session_free(s2);
 
         if (agent->on_title_update)
-            agent->on_title_update(agent->session_id, final_title, agent->title_userdata);
+            agent->on_title_update(agent->session_id, title, agent->title_userdata);
     }
+
+}
+
+static void agent_generate_title(Agent *agent)
+{
+    if (!agent || !agent->provider) return;
+    if (!agent->sm || !agent->session_id) return;
+    if (agent->messages_count == 0) return;
+
+    Session *s = session_manager_load_session_alloc(agent->sm, agent->session_id);
+    if (!s || s->title_generation_attempted) { if (s) session_free(s); return; }
+    session_free(s);
+
+    s = session_manager_load_session_alloc(agent->sm, agent->session_id);
+    if (!s) return;
+    s->title_generation_attempted = 1;
+    session_manager_save_session(agent->sm, s);
+    session_free(s);
+
+    /* find first user message — matching Python version's approach:
+     * only the first user request, not the full conversation.
+     * full-conversation excerpts confuse small models into producing
+     * hallucinated placeholder titles like "(Waiting for ...)" */
+    const char *first_user_msg = NULL;
+    for (int i = 0; i < agent->messages_count; i++)
+    {
+        if (agent->messages[i].role && strcmp(agent->messages[i].role, "user") == 0
+            && agent->messages[i].content && agent->messages[i].content[0])
+        {
+            first_user_msg = agent->messages[i].content;
+            break;
+        }
+    }
+    if (!first_user_msg) return;
+
+    /* fallback: first 30 chars of user message, with "..." if truncated */
+    char *fallback = NULL;
+    size_t fblen = strlen(first_user_msg);
+    if (fblen <= 30) {
+        fallback = str_dup(first_user_msg);
+    } else {
+        if (asprintf(&fallback, "%.30s...", first_user_msg) < 0)
+            fallback = NULL;
+    }
+    if (!fallback) return;
+
+    char *final_title = agent_title_from_model(agent->provider, agent->model,
+                                               first_user_msg, fallback);
+    if (final_title)
+        agent_apply_title(agent, final_title);
 
     free(final_title);
     free(fallback);
@@ -674,8 +694,15 @@ static void agent_perform_summarization(Agent *agent, int original_count)
     text[0] = '\0';
     for (int i = 0; i < agent->messages_count; i++)
     {
-        if (agent->messages[i].content)
-            strcat(text, agent->messages[i].content);
+        /* Buffer is exactly sized (sum of content lengths + 1), so a
+         * truncating append would mean the size computation drifted —
+         * bail out instead of summarizing a silently partial transcript. */
+        if (agent->messages[i].content &&
+            strlcat(text, agent->messages[i].content, (size_t)text_len + 1U) >= (size_t)text_len + 1U)
+        {
+            free(text);
+            return;
+        }
     }
 
     Message sum_msgs[2];
@@ -714,7 +741,7 @@ static void agent_perform_summarization(Agent *agent, int original_count)
  * a duplicate is benign (the metrics series just sees the same run_id
  * twice, no DB write is keyed on it). For the single-process libuv loop
  * the practical risk is essentially zero (the counter increments inside
- * `gen_run_id` called serially from `agent_run_streaming`). If you ever
+ * `gen_run_id` called serially from `agent_run_streaming_new`). If you ever
  * lift D2's single-Agent restriction, switch this to C11 `<stdatomic.h>`
  * `atomic_fetch_add` first. */
 static unsigned long run_counter = 0;
@@ -727,7 +754,7 @@ static char *gen_run_id(void)
     return id;
 }
 
-LLMResponse *agent_run(Agent *agent, const char *user_input)
+LLMResponse *agent_run_new(Agent *agent, const char *user_input)
 {
     agent->cancel_requested = 0;
 
@@ -826,8 +853,8 @@ static void null_chunk_handler(const char *chunk, void *userdata)
 /* Shared streaming run loop: calls the provider against the agent's current
  * message context, appending assistant responses (and tool result turns) as
  * they arrive. Caller is responsible for the context being complete — either
- * the user turn was appended (agent_run_streaming) or the caller pre-built
- * the context (agent_run_streaming_context, used by the edit/regenerate fork
+ * the user turn was appended (agent_run_streaming_new) or the caller pre-built
+ * the context (agent_run_streaming_context_new, used by the edit/regenerate fork
  * flow where the fork message must stay the last context entry). */
 static LLMResponse *agent_run_loop(Agent *agent,
                                    void (*on_chunk)(const char *, void *),
@@ -916,7 +943,7 @@ static LLMResponse *agent_run_loop(Agent *agent,
     return NULL;
 }
 
-LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
+LLMResponse *agent_run_streaming_new(Agent *agent, const char *user_input,
                                  void (*on_chunk)(const char *, void *),
                                  void *userdata)
 {
@@ -930,7 +957,7 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
     return agent_run_loop(agent, on_chunk, userdata);
 }
 
-LLMResponse *agent_run_streaming_context(Agent *agent,
+LLMResponse *agent_run_streaming_context_new(Agent *agent,
                                          void (*on_chunk)(const char *, void *),
                                          void *userdata)
 {
@@ -958,7 +985,7 @@ void agent_save_session(Agent *agent)
     Session *s = NULL;
 
     if (agent->session_id)
-        s = session_manager_load_session_nolock(agent->sm, agent->session_id);
+        s = session_manager_load_session_nolock_alloc(agent->sm, agent->session_id);
 
     if (!s)
     {

@@ -44,7 +44,7 @@ int memory_table_init(sqlite3 *db);
 int memory_set(sqlite3 *db, const char *key, const char *value);
 
 /**
- * memory_get - fetch a value by key
+ * memory_get_dup - fetch a value by key
  * @db: open sqlite3 connection; must be non-NULL.
  * @key: fact key; must be non-NULL, borrowed for the call duration.
  *
@@ -52,7 +52,7 @@ int memory_set(sqlite3 *db, const char *key, const char *value);
  * NULL when the key is absent, on NULL arguments, prepare failure, or
  * allocation failure. Thread-safe via caller's lock on the connection.
  */
-char *memory_get(sqlite3 *db, const char *key);
+char *memory_get_dup(sqlite3 *db, const char *key);
 
 /**
  * memory_delete - remove a key/value pair

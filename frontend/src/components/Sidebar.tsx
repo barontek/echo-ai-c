@@ -39,6 +39,15 @@ function getOpenAIAuthError(error: unknown): string {
   return error.message || 'OpenAI login failed. Please try again.';
 }
 
+/**
+ * Sidebar - session list, rename/delete controls, and the OpenAI OAuth
+ * sign-in flow.
+ *
+ * Owns the OpenAI login popup + poll loop: on unmount it aborts any
+ * in-flight poll and cancels the auth attempt (mountedRef gate), so no
+ * setState happens after teardown. Also adds/removes a keydown listener
+ * for closing the delete confirmation with Escape.
+ */
 export const Sidebar = memo(function Sidebar() {
   const {
     sessions,

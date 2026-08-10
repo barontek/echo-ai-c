@@ -69,6 +69,17 @@ static char *html_extract(const char *html, const char *start_tag, const char *e
     return result;
 }
 
+#ifdef SEARCH_DUCKDUCKGO_TEST
+/* Test-only hook into the real html_extract over raw network HTML; used
+ * by the fuzz target. Returns a caller-owned JSON string (same contract
+ * as html_extract), NULL on OOM. */
+char *search_duckduckgo_test_extract(const char *raw_html)
+{
+    return html_extract(raw_html, "<a rel=\"nofollow\" href=\"",
+                        "\"", NULL);
+}
+#endif
+
 static char *search_duckduckgo_search(SearchProvider *self, const char *query, int num_results)
 {
     (void)self;

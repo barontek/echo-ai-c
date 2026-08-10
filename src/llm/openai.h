@@ -85,7 +85,7 @@ int openai_reasoning_effort_valid(const char *effort);
 
 #ifdef OPENAI_TEST
 /**
- * openai_test_build_request_body - build a Codex request body
+ * openai_test_build_request_body_alloc - build a Codex request body
  * @messages: array of messages; may be NULL only when count is 0.
  * @count: number of messages (>= 0).
  * @model: model name string.
@@ -103,14 +103,14 @@ int openai_reasoning_effort_valid(const char *effort);
  * temperature, invalid effort, malformed messages/tools) or allocation
  * failure. Free with free(). Thread-safe; no shared state.
  */
-char *openai_test_build_request_body(Message *messages, int count,
+char *openai_test_build_request_body_alloc(Message *messages, int count,
                                      const char *model, double temperature,
                                      int stream, const char *tools_json,
                                      const char *json_schema,
                                      const char *effort);
 
 /**
- * openai_test_parse_response - parse a complete non-streaming response
+ * openai_test_parse_response_alloc - parse a complete non-streaming response
  * @raw: Codex Responses API JSON document (the body of a 2xx reply).
  *
  * Test-only hook for the buffered parse path; extracts content,
@@ -119,10 +119,10 @@ char *openai_test_build_request_body(Message *messages, int count,
  * Return: caller-owned LLMResponse, or NULL on parse or validation
  * failure. Free with llm_response_free(). Thread-safe; no shared state.
  */
-LLMResponse *openai_test_parse_response(const char *raw);
+LLMResponse *openai_test_parse_response_alloc(const char *raw);
 
 /**
- * openai_test_stream_fragments - parse an SSE stream split across fragments
+ * openai_test_stream_fragments_alloc - parse an SSE stream split across fragments
  * @fragments: array of byte fragments that together form the SSE payload.
  * @lengths: per-fragment byte lengths, or NULL to strlen() each fragment.
  * @count: number of fragments (>= 0).
@@ -137,7 +137,7 @@ LLMResponse *openai_test_parse_response(const char *raw);
  * or NULL on invalid arguments, allocation, or stream validation failure.
  * Free with llm_response_free(). Thread-safe; no shared state.
  */
-LLMResponse *openai_test_stream_fragments(
+LLMResponse *openai_test_stream_fragments_alloc(
     const char **fragments, const size_t *lengths, int count,
     void (*on_chunk)(const char *, void *), void *userdata);
 

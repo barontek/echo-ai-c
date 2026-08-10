@@ -122,7 +122,7 @@ static ToolResult *grep_execute(Tool *self, const char *args_json)
         return tool_result_error("path rejected by safety check", "validation_error");
     }
 
-    char *resolved = safety_resolve_path(gctx->safety, search_path);
+    char *resolved = safety_resolve_path_alloc(gctx->safety, search_path);
     free(search_path);
     if (!resolved)
     {

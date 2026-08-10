@@ -20,6 +20,52 @@ typedef struct {
     char *api_key;
 } TavilyCtx;
 
+/* Converts a parsed Tavily API response into the shared
+ * [{"title","url","snippet"}] JSON array string; caller frees. */
+static char *tavily_results_to_json(cJSON *json)
+{
+    cJSON *results = cJSON_GetObjectItem(json, "results");
+    cJSON *out_arr = cJSON_CreateArray();
+    if (results && cJSON_IsArray(results))
+    {
+        int count = cJSON_GetArraySize(results);
+        for (int i = 0; i < count; i++)
+        {
+            cJSON *r = cJSON_GetArrayItem(results, i);
+            if (!r) continue;
+            cJSON *item = cJSON_CreateObject();
+            cJSON *title = cJSON_GetObjectItem(r, "title");
+            cJSON *url_item = cJSON_GetObjectItem(r, "url");
+            cJSON *content = cJSON_GetObjectItem(r, "content");
+            if (title && title->valuestring)
+                cJSON_AddStringToObject(item, "title", title->valuestring);
+            if (url_item && url_item->valuestring)
+                cJSON_AddStringToObject(item, "url", url_item->valuestring);
+            if (content && content->valuestring)
+                cJSON_AddStringToObject(item, "snippet", content->valuestring);
+            cJSON_AddItemToArray(out_arr, item);
+        }
+    }
+
+    char *result = cJSON_PrintUnformatted(out_arr);
+    cJSON_Delete(out_arr);
+    if (!result) return str_dup("(no results)");
+    return result;
+}
+
+#ifdef SEARCH_TAVILY_TEST
+/* Test-only hook: parse a raw Tavily API response (no network). Caller
+ * frees the returned JSON string. */
+char *search_tavily_test_parse_response(const char *raw)
+{
+    cJSON *json = cJSON_Parse(raw);
+    if (!json) return str_dup("Error: failed to parse Tavily response");
+    char *result = tavily_results_to_json(json);
+    cJSON_Delete(json);
+    return result;
+}
+#endif
+
 static char *search_tavily_search(SearchProvider *self, const char *query, int num_results)
 {
     TavilyCtx *ctx = self->ctx;
@@ -66,31 +112,8 @@ static char *search_tavily_search(SearchProvider *self, const char *query, int n
     cJSON *json = cJSON_Parse(buf.data);
     if (!json) { free(buf.data); return str_dup("Error: failed to parse Tavily response"); }
 
-    cJSON *results = cJSON_GetObjectItem(json, "results");
-    cJSON *out_arr = cJSON_CreateArray();
-    if (results && cJSON_IsArray(results))
-    {
-        int count = cJSON_GetArraySize(results);
-        for (int i = 0; i < count; i++)
-        {
-            cJSON *r = cJSON_GetArrayItem(results, i);
-            if (!r) continue;
-            cJSON *item = cJSON_CreateObject();
-            cJSON *title = cJSON_GetObjectItem(r, "title");
-            cJSON *url_item = cJSON_GetObjectItem(r, "url");
-            cJSON *content = cJSON_GetObjectItem(r, "content");
-            if (title && title->valuestring)
-                cJSON_AddStringToObject(item, "title", title->valuestring);
-            if (url_item && url_item->valuestring)
-                cJSON_AddStringToObject(item, "url", url_item->valuestring);
-            if (content && content->valuestring)
-                cJSON_AddStringToObject(item, "snippet", content->valuestring);
-            cJSON_AddItemToArray(out_arr, item);
-        }
-    }
+    char *result = tavily_results_to_json(json);
 
-    char *result = cJSON_PrintUnformatted(out_arr);
-    cJSON_Delete(out_arr);
     cJSON_Delete(json);
     free(buf.data);
 

@@ -13,6 +13,39 @@
 #include "message.h"
 #include "../utils/string_utils.h"
 
+#ifdef MESSAGE_TEST
+/* Test-only allocator fault injection: shares one call counter across
+ * str_dup and calloc so tests can fail the Nth allocation inside a
+ * specific function (e.g. message_copy's 11 str_dups + 1 calloc). Only
+ * the test target defines MESSAGE_TEST; production builds never see this
+ * TU compiled with the guard. */
+static int message_test_alloc_counter = 0;
+static int message_test_alloc_fail_at = -1;
+
+void message_test_set_alloc_fail(int nth_allocation)
+{
+    message_test_alloc_counter = 0;
+    message_test_alloc_fail_at = nth_allocation;
+}
+
+static void *message_test_calloc(size_t nmemb, size_t size)
+{
+    message_test_alloc_counter++;
+    if (message_test_alloc_counter == message_test_alloc_fail_at) return NULL;
+    return calloc(nmemb, size);
+}
+
+static char *message_test_strdup(const char *s)
+{
+    message_test_alloc_counter++;
+    if (message_test_alloc_counter == message_test_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+#define calloc message_test_calloc
+#define str_dup message_test_strdup
+#endif
+
 Message *message_create(const char *role, const char *content)
 {
     Message *msg = calloc(1, sizeof(Message));
@@ -307,7 +340,7 @@ cJSON *messages_to_json_array(Message *msgs, int count)
     return arr;
 }
 
-char *llm_messages_format(Message *msgs, int count,
+char *llm_messages_format_new(Message *msgs, int count,
                           const char *system_prompt,
                           const char *system_context)
 {

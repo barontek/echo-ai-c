@@ -70,13 +70,13 @@ unsigned char *encryption_encrypt(const EncryptionKey *key, const unsigned char 
 unsigned char *encryption_decrypt(const EncryptionKey *key, const unsigned char *token, int token_len, int *out_len);
 
 /**
- * encryption_resolve_password - read the password from ECHO_PASSWORD
+ * encryption_resolve_password_alloc - read the password from ECHO_PASSWORD
  *
  * Return: caller-owned str_dup of the ECHO_PASSWORD value, or NULL when
  * the variable is unset or str_dup fails. Free with free(). Thread-safe
  * as long as the environment is not concurrently modified (getenv).
  */
-char *encryption_resolve_password(void);
+char *encryption_resolve_password_alloc(void);
 
 /**
  * encryption_salt_create - create a 16-byte random salt file
@@ -142,5 +142,22 @@ int encryption_create_verifier(const EncryptionKey *key, const char *path);
  * Failures are silent. Thread-safe.
  */
 int encryption_check_verifier(const EncryptionKey *key, const char *path);
+
+#ifdef ENCRYPTION_TEST
+/**
+ * encryption_test_validate_token - parse a Fernet token with zero keys
+ * @token: raw token bytes; need not be NUL-terminated.
+ * @token_len: number of bytes in @token.
+ *
+ * Test-only hook into the real decrypt_fernet_token layout parsing
+ * (version byte, minimum length, IV/ciphertext/HMAC arithmetic) with
+ * fixed zero keys, so fuzzers can hammer the bounds logic without key
+ * material. A matching HMAC is effectively unforgeable by fuzzing, so
+ * the decrypt branch only runs on genuinely valid tokens.
+ *
+ * Return: 1 when the token parses, 0 when rejected. Thread-safe; pure.
+ */
+int encryption_test_validate_token(const unsigned char *token, int token_len);
+#endif
 
 #endif

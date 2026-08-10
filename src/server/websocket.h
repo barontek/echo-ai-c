@@ -116,7 +116,7 @@ int ws_start_read(WSClient *ws);
  *
  * Return: void; never fails. Call on the loop thread.
  */
-void ws_start_ping_timer(WSClient *ws);
+int ws_start_ping_timer(WSClient *ws);
 
 /**
  * ws_stop_ping_timer - stop the keepalive ping timer
@@ -128,5 +128,21 @@ void ws_start_ping_timer(WSClient *ws);
  * Return: void; never fails.
  */
 void ws_stop_ping_timer(WSClient *ws);
+
+#ifdef WEBSOCKET_TEST
+/**
+ * websocket_test_frame_walk - walk RFC 6455 frames over a raw buffer
+ * @data: raw bytes; may be any length, need not be NUL-terminated.
+ * @len: number of bytes in @data.
+ *
+ * Test-only hook sharing ws_frame_header with the real read loop (one
+ * implementation, not a mirror). Returns the number of bytes consumed:
+ * @len for a fully valid stream, otherwise the offset where parsing
+ * stopped (truncated header or payload). Never fails; safe on any input.
+ *
+ * Return: bytes consumed; thread-safe (pure).
+ */
+size_t websocket_test_frame_walk(const unsigned char *data, size_t len);
+#endif
 
 #endif

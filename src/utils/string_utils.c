@@ -49,6 +49,33 @@ int str_append(char **target, const char *value)
     return 0;
 }
 
+/* strlcpy/strlcat are already provided by Apple libSystem (under
+ * _FORTIFY_SOURCE they become __builtin___strlcat_chk macros, so defining
+ * them here would collide); glibc lacks them, so define them on non-Apple
+ * platforms only. Semantics are identical either way. */
+#if !defined(__APPLE__)
+size_t strlcpy(char *dst, const char *src, size_t size)
+{
+    if (size == 0) return strlen(src);
+    size_t srclen = strlen(src);
+    size_t copy = srclen < size - 1 ? srclen : size - 1;
+    memcpy(dst, src, copy);
+    dst[copy] = '\0';
+    return srclen;
+}
+
+size_t strlcat(char *dst, const char *src, size_t size)
+{
+    size_t dstlen = strlen(dst);
+    if (dstlen >= size) return size + strlen(src);
+    size_t srclen = strlen(src);
+    size_t copy = srclen < size - dstlen - 1 ? srclen : size - dstlen - 1;
+    memcpy(dst + dstlen, src, copy);
+    dst[dstlen + copy] = '\0';
+    return dstlen + srclen;
+}
+#endif
+
 int str_starts_with(const char *str, const char *prefix)
 {
     if (!str || !prefix) return 0;
@@ -124,7 +151,7 @@ void str_array_free(StrArray *arr)
     arr->count = 0;
 }
 
-char *str_truncate_ellipsis(const char *text, size_t max_chars)
+char *str_truncate_ellipsis_dup(const char *text, size_t max_chars)
 {
     if (!text) return NULL;
 
@@ -158,7 +185,7 @@ char *str_truncate_ellipsis(const char *text, size_t max_chars)
     return out;
 }
 
-char *sanitize_json(const char *str)
+char *sanitize_json_dup(const char *str)
 {
     if (!str) return NULL;
 

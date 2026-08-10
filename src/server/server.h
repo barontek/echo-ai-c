@@ -109,12 +109,16 @@ void server_stop(ServerContext *ctx);
  *   sends an empty body.
  *
  * The client is closed once the write completes, so the caller must not
- * touch client afterwards. Allocation or write failures are silently
- * dropped — the peer just sees a closed connection; no error is signaled.
+ * touch client afterwards. Allocation failures are logged with request
+ * context and reported through the return; the peer just sees a closed
+ * connection.
  *
- * Return: void. Single-threaded: call on the loop thread only.
+ * Return: 0 on success, -1 when the response could not be built or
+ * queued (alloc failure, or a NULL/websocket client). Callers have no
+ * recovery path for a broken peer, so the return may be ignored.
+ * Single-threaded: call on the loop thread only.
  */
-void server_response(Client *client, int status, const char *content_type, const char *body);
+int server_response(Client *client, int status, const char *content_type, const char *body);
 
 /**
  * server_response_json - send a JSON HTTP response and close the connection
@@ -124,11 +128,11 @@ void server_response(Client *client, int status, const char *content_type, const
  *   duration of the call.
  *
  * Thin wrapper over server_response() with Content-Type
- * application/json; same close-on-write and silent-failure semantics.
+ * application/json; same close-on-write semantics.
  *
- * Return: void.
+ * Return: 0 on success, -1 as documented for server_response().
  */
-void server_response_json(Client *client, int status, const char *json);
+int server_response_json(Client *client, int status, const char *json);
 
 /**
  * server_response_error - send an {"error": msg} JSON response
@@ -137,9 +141,9 @@ void server_response_json(Client *client, int status, const char *json);
  * @msg: human-readable error message; NUL-terminated and borrowed for the
  *   duration of the call.
  *
- * Return: void; same semantics as server_response().
+ * Return: 0 on success, -1 as documented for server_response().
  */
-void server_response_error(Client *client, int status, const char *msg);
+int server_response_error(Client *client, int status, const char *msg);
 
 /**
  * client_close - close a connection and free everything it owns

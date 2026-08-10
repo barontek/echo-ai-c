@@ -36,13 +36,35 @@ check_c_source_compiles(
 set(CMAKE_REQUIRED_FLAGS "")
 
 if(HAS_LIBFUZZER)
-    # fuzz_ollama_tool_calls — standalone mirror (same pattern as test_ollama_tool_calls.c)
-    add_executable(fuzz_ollama_tool_calls fuzz/fuzz_ollama_tool_calls.c)
+    # fuzz_websocket_frame — real RFC 6455 frame parser (websocket.c
+    # under WEBSOCKET_TEST; stubs resolve the rest of the TU)
+    add_executable(fuzz_websocket_frame
+        ../src/server/websocket.c
+        fuzz/websocket_stubs.c
+        fuzz/fuzz_websocket_frame.c
+    )
+    target_compile_definitions(fuzz_websocket_frame PRIVATE WEBSOCKET_TEST=1)
+    target_include_directories(fuzz_websocket_frame PRIVATE ../src)
+    target_compile_options(fuzz_websocket_frame PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+    target_link_libraries(fuzz_websocket_frame PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::LIBUV PkgConfig::OPENSSL)
+
+    # fuzz_ollama_tool_calls — real ollama.c under OLLAMA_TEST (replaced
+    # the standalone mirror that had drifted from parse_stream_tool_calls)
+    add_executable(fuzz_ollama_tool_calls
+        ../src/llm/ollama.c
+        ../src/agent/message.c
+        ../src/utils/string_utils.c
+        ../src/utils/logging.c
+        fuzz/fuzz_ollama_tool_calls.c
+    )
+    target_compile_definitions(fuzz_ollama_tool_calls PRIVATE OLLAMA_TEST=1)
     target_include_directories(fuzz_ollama_tool_calls PRIVATE ../src)
     target_compile_options(fuzz_ollama_tool_calls PRIVATE
         -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
     target_link_libraries(fuzz_ollama_tool_calls PRIVATE
-        -fsanitize=fuzzer,address,undefined PkgConfig::CJSON)
+        -fsanitize=fuzzer,address,undefined PkgConfig::CJSON PkgConfig::LIBCURL)
 
     # fuzz_config — exercises conf_load with fuzzed .conf file contents
     add_executable(fuzz_config
@@ -109,6 +131,35 @@ if(HAS_LIBFUZZER)
     target_link_libraries(fuzz_openai_compatible_stream PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON)
 
+    # fuzz_duckduckgo_html_extract — real html_extract over network HTML
+    add_executable(fuzz_duckduckgo_html_extract
+        ../src/tools/search_duckduckgo.c
+        ../src/utils/http_client.c
+        ../src/utils/string_utils.c
+        ../src/utils/logging.c
+        fuzz/fuzz_duckduckgo_html_extract.c
+    )
+    target_compile_definitions(fuzz_duckduckgo_html_extract PRIVATE SEARCH_DUCKDUCKGO_TEST=1)
+    target_include_directories(fuzz_duckduckgo_html_extract PRIVATE ../src)
+    target_compile_options(fuzz_duckduckgo_html_extract PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+    target_link_libraries(fuzz_duckduckgo_html_extract PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON)
+
+    # fuzz_fernet_token — real Fernet token layout parser
+    add_executable(fuzz_fernet_token
+        ../src/session/encryption.c
+        ../src/utils/string_utils.c
+        ../src/utils/logging.c
+        fuzz/fuzz_fernet_token.c
+    )
+    target_compile_definitions(fuzz_fernet_token PRIVATE ENCRYPTION_TEST=1)
+    target_include_directories(fuzz_fernet_token PRIVATE ../src)
+    target_compile_options(fuzz_fernet_token PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+    target_link_libraries(fuzz_fernet_token PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::OPENSSL)
+
     foreach(OAUTH_FUZZ_TARGET IN ITEMS callback token jwt)
         add_executable(fuzz_openai_oauth_${OAUTH_FUZZ_TARGET}
             ../src/llm/openai_oauth.c
@@ -125,6 +176,52 @@ if(HAS_LIBFUZZER)
             -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL
             PkgConfig::OPENSSL PkgConfig::CJSON m)
     endforeach()
+
+    add_executable(fuzz_openai_parse_response
+        ../src/llm/openai.c
+        ../src/utils/http_client.c
+        ../src/agent/message.c
+        ../src/utils/string_utils.c
+        fuzz/openai_provider_stubs.c
+        fuzz/fuzz_openai_parse_response.c
+    )
+    target_compile_definitions(fuzz_openai_parse_response PRIVATE OPENAI_TEST=1)
+    target_include_directories(fuzz_openai_parse_response PRIVATE ../src)
+    target_compile_options(fuzz_openai_parse_response PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+    target_link_libraries(fuzz_openai_parse_response PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON
+        PkgConfig::OPENSSL m)
+
+    add_executable(fuzz_openai_parse_models
+        ../src/llm/openai.c
+        ../src/utils/http_client.c
+        ../src/agent/message.c
+        ../src/utils/string_utils.c
+        fuzz/openai_provider_stubs.c
+        fuzz/fuzz_openai_parse_models.c
+    )
+    target_compile_definitions(fuzz_openai_parse_models PRIVATE OPENAI_TEST=1)
+    target_include_directories(fuzz_openai_parse_models PRIVATE ../src)
+    target_compile_options(fuzz_openai_parse_models PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+    target_link_libraries(fuzz_openai_parse_models PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON
+        PkgConfig::OPENSSL m)
+
+    add_executable(fuzz_ollama_parse_response
+        ../src/llm/ollama.c
+        ../src/agent/message.c
+        ../src/utils/string_utils.c
+        ../src/utils/logging.c
+        fuzz/fuzz_ollama_parse_response.c
+    )
+    target_compile_definitions(fuzz_ollama_parse_response PRIVATE OLLAMA_TEST=1)
+    target_include_directories(fuzz_ollama_parse_response PRIVATE ../src)
+    target_compile_options(fuzz_ollama_parse_response PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+    target_link_libraries(fuzz_ollama_parse_response PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::CJSON PkgConfig::LIBCURL)
 
     add_executable(fuzz_openai_codex_stream
         ../src/llm/openai.c

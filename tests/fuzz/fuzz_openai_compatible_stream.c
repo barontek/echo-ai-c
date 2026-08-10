@@ -4,7 +4,7 @@
 #include <string.h>
 #include "agent/message.h"
 
-LLMResponse *openai_compatible_test_parse_stream(
+LLMResponse *openai_compatible_test_parse_stream_alloc(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata);
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
@@ -14,7 +14,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     if (!input) return 0;
     memcpy(input, data, size);
     input[size] = '\0';
-    LLMResponse *resp = openai_compatible_test_parse_stream(input, NULL, NULL);
+    LLMResponse *resp = openai_compatible_test_parse_stream_alloc(input, NULL, NULL);
     llm_response_free(resp);
     free(input);
     return 0;

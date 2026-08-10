@@ -14,6 +14,18 @@ export const EFFORT_OPTIONS_BY_PROVIDER: Record<string, string[]> = {
 };
 export type EffortOption = string;
 
+/** ChatContextValue - the full chat contract exposed by ChatProvider.
+ *
+ * Nullability: `activeSessionId`, `pendingApproval` and `pendingQuestion`
+ * are null exactly when nothing is active/pending — the approval and
+ * ask-user dialogs render null in those states; `pendingApproval` null
+ * never means "failed to load". `sessions`/`models`/`providers` are
+ * always arrays (possibly empty). `isConnected` is a derived boolean of
+ * `connectionStatus === 'connected'`.
+ *
+ * Async actions: selectSession/selectProvider/deleteSession/renameSession
+ * return promises that reject on backend failure (they surface their own
+ * errors); the remaining actions are fire-and-forget via the websocket. */
 export interface ChatContextValue {
   sessions: Array<{ id: string; title: string; created_at: string }>;
   activeSessionId: string | null;

@@ -15,10 +15,53 @@
 #include <fcntl.h>
 #include <ctype.h>
 
+#ifdef NOTES_TEST
+#include <stdarg.h>
+#endif
+
 #include "tool.h"
 #include "../safety/safety.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
+
+#ifdef NOTES_TEST
+/* Test-only allocator fault injection: shared counter across str_dup and
+ * asprintf so tests can fail the Nth allocation inside notes_execute.
+ * Only the test target defines NOTES_TEST. */
+static int notes_test_alloc_counter = 0;
+static int notes_test_alloc_fail_at = -1;
+
+void notes_test_set_alloc_fail(int nth_allocation)
+{
+    notes_test_alloc_counter = 0;
+    notes_test_alloc_fail_at = nth_allocation;
+}
+
+static char *notes_test_strdup(const char *s)
+{
+    notes_test_alloc_counter++;
+    if (notes_test_alloc_counter == notes_test_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+static int notes_test_asprintf(char **strp, const char *fmt, ...)
+{
+    notes_test_alloc_counter++;
+    if (notes_test_alloc_counter == notes_test_alloc_fail_at)
+    {
+        *strp = NULL;
+        return -1;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    int rc = vasprintf(strp, fmt, ap);
+    va_end(ap);
+    return rc;
+}
+
+#define str_dup notes_test_strdup
+#define asprintf notes_test_asprintf
+#endif
 
 typedef struct {
     SafetyConfig *safety;
@@ -70,6 +113,11 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
     }
 
     char *action = str_dup(cJSON_GetStringValue(action_json));
+    if (!action)
+    {
+        cJSON_Delete(args);
+        return tool_result_error("oom", "execution_error");
+    }
     cJSON *name_json = cJSON_GetObjectItem(args, "name");
 
     const char *ndir = notes_dir_path(ctx);
@@ -112,6 +160,12 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'name' argument", "validation_error");
     }
     name = str_dup(cJSON_GetStringValue(name_json));
+    if (!name)
+    {
+        cJSON_Delete(args);
+        free(action);
+        return tool_result_error("oom", "execution_error");
+    }
     if (!valid_note_name(name))
     {
         cJSON_Delete(args);
@@ -125,6 +179,13 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
         note_content = str_dup(cJSON_GetStringValue(content_json));
 
     cJSON_Delete(args);
+
+    if (content_json && cJSON_IsString(content_json) && !note_content)
+    {
+        free(action);
+        free(name);
+        return tool_result_error("oom", "execution_error");
+    }
 
     if (strcmp(action, "read") == 0)
     {
@@ -279,6 +340,15 @@ Tool *tool_notes_create(SafetyConfig *safety)
         "\"content\":{\"type\":\"string\",\"description\":\"Note content (for write action)\"}"
         "},\"required\":[\"action\"]}"
     );
+    if (!t->name || !t->description || !t->parameters_schema)
+    {
+        free(t->name);
+        free(t->description);
+        free(t->parameters_schema);
+        free(ctx);
+        free(t);
+        return NULL;
+    }
     t->execute = notes_execute;
     t->destroy = notes_destroy;
     t->ctx = ctx;

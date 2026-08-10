@@ -60,7 +60,7 @@ int route_match(const char *method, const char *path, const Route *r);
  * Return: void. Allocation failure inside cJSON silently drops fields —
  * callers cannot distinguish a truncated object. Thread-safe (reads only).
  */
-void ws_add_message_to_json(cJSON *m, const Message *msg);
+int ws_add_message_to_json(cJSON *m, const Message *msg);
 
 /**
  * server_sse_write - queue a Server-Sent-Events frame on a client
@@ -74,6 +74,6 @@ void ws_add_message_to_json(cJSON *m, const Message *msg);
  * Return: void; failures are logged nowhere and must be treated as best
  * effort. Thread-safety: libuv loop thread only, matching its callers.
  */
-void server_sse_write(Client *client, const char *data);
+int server_sse_write(Client *client, const char *data);
 
 #endif

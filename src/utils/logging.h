@@ -18,10 +18,12 @@ typedef enum {
  * Line-buffers stderr so each JSON log record flushes as a unit. Call
  * once at process startup, before any log_* call.
  *
- * Return: void; never fails. Thread-safety: not synchronized; call
- * before any other thread logs.
+ * Return: 0 on success; -1 when fd 2 is closed (EBADF). On failure the
+ * caller should abort with context, since every subsequent log_* call
+ * would write nowhere. Thread-safety: not synchronized; call before any
+ * other thread logs.
  */
-void log_init(void);
+int log_init(void);
 
 /**
  * log_cleanup - tear down the logging subsystem

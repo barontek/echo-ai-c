@@ -75,24 +75,26 @@ static int dummy_metrics_ptr = 0;
  * Stub server functions
  * --------------------------------------------------------------------------- */
 
-void server_response(Client *client, int status, const char *content_type,
+int server_response(Client *client, int status, const char *content_type,
                      const char *body)
 {
     (void)client; (void)content_type;
     captured_status = status;
     free(captured_body);
     captured_body = body ? str_dup(body) : NULL;
+    return 0;
 }
 
-void server_response_json(Client *client, int status, const char *json)
+int server_response_json(Client *client, int status, const char *json)
 {
     (void)client;
     captured_status = status;
     free(captured_body);
     captured_body = json ? str_dup(json) : NULL;
+    return 0;
 }
 
-void server_response_error(Client *client, int status, const char *msg)
+int server_response_error(Client *client, int status, const char *msg)
 {
     (void)client;
     captured_status = status;
@@ -101,11 +103,12 @@ void server_response_error(Client *client, int status, const char *msg)
     cJSON_AddStringToObject(j, "error", msg ? msg : "");
     captured_body = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
+    return 0;
 }
 
 void client_close(Client *client) { (void)client; }
-void server_sse_write(Client *client, const char *data)
-{ (void)client; (void)data; }
+int server_sse_write(Client *client, const char *data)
+{ (void)client; (void)data; return 0; }
 
 /* ---------------------------------------------------------------------------
  * Stub middleware
@@ -121,7 +124,7 @@ int middleware_has_valid_token(const char *headers, const char *token)
  * Stub metrics / change_tracker / session_manager
  * --------------------------------------------------------------------------- */
 
-char *metrics_render(Metrics *m)
+char *metrics_render_new(Metrics *m)
 {
     (void)m;
     return stub_metrics_body ? str_dup(stub_metrics_body) : NULL;
@@ -192,6 +195,7 @@ enum { CURLE_OK = 0, CURLE_UNKNOWN_OPTION = 1, CURLE_URL_MALFORMAT = 3,
 CURL *curl_easy_init(void)
 {
     return stub_curl_init_nonnull ? (CURL *)&stub_curl_init_nonnull : NULL;
+    return 0;
 }
 
 CURLcode curl_easy_setopt(CURL *c, int option, ...)

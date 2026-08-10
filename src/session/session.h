@@ -53,7 +53,7 @@ Session *session_create(const char *title);
 void session_free(Session *session);
 
 /**
- * session_serialize_messages - serialize the message array to JSON
+ * session_serialize_messages_new - serialize the message array to JSON
  * @session: session whose messages are read; must be non-NULL.
  *
  * The result is a NUL-terminated JSON array string, at minimum "[]" for an
@@ -62,7 +62,7 @@ void session_free(Session *session);
  * Return: caller-owned malloc'd string, or NULL on cJSON-print OOM. Free
  * with free(). Thread-safe; no shared state.
  */
-char *session_serialize_messages(const Session *session);
+char *session_serialize_messages_new(const Session *session);
 
 /**
  * session_deserialize_messages - replace the message array from JSON
@@ -80,7 +80,7 @@ char *session_serialize_messages(const Session *session);
 int session_deserialize_messages(Session *session, const char *json_str);
 
 /**
- * session_serialize_metadata - serialize the metadata object to JSON
+ * session_serialize_metadata_new - serialize the metadata object to JSON
  * @session: session whose metadata is read; must be non-NULL.
  *
  * Returns NULL iff session->metadata is NULL ("never set"); an empty
@@ -89,7 +89,7 @@ int session_deserialize_messages(Session *session, const char *json_str);
  * Return: caller-owned malloc'd string, or NULL on OOM (cJSON print or the
  * "{}" normalization). Free with free(). Thread-safe; no shared state.
  */
-char *session_serialize_metadata(const Session *session);
+char *session_serialize_metadata_new(const Session *session);
 
 /**
  * session_deserialize_metadata - replace the metadata object from JSON
@@ -108,7 +108,7 @@ char *session_serialize_metadata(const Session *session);
 int session_deserialize_metadata(Session *session, const char *json_str);
 
 /**
- * session_serialize_events - serialize the events array to JSON
+ * session_serialize_events_new - serialize the events array to JSON
  * @session: session whose events are read; must be non-NULL.
  *
  * Returns NULL iff session->events is NULL ("no events"); an empty array
@@ -117,7 +117,7 @@ int session_deserialize_metadata(Session *session, const char *json_str);
  * Return: caller-owned malloc'd string, or NULL on OOM (cJSON print or the
  * "[]" normalization). Free with free(). Thread-safe; no shared state.
  */
-char *session_serialize_events(const Session *session);
+char *session_serialize_events_new(const Session *session);
 
 /**
  * session_deserialize_events - replace the events array from JSON

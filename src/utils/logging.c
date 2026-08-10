@@ -3,11 +3,15 @@
  * context pairs. Depends on: libc (stdio, time, stdarg).
  */
 
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <stdarg.h>
+#include <unistd.h>
 
 #include "logging.h"
 
@@ -25,9 +29,16 @@ static const char *level_str(LogLevel level)
     }
 }
 
-void log_init(void)
+int log_init(void)
 {
     setlinebuf(stderr);
+    /* Probe whether fd 2 is even open (a launcher may have closed it):
+     * a closed descriptor would make every log record vanish, so the
+     * caller aborts with context instead of logging nowhere. fflush
+     * can't detect this on an empty buffer, hence the fcntl probe. */
+    if (fcntl(STDERR_FILENO, F_GETFD) == -1 && errno == EBADF)
+        return -1;
+    return 0;
 }
 
 void log_cleanup(void)

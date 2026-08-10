@@ -6,6 +6,16 @@ interface ChatInputProps {
   placeholder?: string;
 }
 
+/**
+ * ChatInput - message composer: textarea with the send action.
+ *
+ * @param placeholder - Shown when the input is empty (default: 'Type
+ *   your message...').
+ *
+ * Disabled while disconnected from the backend (isConnected from
+ * useChat()); submits via sendMessage. Renders nothing else and owns no
+ * effects.
+ */
 export const ChatInput = memo(function ChatInput({
   placeholder = 'Type your message...',
 }: ChatInputProps) {

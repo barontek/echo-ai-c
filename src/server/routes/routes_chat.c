@@ -91,7 +91,7 @@ void handle_chat(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
 
-    LLMResponse *resp = agent_run(ctx->agent, msg->valuestring);
+    LLMResponse *resp = agent_run_new(ctx->agent, msg->valuestring);
     cJSON_Delete(json);
 
     if (!resp)
@@ -200,7 +200,7 @@ void handle_sse_stream(HTTPRequest *req, Client *client, ServerContext *ctx)
     c->agent = ctx->agent;
     c->client = client;
 
-    LLMResponse *resp = agent_run_streaming(ctx->agent, "", sse_on_chunk, c);
+    LLMResponse *resp = agent_run_streaming_new(ctx->agent, "", sse_on_chunk, c);
     free(c);
 
     if (resp)

@@ -13,9 +13,50 @@
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 
+#include "ollama.h"
 #include "provider.h"
 #include "../utils/logging.h"
 #include "../utils/string_utils.h"
+
+#ifdef OLLAMA_TEST
+/* Test-only allocator fault injection: shared counter across str_dup,
+ * realloc and calloc so tests can fail the Nth allocation inside
+ * parse_stream_tool_calls / ollama_parse_response. Only test targets
+ * define OLLAMA_TEST. */
+static int ollama_test_alloc_counter = 0;
+static int ollama_test_alloc_fail_at = -1;
+
+void ollama_test_set_alloc_fail(int nth_allocation)
+{
+    ollama_test_alloc_counter = 0;
+    ollama_test_alloc_fail_at = nth_allocation;
+}
+
+static char *ollama_test_strdup(const char *s)
+{
+    ollama_test_alloc_counter++;
+    if (ollama_test_alloc_counter == ollama_test_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+static void *ollama_test_realloc(void *ptr, size_t size)
+{
+    ollama_test_alloc_counter++;
+    if (ollama_test_alloc_counter == ollama_test_alloc_fail_at) return NULL;
+    return realloc(ptr, size);
+}
+
+static void *ollama_test_calloc(size_t nmemb, size_t size)
+{
+    ollama_test_alloc_counter++;
+    if (ollama_test_alloc_counter == ollama_test_alloc_fail_at) return NULL;
+    return calloc(nmemb, size);
+}
+
+#define str_dup ollama_test_strdup
+#define realloc ollama_test_realloc
+#define calloc ollama_test_calloc
+#endif
 
 typedef struct {
     char *base_url;
@@ -395,7 +436,7 @@ static LLMResponse *ollama_chat(LLMProvider *self, Message *messages, int count,
 {
     OllamaCtx *ctx = self->ctx;
 
-    char *msgs_json = llm_messages_format(messages, count, NULL, NULL);
+    char *msgs_json = llm_messages_format_new(messages, count, NULL, NULL);
     if (!msgs_json) return NULL;
 
     char effort_frag[64];
@@ -481,7 +522,7 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
 {
     OllamaCtx *ctx = self->ctx;
 
-    char *msgs_json = llm_messages_format(messages, count, NULL, NULL);
+    char *msgs_json = llm_messages_format_new(messages, count, NULL, NULL);
     if (!msgs_json) return NULL;
 
     char effort_frag[64];
@@ -559,7 +600,7 @@ static LLMResponse *ollama_extract_structured(LLMProvider *self, Message *messag
 {
     OllamaCtx *ctx = self->ctx;
 
-    char *msgs_json = llm_messages_format(messages, count, NULL, NULL);
+    char *msgs_json = llm_messages_format_new(messages, count, NULL, NULL);
     if (!msgs_json) return NULL;
 
     char effort_frag[64];
@@ -658,6 +699,27 @@ CURLcode ollama_test_curl_result = CURLE_OK;
 void ollama_test_parse_stream_tool_calls(WriteBuf *buf, cJSON *msg)
 {
     parse_stream_tool_calls(buf, msg);
+}
+
+/* Drives the REAL parse_stream_tool_calls over a raw JSON payload, so
+ * fuzz targets and unit tests exercise production code (including its
+ * silent keep-old-capacity OOM behavior) instead of a hand-rolled
+ * mirror. Extracts the "message" object the way the streaming loop
+ * does. Returns the parsed tool-call count, or -1 on JSON parse
+ * failure. */
+int ollama_test_parse_stream_calls_json(const char *raw)
+{
+    cJSON *root = cJSON_Parse(raw);
+    if (!root) return -1;
+    cJSON *msg = cJSON_GetObjectItem(root, "message");
+    WriteBuf buf = {0};
+    if (msg) parse_stream_tool_calls(&buf, msg);
+    int count = buf.tool_calls_count;
+    for (int i = 0; i < buf.tool_calls_count; i++)
+        tool_call_free(&buf.tool_calls[i]);
+    free(buf.tool_calls);
+    cJSON_Delete(root);
+    return count;
 }
 
 void ollama_test_forward_chunk(WriteBuf *buf, cJSON *msg)

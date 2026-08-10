@@ -5,6 +5,16 @@ interface Props {
   onClose: () => void;
 }
 
+/**
+ * ChangePasswordDialog - modal for changing the vault password.
+ *
+ * @param props.onClose - Called when the dialog should close (cancel, or after
+ *   a successful change).
+ *
+ * Validates locally (min 8 chars, new/confirm match) before calling
+ * api.changePassword(); the backend verifies the current password. Owns
+ * no effects.
+ */
 export function ChangePasswordDialog({ onClose }: Props) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');

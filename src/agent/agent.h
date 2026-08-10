@@ -9,6 +9,7 @@
 #define ECHO_AGENT_H
 
 #include "message.h"
+#include "../llm/factory.h"
 #include "../llm/provider.h"
 #include "../llm/openai_oauth.h"
 #include "../session/session_manager.h"
@@ -114,7 +115,7 @@ Agent *agent_create(const AgentConfig *cfg);
 void agent_destroy(Agent *agent);
 
 /**
- * agent_run - run one full agent turn (buffered, non-streaming)
+ * agent_run_new - run one full agent turn (buffered, non-streaming)
  * @agent: agent to run; must be non-NULL.
  * @user_input: user message text, borrowed for the duration of the call;
  *   a copy is appended to the agent's message list.
@@ -130,10 +131,10 @@ void agent_destroy(Agent *agent);
  * allocation failure. Not thread-safe; mutates the agent's message
  * context, so concurrent runs on the same agent are undefined.
  */
-LLMResponse *agent_run(Agent *agent, const char *user_input);
+LLMResponse *agent_run_new(Agent *agent, const char *user_input);
 
 /**
- * agent_run_streaming - run one full agent turn, streaming output
+ * agent_run_streaming_new - run one full agent turn, streaming output
  * @agent: agent to run; must be non-NULL.
  * @user_input: user message text, borrowed for the duration of the call;
  *   a copy is appended to the agent's message list.
@@ -141,7 +142,7 @@ LLMResponse *agent_run(Agent *agent, const char *user_input);
  *   or NULL to discard chunks. Called synchronously from the run loop.
  * @userdata: opaque pointer forwarded to on_chunk unchanged.
  *
- * Same loop as agent_run() but each LLM call uses the provider's
+ * Same loop as agent_run_new() but each LLM call uses the provider's
  * streaming path, so chunks arrive while the response is still in flight.
  *
  * Return: caller-owned aggregated LLMResponse (free with
@@ -149,18 +150,18 @@ LLMResponse *agent_run(Agent *agent, const char *user_input);
  * rejection, max iterations, or allocation failure. Not thread-safe;
  * mutates the agent's message context.
  */
-LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
+LLMResponse *agent_run_streaming_new(Agent *agent, const char *user_input,
                                  void (*on_chunk)(const char *chunk, void *userdata),
                                  void *userdata);
 
 /**
- * agent_run_streaming_context - run the streaming loop on the current context
+ * agent_run_streaming_context_new - run the streaming loop on the current context
  * @agent: agent to run; must be non-NULL.
  * @on_chunk: callback fired per content delta, or NULL to discard chunks.
  *   Called synchronously from the run loop.
  * @userdata: opaque pointer forwarded to on_chunk unchanged.
  *
- * Runs the same loop as agent_run_streaming() WITHOUT appending a user
+ * Runs the same loop as agent_run_streaming_new() WITHOUT appending a user
  * turn. The caller must have already appended the final user/assistant
  * message — the fork message in the edit/regenerate flow — so it stays
  * the last context entry.
@@ -170,7 +171,7 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
  * rejection, max iterations, or allocation failure. Not thread-safe;
  * mutates the agent's message context.
  */
-LLMResponse *agent_run_streaming_context(Agent *agent,
+LLMResponse *agent_run_streaming_context_new(Agent *agent,
                                          void (*on_chunk)(const char *chunk, void *userdata),
                                          void *userdata);
 

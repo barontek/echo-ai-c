@@ -73,7 +73,7 @@ Message *apply_context_window(Message *msgs, int *count, int max_msgs, int max_c
     return msgs;
 }
 
-char *split_thinking_content(const char *raw) { return str_dup(raw); }
+char *split_thinking_content_dup(const char *raw) { return str_dup(raw); }
 
 int metrics_counter_inc(Metrics *m, const char *n, const char *h) { (void)m; (void)n; (void)h; return 0; }
 int metrics_histogram_observe(Metrics *m, const char *n, const char *h, double v,

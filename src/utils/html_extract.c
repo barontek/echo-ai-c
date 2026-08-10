@@ -1048,13 +1048,68 @@ static int build_footer(Extract *x, OutBuf *fb)
     return 0;
 }
 
+/* Copies title-prefix, body, marker, and footer into dst in canonical
+ * order, returning the number of bytes written (excluding the NUL). */
+static size_t assemble_copy_parts(char *dst, const char *title, size_t tlen,
+                                  const char *body, size_t body_len,
+                                  const char *footer, size_t flen,
+                                  const char *marker, size_t mlen)
+{
+    size_t w = 0;
+    if (title)
+    {
+        const char *tprefix = "Title: ";
+        size_t plen = 7;
+        memcpy(dst + w, tprefix, plen); w += plen;
+        memcpy(dst + w, title, tlen); w += tlen;
+        memcpy(dst + w, "\n\n", 2);   w += 2;
+    }
+    if (body_len > 0)
+    {
+        memcpy(dst + w, body, body_len);
+        w += body_len;
+    }
+    if (mlen > 0) { memcpy(dst + w, marker, mlen); w += mlen; }
+    if (flen > 0) { memcpy(dst + w, footer, flen); w += flen; }
+    return w;
+}
+
+/* Computes how much of the body fits the truncated budget: prefer a
+ * paragraph boundary, then a word boundary, over a mid-word cut. Sets
+ * *omitted to the dropped byte count. */
+static size_t assemble_cut(const OutBuf *out, size_t budget, size_t *omitted)
+{
+    size_t body_len = out->len;
+    /* Case 2 guarantees body_len > budget (else total would have fit), but
+     * keep the guard so the boundary walk can never shrink a body that
+     * already fits the budget. */
+    if (body_len <= budget)
+    {
+        *omitted = 0;
+        return body_len;
+    }
+    size_t cut = budget;
+    size_t k = cut;
+    while (k > 0 && out->data[k - 1] != '\n') k--;
+    if (k > 0 && k != cut)
+    {
+        cut = k; /* paragraph boundary */
+    }
+    else if (k == 0)
+    {
+        k = cut;
+        while (k > 0 && out->data[k - 1] != ' ') k--;
+        if (k > 0) cut = k; /* word boundary fallback */
+    }
+    *omitted = body_len - cut;
+    return cut;
+}
+
 static char *assemble(Extract *x)
 {
     size_t max_chars = x->max_chars;
-    const char *tprefix = "Title: ";
-    size_t plen = 7;
     char *title = x->title.len > 0 ? x->title.data : NULL;
-    size_t tlen = title ? x->title.len + plen : 0; /* prefix + text */
+    size_t tlen = title ? x->title.len + 7 : 0; /* "Title: " prefix + text */
     size_t body_len = x->w.out.len;
 
     OutBuf footer = {0};
@@ -1066,19 +1121,9 @@ static char *assemble(Extract *x)
     {
         char *res = malloc(total + 1);
         if (!res) { free(footer.data); return NULL; }
-        size_t w = 0;
-        if (title)
-        {
-            memcpy(res + w, tprefix, plen); w += plen;
-            memcpy(res + w, title, x->title.len); w += x->title.len;
-            memcpy(res + w, "\n\n", 2);   w += 2;
-        }
-        if (body_len > 0)
-        {
-            memcpy(res + w, x->w.out.data, body_len);
-            w += body_len;
-        }
-        if (flen > 0) { memcpy(res + w, footer.data, flen); w += flen; }
+        size_t w = assemble_copy_parts(res, title, x->title.len,
+                                       x->w.out.data, body_len,
+                                       footer.data, flen, NULL, 0);
         res[w] = '\0';
         free(footer.data);
         return res;
@@ -1114,33 +1159,9 @@ static char *assemble(Extract *x)
         budget = max_chars - overhead;
     }
 
-    /* Case 2 guarantees body_len > budget (else total would have fit), but
-     * keep the guard so the boundary walk can never shrink a body that
-     * already fits the budget. */
-    size_t cut;
     size_t omitted = 0;
-    if (body_len <= budget)
-    {
-        cut = body_len;
-        marker_ok = 0;
-    }
-    else
-    {
-        cut = budget;
-        size_t k = cut;
-        while (k > 0 && x->w.out.data[k - 1] != '\n') k--;
-        if (k > 0 && k != cut)
-        {
-            cut = k; /* paragraph boundary */
-        }
-        else if (k == 0)
-        {
-            k = cut;
-            while (k > 0 && x->w.out.data[k - 1] != ' ') k--;
-            if (k > 0) cut = k; /* word boundary fallback */
-        }
-        omitted = body_len - cut;
-    }
+    size_t cut = assemble_cut(&x->w.out, budget, &omitted);
+    if (body_len <= budget) marker_ok = 0;
 
     char marker[64];
     size_t mlen = 0;
@@ -1158,26 +1179,15 @@ static char *assemble(Extract *x)
     size_t fin = tlen + (tlen > 0 ? 2 : 0) + cut + mlen + flen;
     char *res = malloc(fin + 1);
     if (!res) { free(footer.data); return NULL; }
-    size_t w = 0;
-    if (title)
-    {
-        memcpy(res + w, tprefix, plen); w += plen;
-        memcpy(res + w, title, x->title.len); w += x->title.len;
-        memcpy(res + w, "\n\n", 2);   w += 2;
-    }
-    if (cut > 0)
-    {
-        memcpy(res + w, x->w.out.data, cut);
-        w += cut;
-    }
-    if (mlen > 0) { memcpy(res + w, marker, mlen); w += mlen; }
-    if (flen > 0) { memcpy(res + w, footer.data, flen); w += flen; }
+    size_t w = assemble_copy_parts(res, title, x->title.len,
+                                   x->w.out.data, cut,
+                                   footer.data, flen, marker, mlen);
     res[w] = '\0';
     free(footer.data);
     return res;
 }
 
-char *html_extract_text(const char *raw, size_t raw_len, size_t max_chars)
+char *html_extract_text_alloc(const char *raw, size_t raw_len, size_t max_chars)
 {
     if (!raw) return str_dup("");
     if (max_chars == 0) return str_dup("");
@@ -1227,12 +1237,12 @@ static char *text_for_llm(const char *data, size_t len, size_t max_chars)
     if (!nul) return NULL;
     memcpy(nul, data, len);
     nul[len] = '\0';
-    char *res = str_truncate_ellipsis(nul, max_chars);
+    char *res = str_truncate_ellipsis_dup(nul, max_chars);
     free(nul);
     return res;
 }
 
-char *content_extract_for_llm(const char *content_type, const char *data,
+char *content_extract_for_llm_alloc(const char *content_type, const char *data,
                               size_t len, size_t max_chars)
 {
     if (!data || len == 0) return str_dup("(empty response)");
@@ -1243,13 +1253,13 @@ char *content_extract_for_llm(const char *content_type, const char *data,
         /* no Content-Type header: sniff the first non-space byte */
         size_t i = 0;
         while (i < len && isspace((unsigned char)data[i])) i++;
-        if (i < len && data[i] == '<') return html_extract_text(data, len, max_chars);
+        if (i < len && data[i] == '<') return html_extract_text_alloc(data, len, max_chars);
         return text_for_llm(data, len, max_chars);
     }
 
     if (prefix_ieq(content_type, "text/html") ||
         prefix_ieq(content_type, "application/xhtml+xml"))
-        return html_extract_text(data, len, max_chars);
+        return html_extract_text_alloc(data, len, max_chars);
 
     if (prefix_ieq(content_type, "text/") ||
         prefix_ieq(content_type, "application/json") ||

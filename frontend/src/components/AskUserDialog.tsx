@@ -1,6 +1,13 @@
 import { useState } from 'react';
 import { useChat } from '../context';
 
+/**
+ * AskUserDialog - overlay asking the user a free-form question.
+ *
+ * Renders null when pendingQuestion is null (no question waiting).
+ * Submitting resolves the question with the typed text via
+ * resolveAskUser; owns no effects.
+ */
 export function AskUserDialog() {
   const { pendingQuestion, resolveAskUser } = useChat();
   const [value, setValue] = useState('');

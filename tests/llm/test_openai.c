@@ -107,7 +107,7 @@ START_TEST(test_request_converts_messages_tools_and_tool_outputs)
         "\"description\":\"Look up a value\",\"parameters\":{\"type\":"
         "\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}},"
         "\"strict\":true}}]";
-    char *body = openai_test_build_request_body(messages, 5, "gpt-5-codex",
+    char *body = openai_test_build_request_body_alloc(messages, 5, "gpt-5-codex",
                                                  0.4, 1, tools, NULL, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
@@ -164,7 +164,7 @@ END_TEST
 START_TEST(test_request_allows_empty_tool_list)
 {
     Message user = {.role = "user", .content = "hello"};
-    char *body = openai_test_build_request_body(
+    char *body = openai_test_build_request_body_alloc(
         &user, 1, "gpt-5-codex", 0.7, 1, "[]", NULL, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
@@ -185,7 +185,7 @@ START_TEST(test_request_replays_encrypted_reasoning_before_tool_calls)
                            "\"encrypted_content\":\"ciphertext\"}]"},
         {.role = "tool", .content = "done", .tool_call_id = "call-1"}
     };
-    char *body = openai_test_build_request_body(
+    char *body = openai_test_build_request_body_alloc(
         messages, 2, "gpt-5-codex", 0.7, 1, NULL, NULL, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
@@ -204,20 +204,20 @@ END_TEST
 START_TEST(test_request_rejects_invalid_roles_tools_and_tool_outputs)
 {
     Message invalid_role = {.role = "moderator", .content = "no"};
-    ck_assert_ptr_null(openai_test_build_request_body(
+    ck_assert_ptr_null(openai_test_build_request_body_alloc(
         &invalid_role, 1, "gpt-5-codex", 0.7, 0, NULL, NULL, NULL));
 
     Message orphan_output = {.role = "tool", .content = "result",
                              .tool_call_id = "missing"};
-    ck_assert_ptr_null(openai_test_build_request_body(
+    ck_assert_ptr_null(openai_test_build_request_body_alloc(
         &orphan_output, 1, "gpt-5-codex", 0.7, 0, NULL, NULL, NULL));
 
     Message user = {.role = "user", .content = "hello"};
-    ck_assert_ptr_null(openai_test_build_request_body(
+    ck_assert_ptr_null(openai_test_build_request_body_alloc(
         &user, 1, "gpt-5-codex", 0.7, 0,
         "[{\"type\":\"function\",\"function\":{\"name\":\"bad\","
         "\"parameters\":\"not-an-object\"}}]", NULL, NULL));
-    ck_assert_ptr_null(openai_test_build_request_body(
+    ck_assert_ptr_null(openai_test_build_request_body_alloc(
         &user, 1, "gpt-5-codex", -0.1, 0, NULL, NULL, NULL));
 }
 END_TEST
@@ -228,7 +228,7 @@ START_TEST(test_request_translates_structured_output_schema)
     const char *schema =
         "{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":"
         "\"string\"}},\"required\":[\"answer\"],\"additionalProperties\":false}";
-    char *body = openai_test_build_request_body(&user, 1, "gpt-5-codex",
+    char *body = openai_test_build_request_body_alloc(&user, 1, "gpt-5-codex",
                                                  0.2, 0, NULL, schema, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
@@ -243,7 +243,7 @@ START_TEST(test_request_translates_structured_output_schema)
         cJSON_GetObjectItem(format, "schema"), "additionalProperties")));
     cJSON_Delete(root);
     free(body);
-    ck_assert_ptr_null(openai_test_build_request_body(
+    ck_assert_ptr_null(openai_test_build_request_body_alloc(
         &user, 1, "gpt-5-codex", 0.2, 0, NULL, "[]", NULL));
 }
 END_TEST
@@ -259,7 +259,7 @@ START_TEST(test_request_cleans_up_each_cjson_allocation_failure)
         json_allocation_count = 0;
         json_allocation_fail_at = fail_at;
         cJSON_InitHooks(&hooks);
-        char *body = openai_test_build_request_body(
+        char *body = openai_test_build_request_body_alloc(
             &user, 1, "gpt-5-codex", 0.2, 0,
             "[{\"type\":\"function\",\"function\":{\"name\":\"lookup\","
             "\"parameters\":{\"type\":\"object\"}}}]",
@@ -292,7 +292,7 @@ START_TEST(test_buffered_response_reads_all_content_and_function_calls)
         "\"name\":\"first\",\"arguments\":\"{}\"},"
         "{\"type\":\"function_call\",\"call_id\":\"c2\","
         "\"name\":\"second\",\"arguments\":\"{\\\"x\\\":1}\"}]}";
-    LLMResponse *response = openai_test_parse_response(raw);
+    LLMResponse *response = openai_test_parse_response_alloc(raw);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->content, "one two blocked");
     ck_assert_int_eq(response->tool_calls_count, 2);
@@ -312,7 +312,7 @@ START_TEST(test_buffered_response_extracts_reasoning_summary_as_thinking)
         "{\"type\":\"summary_text\",\"text\":\"Let me think\"}]},"
         "{\"type\":\"message\",\"content\":["
         "{\"type\":\"output_text\",\"text\":\"Answer\"}]}]}";
-    LLMResponse *response = openai_test_parse_response(raw);
+    LLMResponse *response = openai_test_parse_response_alloc(raw);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->thinking, "Let me think");
     ck_assert_str_eq(response->content,
@@ -327,7 +327,7 @@ START_TEST(test_buffered_response_without_summary_keeps_plain_content)
         "{\"status\":\"completed\",\"output\":["
         "{\"type\":\"message\",\"content\":["
         "{\"type\":\"output_text\",\"text\":\"plain\"}]}]}";
-    LLMResponse *response = openai_test_parse_response(raw);
+    LLMResponse *response = openai_test_parse_response_alloc(raw);
     ck_assert_ptr_nonnull(response);
     ck_assert_ptr_null(response->thinking);
     ck_assert_str_eq(response->content, "plain");
@@ -337,12 +337,12 @@ END_TEST
 
 START_TEST(test_buffered_response_rejects_errors_and_malformed_calls)
 {
-    ck_assert_ptr_null(openai_test_parse_response(
+    ck_assert_ptr_null(openai_test_parse_response_alloc(
         "{\"status\":\"failed\",\"error\":{\"code\":\"bad\"},\"output\":[]}"));
-    ck_assert_ptr_null(openai_test_parse_response(
+    ck_assert_ptr_null(openai_test_parse_response_alloc(
         "{\"status\":\"completed\",\"output\":[{\"type\":\"function_call\","
         "\"name\":\"missing_id\",\"arguments\":\"{}\"}]}"));
-    ck_assert_ptr_null(openai_test_parse_response(
+    ck_assert_ptr_null(openai_test_parse_response_alloc(
         "{\"status\":\"completed\",\"output\":{}}"));
 }
 END_TEST
@@ -448,7 +448,7 @@ START_TEST(test_fragmented_stream_maps_interleaved_function_calls)
     const char *fragments[] = {stream, stream + 17U, stream + 58U,
                                stream + 61U, stream + 150U};
     ChunkCapture capture = {0};
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         fragments, lengths, 5, capture_chunk, &capture);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->content, "Hi there");
@@ -488,7 +488,7 @@ START_TEST(test_stream_wraps_reasoning_summary_deltas_in_think_block)
         "data: {\"type\":\"response.completed\",\"response\":{"
         "\"status\":\"completed\"}}";
     ChunkCapture capture = {0};
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         &stream, NULL, 1, capture_chunk, &capture);
     ck_assert_ptr_nonnull(response);
     /* deltas are streamed inside the tags; the .done text is not appended
@@ -514,7 +514,7 @@ START_TEST(test_stream_uses_summary_done_text_when_no_deltas)
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Answer\"}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{"
         "\"status\":\"completed\"}}";
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         &stream, NULL, 1, NULL, NULL);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->content,
@@ -536,7 +536,7 @@ START_TEST(test_stream_falls_back_to_reasoning_item_summary)
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Answer\"}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{"
         "\"status\":\"completed\"}}";
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         &stream, NULL, 1, NULL, NULL);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->content,
@@ -558,7 +558,7 @@ START_TEST(test_stream_strips_html_comment_markers_from_summaries)
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Answer\"}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{"
         "\"status\":\"completed\"}}";
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         &stream, NULL, 1, NULL, NULL);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->content, "Answer");
@@ -588,7 +588,7 @@ START_TEST(test_stream_keeps_think_block_open_across_tool_turns)
         "\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{"
         "\"status\":\"completed\"}}";
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         &stream, NULL, 1, NULL, NULL);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->content,
@@ -607,8 +607,8 @@ START_TEST(test_stream_requires_successful_terminal_event)
         "\"failed\",\"error\":{\"code\":\"server_error\"}}}\n\n";
     const char *incomplete =
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n";
-    ck_assert_ptr_null(openai_test_stream_fragments(&failed, NULL, 1, NULL, NULL));
-    ck_assert_ptr_null(openai_test_stream_fragments(&incomplete, NULL, 1, NULL, NULL));
+    ck_assert_ptr_null(openai_test_stream_fragments_alloc(&failed, NULL, 1, NULL, NULL));
+    ck_assert_ptr_null(openai_test_stream_fragments_alloc(&incomplete, NULL, 1, NULL, NULL));
 }
 END_TEST
 
@@ -618,7 +618,7 @@ START_TEST(test_stream_accepts_fragmented_done_without_final_newline)
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"o",
         "k\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\ndata: [DO",
         "NE]"};
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         fragments, NULL, 3, NULL, NULL);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->content, "ok");
@@ -635,9 +635,9 @@ START_TEST(test_stream_rejects_done_without_completed_and_returns_refusals)
         "data: {\"type\":\"response.refusal.delta\",\"delta\":\"no\"}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{"
         "\"status\":\"completed\",\"output\":[]}}\n\n";
-    ck_assert_ptr_null(openai_test_stream_fragments(
+    ck_assert_ptr_null(openai_test_stream_fragments_alloc(
         &done_only, NULL, 1, NULL, NULL));
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         &refusal, NULL, 1, NULL, NULL);
     ck_assert_ptr_nonnull(response);
     ck_assert_str_eq(response->content, "no");
@@ -740,7 +740,7 @@ END_TEST
 START_TEST(test_request_sends_reasoning_effort_when_configured)
 {
     Message user = {.role = "user", .content = "hello"};
-    char *body = openai_test_build_request_body(
+    char *body = openai_test_build_request_body_alloc(
         &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, "high");
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
@@ -759,7 +759,7 @@ END_TEST
 START_TEST(test_request_requests_summary_when_effort_unset)
 {
     Message user = {.role = "user", .content = "hello"};
-    char *body = openai_test_build_request_body(
+    char *body = openai_test_build_request_body_alloc(
         &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, NULL);
     ck_assert_ptr_nonnull(body);
     cJSON *root = parse_json_or_fail(body);
@@ -776,9 +776,9 @@ END_TEST
 START_TEST(test_request_rejects_invalid_effort)
 {
     Message user = {.role = "user", .content = "hello"};
-    ck_assert_ptr_null(openai_test_build_request_body(
+    ck_assert_ptr_null(openai_test_build_request_body_alloc(
         &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, "extreme"));
-    ck_assert_ptr_null(openai_test_build_request_body(
+    ck_assert_ptr_null(openai_test_build_request_body_alloc(
         &user, 1, "gpt-5-codex", 0.7, 1, NULL, NULL, "MEDIUM"));
 }
 END_TEST

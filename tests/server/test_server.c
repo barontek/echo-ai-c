@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <check.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -119,33 +120,44 @@ START_TEST(test_static_path_rejects_traversal)
 }
 END_TEST
 
-START_TEST(test_static_open_rejects_symlink_escape)
-{
-    char root[] = "/tmp/echo_static_root_XXXXXX";
-    char outside[] = "/tmp/echo_static_out_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(root));
-    ck_assert_ptr_nonnull(mkdtemp(outside));
+static char static_root[64];
+static char static_outside[64];
+static char static_outside_file[512];
+static char static_link_path[512];
 
-    char outside_file[512];
-    char link_path[512];
-    ck_assert_int_lt(snprintf(outside_file, sizeof(outside_file), "%s/secret", outside),
-                     (int)sizeof(outside_file));
-    FILE *file = fopen(outside_file, "w");
+static void static_fs_setup(void)
+{
+    snprintf(static_root, sizeof(static_root), "/tmp/echo_static_root_XXXXXX");
+    snprintf(static_outside, sizeof(static_outside), "/tmp/echo_static_out_XXXXXX");
+    ck_assert_ptr_nonnull(mkdtemp(static_root));
+    ck_assert_ptr_nonnull(mkdtemp(static_outside));
+
+    ck_assert_int_lt(snprintf(static_outside_file, sizeof(static_outside_file),
+                              "%s/secret", static_outside),
+                     (int)sizeof(static_outside_file));
+    FILE *file = fopen(static_outside_file, "w");
     ck_assert_ptr_nonnull(file);
     ck_assert_int_eq(fclose(file), 0);
-    ck_assert_int_lt(snprintf(link_path, sizeof(link_path), "%s/link", root),
-                     (int)sizeof(link_path));
-    ck_assert_int_eq(symlink(outside, link_path), 0);
+    ck_assert_int_lt(snprintf(static_link_path, sizeof(static_link_path),
+                              "%s/link", static_root),
+                     (int)sizeof(static_link_path));
+    ck_assert_int_eq(symlink(static_outside, static_link_path), 0);
+}
 
+static void static_fs_teardown(void)
+{
+    ck_assert_int_eq(unlink(static_link_path), 0);
+    ck_assert_int_eq(unlink(static_outside_file), 0);
+    ck_assert_int_eq(rmdir(static_outside), 0);
+    ck_assert_int_eq(rmdir(static_root), 0);
+}
+
+START_TEST(test_static_open_rejects_symlink_escape)
+{
     char escaped[512];
-    ck_assert_int_lt(snprintf(escaped, sizeof(escaped), "%s/link/secret", root),
+    ck_assert_int_lt(snprintf(escaped, sizeof(escaped), "%s/link/secret", static_root),
                      (int)sizeof(escaped));
-    ck_assert_int_eq(server_test_open_static_file_beneath(root, escaped), -1);
-
-    ck_assert_int_eq(unlink(link_path), 0);
-    ck_assert_int_eq(unlink(outside_file), 0);
-    ck_assert_int_eq(rmdir(outside), 0);
-    ck_assert_int_eq(rmdir(root), 0);
+    ck_assert_int_eq(server_test_open_static_file_beneath(static_root, escaped), -1);
 }
 END_TEST
 
@@ -153,10 +165,12 @@ int main(void)
 {
     Suite *suite = suite_create("Server");
     TCase *tc = tcase_create("Parsing");
+    tcase_add_checked_fixture(tc, static_fs_setup, static_fs_teardown);
     tcase_add_test(tc, test_http_parser_accepts_fragmented_nonterminated_request);
     tcase_add_test(tc, test_http_parser_rejects_malformed_content_length);
     tcase_add_test(tc, test_static_path_rejects_traversal);
     tcase_add_test(tc, test_static_open_rejects_symlink_escape);
+    tcase_set_timeout(tc, 30);
     suite_add_tcase(suite, tc);
     SRunner *runner = srunner_create(suite);
     srunner_run_all(runner, CK_NORMAL);

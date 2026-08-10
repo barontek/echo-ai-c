@@ -13,6 +13,14 @@ import {
 } from './components';
 import './App.css';
 
+/**
+ * App - root gate component: shows UnlockScreen, SetupScreen, or the chat
+ * tree based on the backend status.
+ *
+ * Owns the locked/needsSetup/statusLoading state, fetched once from
+ * /api/status on mount; re-renders the whole tree when the gate state
+ * changes. Also installs the token-expiry callback that relocks the UI.
+ */
 function App() {
   const [statusLoading, setStatusLoading] = useState(true);
   const [locked, setLocked] = useState(true);

@@ -1,7 +1,7 @@
 /*
  * html_extract.h - readable-text extraction from raw HTML (Crawl4AI-style
  * pipeline) and Content-Type dispatch for fetched web bytes.
- * Depends on: stddef.h, string_utils.h (str_truncate_ellipsis).
+ * Depends on: stddef.h, string_utils.h (str_truncate_ellipsis_dup).
  */
 
 #ifndef ECHO_HTML_EXTRACT_H
@@ -10,7 +10,7 @@
 #include <stddef.h>
 
 /**
- * html_extract_text - extract readable text from raw HTML bytes
+ * html_extract_text_alloc - extract readable text from raw HTML bytes
  * @raw: HTML bytes; need not be NUL-terminated. NULL is accepted and
  *   yields the empty string.
  * @raw_len: authoritative byte length of raw.
@@ -28,10 +28,10 @@
  * (free with free()), or NULL on allocation failure. No shared state;
  * safe to call concurrently.
  */
-char *html_extract_text(const char *raw, size_t raw_len, size_t max_chars);
+char *html_extract_text_alloc(const char *raw, size_t raw_len, size_t max_chars);
 
 /**
- * content_extract_for_llm - dispatch raw fetched bytes by Content-Type
+ * content_extract_for_llm_alloc - dispatch raw fetched bytes by Content-Type
  * @content_type: HTTP Content-Type header value, or NULL to sniff.
  * @data: response bytes; need not be NUL-terminated (len is
  *   authoritative). NULL data or len == 0 yields "(empty response)".
@@ -39,7 +39,7 @@ char *html_extract_text(const char *raw, size_t raw_len, size_t max_chars);
  * @max_chars: output budget; 0 yields the empty string.
  *
  * Dispatch rules: text/html and application/xhtml+xml go through
- * html_extract_text; text/plain, application/json, application/xml and
+ * html_extract_text_alloc; text/plain, application/json, application/xml and
  * application/javascript get an ellipsis-truncated passthrough; any
  * other type (binary: images, application/pdf, ...) yields a short
  * descriptor string instead of raw bytes. With a NULL content_type the
@@ -49,14 +49,14 @@ char *html_extract_text(const char *raw, size_t raw_len, size_t max_chars);
  * free()), or NULL on allocation failure. No shared state; safe to call
  * concurrently.
  */
-char *content_extract_for_llm(const char *content_type, const char *data,
+char *content_extract_for_llm_alloc(const char *content_type, const char *data,
                               size_t len, size_t max_chars);
 
 #ifdef HTML_EXTRACT_TEST
 /**
  * html_extract_test_set_alloc_fail - arm the allocation-failure hook
- * @nth_allocation: 1-based index of the next html_extract_text /
- *   content_extract_for_llm internal allocation that should fail; -1
+ * @nth_allocation: 1-based index of the next html_extract_text_alloc /
+ *   content_extract_for_llm_alloc internal allocation that should fail; -1
  *   disables fault injection.
  *
  * Test-only hook for allocation-failure regression tests (AGENTS.md

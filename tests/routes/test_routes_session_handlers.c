@@ -61,24 +61,26 @@ static void reset_stubs(void)
  * Stub server functions
  * --------------------------------------------------------------------------- */
 
-void server_response(Client *client, int status, const char *content_type,
+int server_response(Client *client, int status, const char *content_type,
                      const char *body)
 {
     (void)client; (void)content_type;
     captured_status = status;
     free(captured_body);
     captured_body = body ? str_dup(body) : NULL;
+    return 0;
 }
 
-void server_response_json(Client *client, int status, const char *json)
+int server_response_json(Client *client, int status, const char *json)
 {
     captured_status = status;
     free(captured_body);
     captured_body = json ? str_dup(json) : NULL;
     (void)client;
+    return 0;
 }
 
-void server_response_error(Client *client, int status, const char *msg)
+int server_response_error(Client *client, int status, const char *msg)
 {
     captured_status = status;
     free(captured_body);
@@ -87,11 +89,12 @@ void server_response_error(Client *client, int status, const char *msg)
     captured_body = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     (void)client;
+    return 0;
 }
 
 void client_close(Client *client) { (void)client; }
-void server_sse_write(Client *client, const char *data)
-{ (void)client; (void)data; }
+int server_sse_write(Client *client, const char *data)
+{ (void)client; (void)data; return 0; }
 
 /* ---------------------------------------------------------------------------
  * Stub middleware
@@ -113,9 +116,10 @@ int middleware_has_valid_token(const char *headers, const char *token)
  * Stub ws_add_message_to_json (from routes.c)
  * --------------------------------------------------------------------------- */
 
-void ws_add_message_to_json(cJSON *m, const Message *msg)
+int ws_add_message_to_json(cJSON *m, const Message *msg)
 {
     (void)m; (void)msg;
+    return 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -185,7 +189,7 @@ Session *session_manager_create_session(SessionManager *sm, const char *title)
     return NULL;
 }
 
-Session *session_manager_load_session(SessionManager *sm, const char *id)
+Session *session_manager_load_session_alloc(SessionManager *sm, const char *id)
 {
     (void)sm; (void)id;
     if (stub_load_result)
@@ -214,13 +218,13 @@ int session_manager_delete_session(SessionManager *sm, const char *id)
     return stub_delete_result;
 }
 
-char *session_manager_export_session(SessionManager *sm, const char *session_id)
+char *session_manager_export_session_new(SessionManager *sm, const char *session_id)
 {
     (void)sm; (void)session_id;
     return stub_export_result ? str_dup(stub_export_result) : NULL;
 }
 
-Session *session_manager_import_session(SessionManager *sm, const char *json_str)
+Session *session_manager_import_session_new(SessionManager *sm, const char *json_str)
 {
     (void)sm; (void)json_str;
     if (stub_import_result_null) return NULL;

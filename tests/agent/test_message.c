@@ -206,6 +206,103 @@ START_TEST(test_message_copy_null_args)
 }
 END_TEST
 
+/* Builds a fully-populated source so the allocation order inside
+ * message_copy is deterministic: str_dups 1-11 (scalar fields), calloc
+ * 12 (tool_calls array), str_dups 13-17 (tool-call fields). */
+static Message *fault_source_message(void)
+{
+    Message *src = calloc(1, sizeof(Message));
+    ck_assert_ptr_nonnull(src);
+    src->role = str_dup("assistant");
+    src->content = str_dup("reply");
+    src->id = str_dup("msg-1");
+    src->parent_id = str_dup("msg-0");
+    src->fork_group_id = str_dup("fg-1");
+    src->tool_call_id = str_dup("tc-1");
+    src->tool_name = str_dup("bash");
+    src->error_category = str_dup("none");
+    src->thinking = str_dup("hmm");
+    src->phase = str_dup("run");
+    src->provider_state = str_dup("{}");
+    src->timestamp = 1.5;
+    src->tool_calls = calloc(1, sizeof(ToolCall));
+    ck_assert_ptr_nonnull(src->tool_calls);
+    src->tool_calls_count = 1;
+    src->tool_calls[0].id = str_dup("call-1");
+    src->tool_calls[0].name = str_dup("bash");
+    src->tool_calls[0].arguments = str_dup("{}");
+    src->tool_calls[0].result_content = str_dup("out");
+    src->tool_calls[0].result_error = str_dup("");
+    return src;
+}
+
+/* message_copy allocates 17 things then commits; every failure must
+ * return -1 with dst fully zeroed (no partial copy survives) and no
+ * leaked intermediate allocations (ASan proves the free side). */
+START_TEST(test_message_copy_allocation_failure_returns_minus_one_with_no_partial_state)
+{
+    Message *src = fault_source_message();
+    for (int fail_at = 1; fail_at <= 17; fail_at++)
+    {
+        message_test_set_alloc_fail(fail_at);
+        Message dst;
+        memset(&dst, 0xAA, sizeof(dst));
+        ck_assert_int_eq(message_copy(&dst, src), -1);
+        ck_assert_msg(dst.role == NULL && dst.content == NULL &&
+                          dst.id == NULL && dst.parent_id == NULL &&
+                          dst.fork_group_id == NULL && dst.tool_call_id == NULL &&
+                          dst.tool_name == NULL && dst.error_category == NULL &&
+                          dst.thinking == NULL && dst.phase == NULL &&
+                          dst.provider_state == NULL && dst.tool_calls == NULL &&
+                          dst.tool_calls_count == 0,
+                      "partial state committed at fail_at=%d", fail_at);
+    }
+    message_test_set_alloc_fail(-1);
+    message_clear(src);
+    free(src);
+}
+END_TEST
+
+/* After a failed copy the hook must be resettable: the same source still
+ * copies cleanly, proving the failure path left nothing poisoned. */
+START_TEST(test_message_copy_succeeds_after_fault_injection_reset)
+{
+    Message *src = fault_source_message();
+    message_test_set_alloc_fail(3);
+    Message failed_dst;
+    memset(&failed_dst, 0, sizeof(failed_dst));
+    ck_assert_int_eq(message_copy(&failed_dst, src), -1);
+
+    message_test_set_alloc_fail(-1);
+    Message dst;
+    ck_assert_int_eq(message_copy(&dst, src), 0);
+    ck_assert_str_eq(dst.role, "assistant");
+    ck_assert_str_eq(dst.tool_calls[0].id, "call-1");
+    message_clear(&dst);
+    message_clear(src);
+    free(src);
+}
+END_TEST
+
+/* tool_call_create allocates a calloc + 3 str_dups; each failure must
+ * return NULL with the partial allocation freed (ASan-verified). */
+START_TEST(test_tool_call_create_allocation_failure_returns_null)
+{
+    for (int fail_at = 1; fail_at <= 4; fail_at++)
+    {
+        message_test_set_alloc_fail(fail_at);
+        ToolCall *tc = tool_call_create("id", "bash", "{}");
+        ck_assert_ptr_null(tc);
+    }
+    message_test_set_alloc_fail(-1);
+    ToolCall *tc = tool_call_create("id", "bash", "{}");
+    ck_assert_ptr_nonnull(tc);
+    ck_assert_str_eq(tc->name, "bash");
+    tool_call_free(tc);
+    free(tc);
+}
+END_TEST
+
 /* Regression test for A4: Message.timestamp is set by message_create but
  * used to be silently dropped by messages_to_json_array. After the fix, the
  * JSON contains a "timestamp" number, and round-tripping through
@@ -426,6 +523,12 @@ Suite *message_suite(void)
     tcase_add_test(tc_copy, test_message_copy_sparse);
     tcase_add_test(tc_copy, test_message_copy_null_args);
     suite_add_tcase(s, tc_copy);
+
+    TCase *tc_fault = tcase_create("FaultInjection");
+    tcase_add_test(tc_fault, test_message_copy_allocation_failure_returns_minus_one_with_no_partial_state);
+    tcase_add_test(tc_fault, test_message_copy_succeeds_after_fault_injection_reset);
+    tcase_add_test(tc_fault, test_tool_call_create_allocation_failure_returns_null);
+    suite_add_tcase(s, tc_fault);
 
     return s;
 }

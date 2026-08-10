@@ -53,7 +53,7 @@ static ToolResult *ingest_document_execute(Tool *self, const char *args_json)
             cJSON_Delete(args);
             return tool_result_error("path rejected by safety check", "policy_denied");
         }
-        char *resolved = safety_resolve_path(ctx->safety, path);
+        char *resolved = safety_resolve_path_alloc(ctx->safety, path);
         if (!resolved)
         {
             cJSON_Delete(args);
@@ -90,9 +90,12 @@ static ToolResult *ingest_document_execute(Tool *self, const char *args_json)
 
     cJSON_Delete(args);
 
-    semantic_search_index_document(content);
+    int indexed = semantic_search_index_document(content);
 
     free(freed_content);
+    if (indexed != 0)
+        return tool_result_error("failed to index document (index full or OOM)",
+                                 "execution_error");
     return tool_result_create("Document ingested and indexed for semantic search.");
 }
 

@@ -6,7 +6,7 @@
 
 START_TEST(test_json_string_escape_quotes)
 {
-    char *esc = json_string_escape("hello \"world\"");
+    char *esc = json_string_escape_dup("hello \"world\"");
     ck_assert_ptr_nonnull(esc);
     ck_assert_str_eq(esc, "hello \\\"world\\\"");
     free(esc);
@@ -15,7 +15,7 @@ END_TEST
 
 START_TEST(test_json_string_escape_backslash)
 {
-    char *esc = json_string_escape("path\\to\\file");
+    char *esc = json_string_escape_dup("path\\to\\file");
     ck_assert_ptr_nonnull(esc);
     ck_assert_str_eq(esc, "path\\\\to\\\\file");
     free(esc);
@@ -24,7 +24,7 @@ END_TEST
 
 START_TEST(test_json_string_escape_newline_tab_carriage)
 {
-    char *esc = json_string_escape("line1\nline2\tindented\r");
+    char *esc = json_string_escape_dup("line1\nline2\tindented\r");
     ck_assert_ptr_nonnull(esc);
     ck_assert_str_eq(esc, "line1\\nline2\\tindented\\r");
     free(esc);
@@ -33,7 +33,7 @@ END_TEST
 
 START_TEST(test_json_string_escape_no_special_chars)
 {
-    char *esc = json_string_escape("plain text");
+    char *esc = json_string_escape_dup("plain text");
     ck_assert_ptr_nonnull(esc);
     ck_assert_str_eq(esc, "plain text");
     free(esc);
@@ -42,14 +42,14 @@ END_TEST
 
 START_TEST(test_json_string_escape_null)
 {
-    char *esc = json_string_escape(NULL);
+    char *esc = json_string_escape_dup(NULL);
     ck_assert_ptr_null(esc);
 }
 END_TEST
 
 START_TEST(test_json_string_escape_empty)
 {
-    char *esc = json_string_escape("");
+    char *esc = json_string_escape_dup("");
     ck_assert_ptr_nonnull(esc);
     ck_assert_str_eq(esc, "");
     free(esc);
@@ -58,7 +58,7 @@ END_TEST
 
 START_TEST(test_json_string_escape_mixed)
 {
-    char *esc = json_string_escape("a\"b\\c\nd\te\rf");
+    char *esc = json_string_escape_dup("a\"b\\c\nd\te\rf");
     ck_assert_ptr_nonnull(esc);
     ck_assert_str_eq(esc, "a\\\"b\\\\c\\nd\\te\\rf");
     free(esc);

@@ -18,6 +18,7 @@
 #include "../middleware.h"
 #include "../../config/config.h"
 #include "../../llm/openai.h"
+#include "../../llm/factory.h"
 #include "../../llm/provider.h"
 #include "../../llm/openai_oauth.h"
 #include "../../session/session_manager.h"
@@ -94,7 +95,7 @@ void handle_metrics(HTTPRequest *req, Client *client, ServerContext *ctx)
         server_response_error(client, 500, "metrics not available");
         return;
     }
-    char *body = metrics_render(ctx->metrics);
+    char *body = metrics_render_new(ctx->metrics);
     if (!body) { server_response_error(client, 500, "oom"); return; }
     server_response(client, 200, "text/plain; charset=utf-8", body);
     free(body);

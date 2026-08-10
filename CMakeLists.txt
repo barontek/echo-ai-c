@@ -5,6 +5,7 @@ add_compile_definitions(ECHO_AI_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
@@ -102,13 +103,28 @@ if(ENABLE_COVERAGE)
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_compile_options(echo-ai PRIVATE -Wall -Wextra -Wpedantic -Werror -g)
-    if(ENABLE_SANITIZERS)
-        target_compile_options(echo-ai PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-        target_link_options(echo-ai PRIVATE -fsanitize=address,undefined)
-    endif()
+    target_compile_options(echo-ai PRIVATE -g)
 else()
-    target_compile_options(echo-ai PRIVATE -Wall -Wextra -O2)
+    # Release builds: fortify requires optimization to be effective, so -O2
+    # and _FORTIFY_SOURCE=2 are only applied on non-Debug builds.
+    target_compile_options(echo-ai PRIVATE -O2)
+    if(APPLE)
+        # AppleClang predefines _FORTIFY_SOURCE=0; the -U must precede the -D
+        # or -Wmacro-redefined trips under -Werror. CMAKE_C_FLAGS_RELEASE
+        # passes the pair through verbatim and in order (CMake rewrites -D
+        # found in add_compile_options instead of keeping it).
+        set(CMAKE_C_FLAGS_RELEASE "-DNDEBUG -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2")
+    else()
+        add_compile_definitions(_FORTIFY_SOURCE=2)
+    endif()
+endif()
+
+# AGENTS.md build-flag contract: warning set + sanitizers apply to every build
+# type, including Release, so CI can run sanitizer-clean "release" test runs.
+target_compile_options(echo-ai PRIVATE -Wall -Wextra -Wpedantic -Werror)
+if(ENABLE_SANITIZERS)
+    target_compile_options(echo-ai PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(echo-ai PRIVATE -fsanitize=address,undefined)
 endif()
 
 # Frontend build (requires Node.js)

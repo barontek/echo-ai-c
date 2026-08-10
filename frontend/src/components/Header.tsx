@@ -16,6 +16,13 @@ function getInitialTheme(): 'dark' | 'light' {
   return 'dark';
 }
 
+/**
+ * Header - top bar with model/provider selectors and the logout action.
+ *
+ * Re-renders when the current model, provider, or provider catalog
+ * changes (all read from useChat()). Calls onLogout on logout; owns no
+ * effects or subscriptions.
+ */
 export const Header = memo(function Header({ onLogout }: HeaderProps) {
   const chat = useChat();
   const [showDebug, setShowDebug] = useState(false);

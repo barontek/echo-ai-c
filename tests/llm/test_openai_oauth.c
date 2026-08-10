@@ -21,7 +21,7 @@ int session_manager_save_provider_oauth(SessionManager *session,
     return 0;
 }
 
-char *session_manager_load_provider_oauth(SessionManager *session,
+char *session_manager_load_provider_oauth_alloc(SessionManager *session,
                                            const char *provider)
 {
     (void)session;
@@ -88,7 +88,7 @@ static int parse_request(const void *request, size_t len, char **code,
 START_TEST(test_pkce_matches_rfc7636_s256_vector)
 {
     const char *verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-    char *challenge = openai_oauth_test_pkce_challenge(verifier);
+    char *challenge = openai_oauth_test_pkce_challenge_alloc(verifier);
     ck_assert_ptr_nonnull(challenge);
     ck_assert_str_eq(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
     free(challenge);
@@ -122,7 +122,7 @@ END_TEST
 
 START_TEST(test_authorize_url_contains_encoded_required_parameters)
 {
-    char *url = openai_oauth_test_build_authorize_url("state value&one", "challenge/value");
+    char *url = openai_oauth_test_build_authorize_url_alloc("state value&one", "challenge/value");
     ck_assert_ptr_nonnull(url);
     ck_assert_ptr_nonnull(strstr(url, "https://auth.openai.com/oauth/authorize?"));
     ck_assert_ptr_nonnull(strstr(url, "response_type=code"));

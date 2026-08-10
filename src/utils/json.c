@@ -9,7 +9,7 @@
 
 #include "json.h"
 
-char *json_string_escape(const char *str)
+char *json_string_escape_dup(const char *str)
 {
     if (!str) return NULL;
     size_t len = strlen(str);

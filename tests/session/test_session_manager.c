@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <check.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,22 @@
 /* Declared in migration.h under SESSION_MANAGER_TEST; the test binary
  * compiles migration.c with that define but does not include the header. */
 extern void migration_test_set_rename_fail(int nth_rename);
+static void branch_rm(const char *tmpdir);
+
+/* Per-test temp dir: created fresh before every test (checked fixture)
+ * and removed after, so tests never depend on each other's leftovers. */
+static char tmpdir[64];
+
+static void tmpdir_setup(void)
+{
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/test_sm_XXXXXX");
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+}
+
+static void tmpdir_teardown(void)
+{
+    branch_rm(tmpdir);
+}
 
 static size_t read_test_file(const char *path, unsigned char *buffer,
                              size_t capacity)
@@ -37,8 +54,6 @@ static void write_test_file(const char *path, const unsigned char *data,
 
 START_TEST(test_provider_oauth_encrypted_roundtrip_and_delete)
 {
-    char tmpdir[] = "/tmp/test_sm_oauth_roundtrip_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "oauth_password");
     ck_assert_ptr_nonnull(sm);
     const char *credentials =
@@ -76,17 +91,11 @@ START_TEST(test_provider_oauth_encrypted_roundtrip_and_delete)
     ck_assert_ptr_null(loaded);
 
     session_manager_free(sm);
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
 START_TEST(test_legacy_post_commit_recovery_uses_encrypted_row_evidence)
 {
-    char tmpdir[] = "/tmp/test_sm_legacy_migrate_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "old_password");
     ck_assert_ptr_nonnull(sm);
     Session *session = session_manager_create_session(sm, "legacy session");
@@ -136,24 +145,18 @@ START_TEST(test_legacy_post_commit_recovery_uses_encrypted_row_evidence)
     ck_assert_ptr_nonnull(sm);
     ck_assert_int_eq(access(marker_path, F_OK), -1);
     ck_assert_int_eq(access(old_salt_path, F_OK), -1);
-    session = session_manager_load_session(sm, session_id);
+    session = session_manager_load_session_alloc(sm, session_id);
     ck_assert_ptr_nonnull(session);
     ck_assert_str_eq(session->title, "legacy session");
     session_free(session);
     free(session_id);
     session_manager_free(sm);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
 START_TEST(test_provider_state_survives_encrypted_reload_and_retained_owner)
 {
-    char tmpdir[] = "/tmp/test_sm_provider_state_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "state_password");
     ck_assert_ptr_nonnull(sm);
     SessionManager *retained = session_manager_retain(sm);
@@ -175,7 +178,7 @@ START_TEST(test_provider_state_survives_encrypted_reload_and_retained_owner)
     session_free(session);
 
     session_manager_free(sm);
-    Session *loaded = session_manager_load_session(retained, session_id);
+    Session *loaded = session_manager_load_session_alloc(retained, session_id);
     ck_assert_ptr_nonnull(loaded);
     ck_assert_int_eq(loaded->messages_count, 1);
     ck_assert_str_eq(loaded->messages[0].provider_state,
@@ -185,17 +188,11 @@ START_TEST(test_provider_state_survives_encrypted_reload_and_retained_owner)
     free(session_id);
     session_manager_free(retained);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
 START_TEST(test_missing_verifier_never_accepts_or_commits_a_password)
 {
-    char tmpdir[] = "/tmp/test_sm_missing_verifier_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "right_password");
     ck_assert_ptr_nonnull(sm);
     session_manager_free(sm);
@@ -210,17 +207,11 @@ START_TEST(test_missing_verifier_never_accepts_or_commits_a_password)
     ck_assert_ptr_null(session_manager_create(tmpdir, "right_password"));
     ck_assert_int_eq(access(verifier_path, F_OK), -1);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
 START_TEST(test_provider_oauth_typed_failures_preserve_credentials)
 {
-    char tmpdir[] = "/tmp/test_sm_oauth_failure_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "right_password");
     ck_assert_ptr_nonnull(sm);
     const char *original = "{\"refresh_token\":\"keep-me\"}";
@@ -267,17 +258,11 @@ START_TEST(test_provider_oauth_typed_failures_preserve_credentials)
     ck_assert_ptr_null(loaded);
     session_manager_free(sm);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
 START_TEST(test_password_change_migrates_oauth_and_recovers_post_commit)
 {
-    char tmpdir[] = "/tmp/test_sm_oauth_migrate_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "old_password");
     ck_assert_ptr_nonnull(sm);
     const char *credentials = "{\"refresh_token\":\"survives-change\"}";
@@ -311,7 +296,7 @@ START_TEST(test_password_change_migrates_oauth_and_recovers_post_commit)
                          sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OK);
     ck_assert_str_eq(loaded, credentials);
     free(loaded);
-    session = session_manager_load_session(sm, session_id);
+    session = session_manager_load_session_alloc(sm, session_id);
     ck_assert_ptr_nonnull(session);
     ck_assert_str_eq(session->title, "surviving session");
     session_free(session);
@@ -329,24 +314,18 @@ START_TEST(test_password_change_migrates_oauth_and_recovers_post_commit)
                          sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OK);
     ck_assert_str_eq(loaded, credentials);
     free(loaded);
-    session = session_manager_load_session(sm, session_id);
+    session = session_manager_load_session_alloc(sm, session_id);
     ck_assert_ptr_nonnull(session);
     ck_assert_str_eq(session->title, "surviving session");
     session_free(session);
     free(session_id);
     session_manager_free(sm);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
 START_TEST(test_password_change_retries_verifier_swap_in_process)
 {
-    char tmpdir[] = "/tmp/test_sm_retry_swap_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "old_password");
     ck_assert_ptr_nonnull(sm);
     const char *credentials = "{\"refresh_token\":\"still-valid\"}";
@@ -371,7 +350,7 @@ START_TEST(test_password_change_retries_verifier_swap_in_process)
                          sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OK);
     ck_assert_str_eq(loaded, credentials);
     free(loaded);
-    session = session_manager_load_session(sm, session_id);
+    session = session_manager_load_session_alloc(sm, session_id);
     ck_assert_ptr_nonnull(session);
     ck_assert_str_eq(session->title, "swap session");
     session_free(session);
@@ -396,17 +375,11 @@ START_TEST(test_password_change_retries_verifier_swap_in_process)
     ck_assert_int_eq(access(marker_path, F_OK), -1);
     ck_assert_int_eq(access(old_salt_path, F_OK), -1);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
 START_TEST(test_password_change_rolls_back_on_malformed_oauth_row)
 {
-    char tmpdir[] = "/tmp/test_sm_oauth_bad_migration_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "old_password");
     ck_assert_ptr_nonnull(sm);
     const char *credentials = "{\"refresh_token\":\"still-valid\"}";
@@ -429,7 +402,7 @@ START_TEST(test_password_change_rolls_back_on_malformed_oauth_row)
                          sm, "a-valid", &loaded), PROVIDER_OAUTH_LOAD_OK);
     ck_assert_str_eq(loaded, credentials);
     free(loaded);
-    session = session_manager_load_session(sm, session_id);
+    session = session_manager_load_session_alloc(sm, session_id);
     ck_assert_ptr_nonnull(session);
     ck_assert_str_eq(session->title, "rollback session");
     session_free(session);
@@ -441,17 +414,13 @@ START_TEST(test_password_change_rolls_back_on_malformed_oauth_row)
                          sm, "a-valid", &loaded), PROVIDER_OAUTH_LOAD_OK);
     ck_assert_str_eq(loaded, credentials);
     free(loaded);
-    session = session_manager_load_session(sm, session_id);
+    session = session_manager_load_session_alloc(sm, session_id);
     ck_assert_ptr_nonnull(session);
     ck_assert_str_eq(session->title, "rollback session");
     session_free(session);
     free(session_id);
     session_manager_free(sm);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
@@ -460,16 +429,13 @@ END_TEST
  * `title_encrypted BLOB` and encrypted/decrypted the title alongside the
  * messages/metadata/events blobs. This test asserts:
  *   1. The bytes persisted in the DB's title column are not the plaintext title.
- *   2. session_manager_load_session returns the original plaintext title.
+ *   2. session_manager_load_session_alloc returns the original plaintext title.
  *   3. session_manager_list_sessions returns the original plaintext title.
  *
  * On the old (plaintext) code, assertion (1) fails because the stored bytes are
  * the literal title string. */
 START_TEST(test_title_is_encrypted_at_rest)
 {
-    char tmpdir[] = "/tmp/test_sm_title_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "test_password");
     ck_assert_ptr_nonnull(sm);
 
@@ -504,7 +470,7 @@ START_TEST(test_title_is_encrypted_at_rest)
     SessionList *list = session_manager_list_sessions(sm);
     ck_assert_ptr_nonnull(list);
     ck_assert_int_eq(list->count, 1);
-    Session *loaded2 = session_manager_load_session(sm, list->ids[0]);
+    Session *loaded2 = session_manager_load_session_alloc(sm, list->ids[0]);
     session_list_free(list);
     ck_assert_ptr_nonnull(loaded2);
     ck_assert_str_eq(loaded2->title, plain);
@@ -528,8 +494,6 @@ END_TEST
 
 START_TEST(test_session_list_realloc_failures_are_safe)
 {
-    char tmpdir[] = "/tmp/test_sm_realloc_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "test_password");
     ck_assert_ptr_nonnull(sm);
 
@@ -575,9 +539,6 @@ END_TEST
  * memory_list_all. */
 START_TEST(test_user_memory_table_ready_after_sm_create)
 {
-    char tmpdir[] = "/tmp/test_sm_mem_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "pw");
     ck_assert_ptr_nonnull(sm);
 
@@ -610,9 +571,6 @@ END_TEST
  * the bind error aborted the save instead of committing partial data. */
 START_TEST(test_save_session_bind_failure_aborts)
 {
-    char tmpdir[] = "/tmp/test_sm_bind_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "pw");
     ck_assert_ptr_nonnull(sm);
 
@@ -663,9 +621,6 @@ END_TEST
  * path. The test forces a bind failure on the purge path and asserts -1. */
 START_TEST(test_purge_sessions_bind_failure_returns_error)
 {
-    char tmpdir[] = "/tmp/test_sm_purge_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "pw");
     ck_assert_ptr_nonnull(sm);
 
@@ -698,9 +653,6 @@ END_TEST
  * was deleted, 0 if none matched, -1 on error; routes maps 0 -> 404. */
 START_TEST(test_delete_session_distinguishes_missing)
 {
-    char tmpdir[] = "/tmp/test_sm_del_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "pw");
     ck_assert_ptr_nonnull(sm);
 
@@ -733,9 +685,6 @@ END_TEST
  * and refuses anything outside [0, 36500] with -1. */
 START_TEST(test_purge_sessions_rejects_bad_days)
 {
-    char tmpdir[] = "/tmp/test_sm_purge_days_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "pw");
     ck_assert_ptr_nonnull(sm);
 
@@ -769,14 +718,11 @@ END_TEST
  * an empty id, both up-front. */
 START_TEST(test_empty_or_null_id_refused)
 {
-    char tmpdir[] = "/tmp/test_sm_id_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "pw");
     ck_assert_ptr_nonnull(sm);
 
     /* load_session with empty id -> NULL (and no SQLite call is made) */
-    ck_assert_ptr_null(session_manager_load_session(sm, ""));
+    ck_assert_ptr_null(session_manager_load_session_alloc(sm, ""));
 
     /* delete_session with empty id -> 0 (no row matched); the existing
      * `!id` NULL guard plus my new empty-string guard means we never send
@@ -816,9 +762,6 @@ END_TEST
  * original row is preserved in the DB. */
 START_TEST(test_load_returns_null_on_decrypt_failure_preserves_row)
 {
-    char tmpdir[] = "/tmp/test_sm_c45_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     /* First SM: real password, real session with real messages, saved. */
     SessionManager *sm = session_manager_create(tmpdir, "right_password");
     ck_assert_ptr_nonnull(sm);
@@ -830,7 +773,7 @@ START_TEST(test_load_returns_null_on_decrypt_failure_preserves_row)
     session_free(s);
 
     /* Confirm we can load it back under the right password. */
-    s = session_manager_load_session(sm, sid);
+    s = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(s);
     ck_assert_int_eq(s->messages_count, 1);
     ck_assert_str_eq(s->messages[0].content, "secret");
@@ -865,7 +808,7 @@ START_TEST(test_load_returns_null_on_decrypt_failure_preserves_row)
      * preserved (not overwritten by the wrong-password open). */
     sm = session_manager_create(tmpdir, "right_password");
     ck_assert_ptr_nonnull(sm);
-    s = session_manager_load_session(sm, sid);
+    s = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(s);
     ck_assert_int_eq(s->messages_count, 1);
     ck_assert_str_eq(s->messages[0].content, "secret");
@@ -933,9 +876,6 @@ END_TEST
  * the SQL is atomic so the race is closed. */
 START_TEST(test_import_rejects_duplicate_id_preserves_existing)
 {
-    char tmpdir[] = "/tmp/test_sm_import_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "test_password");
     ck_assert_ptr_nonnull(sm);
 
@@ -954,7 +894,7 @@ START_TEST(test_import_rejects_duplicate_id_preserves_existing)
     session_free(orig);
 
     /* Confirm the row is there and round-trips. */
-    Session *loaded = session_manager_load_session(sm, "DUP-ID");
+    Session *loaded = session_manager_load_session_alloc(sm, "DUP-ID");
     ck_assert_ptr_nonnull(loaded);
     ck_assert_int_eq(loaded->messages_count, 1);
     ck_assert_str_eq(loaded->messages[0].content, "original message body");
@@ -971,7 +911,7 @@ START_TEST(test_import_rejects_duplicate_id_preserves_existing)
         "  {\"role\":\"user\",\"content\":\"imposter message\"}"
         "]"
         "}";
-    Session *imported = session_manager_import_session(sm, json);
+    Session *imported = session_manager_import_session_new(sm, json);
 
     /* Duplicate id must be rejected — contract preserved under both old and
      * new code at the single-thread level. The NEW code additionally makes
@@ -980,7 +920,7 @@ START_TEST(test_import_rejects_duplicate_id_preserves_existing)
     ck_assert_ptr_null(imported);
 
     /* Reload and confirm the ORIGINAL row survived untouched. */
-    Session *survivor = session_manager_load_session(sm, "DUP-ID");
+    Session *survivor = session_manager_load_session_alloc(sm, "DUP-ID");
     ck_assert_ptr_nonnull(survivor);
     ck_assert_int_eq(survivor->messages_count, 1);
     ck_assert_str_eq(survivor->messages[0].content, "original message body");
@@ -996,12 +936,12 @@ START_TEST(test_import_rejects_duplicate_id_preserves_existing)
         "  {\"role\":\"user\",\"content\":\"hello world\"}"
         "]"
         "}";
-    Session *fresh = session_manager_import_session(sm, json2);
+    Session *fresh = session_manager_import_session_new(sm, json2);
     ck_assert_ptr_nonnull(fresh);
     ck_assert_str_eq(fresh->id, "UNIQUE-ID");
     session_free(fresh);
 
-    Session *loaded2 = session_manager_load_session(sm, "UNIQUE-ID");
+    Session *loaded2 = session_manager_load_session_alloc(sm, "UNIQUE-ID");
     ck_assert_ptr_nonnull(loaded2);
     ck_assert_int_eq(loaded2->messages_count, 1);
     ck_assert_str_eq(loaded2->messages[0].content, "hello world");
@@ -1039,9 +979,6 @@ END_TEST
  *       we did not silently destroy recoverable data. */
 START_TEST(test_save_aborts_when_encrypt_fails_preserves_row)
 {
-    char tmpdir[] = "/tmp/test_sm_encfail_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
-
     SessionManager *sm = session_manager_create(tmpdir, "test_password");
     ck_assert_ptr_nonnull(sm);
 
@@ -1096,7 +1033,7 @@ START_TEST(test_save_aborts_when_encrypt_fails_preserves_row)
     sqlite3_finalize(idstmt);
     sqlite3_close(r2);
 
-    Session *loaded = session_manager_load_session(sm, id_copy);
+    Session *loaded = session_manager_load_session_alloc(sm, id_copy);
     ck_assert_ptr_nonnull(loaded);
     free(loaded->title);
     loaded->title = str_dup("title two");
@@ -1110,7 +1047,7 @@ START_TEST(test_save_aborts_when_encrypt_fails_preserves_row)
     /* Reset the fault-injection knob and reload: the original title must
      * survive, original messages must survive. */
     session_manager_test_set_encrypt_fail(-1);
-    Session *verify = session_manager_load_session(sm, id_copy);
+    Session *verify = session_manager_load_session_alloc(sm, id_copy);
     ck_assert_ptr_nonnull(verify);
     ck_assert_str_eq(verify->title, "title one");
     ck_assert_int_eq(verify->messages_count, 1);
@@ -1171,8 +1108,6 @@ END_TEST
 
 START_TEST(test_recovery_restores_backup_when_new_salt_was_not_created)
 {
-    char tmpdir[] = "/tmp/test_sm_missing_new_salt_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     SessionManager *sm = session_manager_create(tmpdir, "password");
     ck_assert_ptr_nonnull(sm);
     session_manager_free(sm);
@@ -1198,17 +1133,11 @@ START_TEST(test_recovery_restores_backup_when_new_salt_was_not_created)
     ck_assert_int_eq(access(marker_path, F_OK), -1);
     session_manager_free(sm);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
 START_TEST(test_first_run_verifier_failure_removes_orphan_salt)
 {
-    char tmpdir[] = "/tmp/test_sm_first_run_cleanup_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char verifier_path[4096];
     char salt_path[4096];
     ck_assert_int_lt(snprintf(verifier_path, sizeof(verifier_path),
@@ -1225,10 +1154,6 @@ START_TEST(test_first_run_verifier_failure_removes_orphan_salt)
     ck_assert_ptr_nonnull(sm);
     session_manager_free(sm);
 
-    char command[4096];
-    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
-                     (int)sizeof(command));
-    ck_assert_int_eq(system(command), 0);
 }
 END_TEST
 
@@ -1310,8 +1235,6 @@ static cJSON *branch_info_entry(cJSON *info, const char *message_id)
 
 START_TEST(test_fork_creates_branch_record)
 {
-    char tmpdir[] = "/tmp/test_sm_fork_create_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "q1", "assistant", "a1");
@@ -1329,7 +1252,7 @@ START_TEST(test_fork_creates_branch_record)
     ck_assert_str_eq(out.fork_message.fork_group_id, out.fork_group_id);
 
     /* live chain: truncated to the fork point, tail replaced by the fork */
-    Session *v = session_manager_load_session(sm, sid);
+    Session *v = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v);
     ck_assert_int_eq(v->messages_count, 1);
     ck_assert_str_eq(v->messages[0].content, "q1 edited");
@@ -1353,14 +1276,11 @@ START_TEST(test_fork_creates_branch_record)
     branch_free_result(&out);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_fork_by_message_id_resolves_index)
 {
-    char tmpdir[] = "/tmp/test_sm_fork_byid_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "user", "u1");
@@ -1368,7 +1288,7 @@ START_TEST(test_fork_by_message_id_resolves_index)
                                                  NULL, NULL), 0);
 
     /* give the messages stable ids so an id-anchored fork is possible */
-    Session *s = session_manager_load_session(sm, sid);
+    Session *s = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(s);
     ck_assert_int_eq(s->messages_count, 3);
     s->messages[0].id = str_dup("m-0");
@@ -1381,7 +1301,7 @@ START_TEST(test_fork_by_message_id_resolves_index)
     SessionManagerForkResult out = {0};
     ck_assert_int_eq(session_manager_fork_branch(sm, sid, "m-1", 99,
                                                  "u1 edited", &out), 0);
-    Session *v = session_manager_load_session(sm, sid);
+    Session *v = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v);
     ck_assert_int_eq(v->messages_count, 2);
     ck_assert_str_eq(v->messages[0].content, "u0");
@@ -1391,14 +1311,11 @@ START_TEST(test_fork_by_message_id_resolves_index)
     branch_free_result(&out);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_fork_unknown_message_id_falls_back_to_index)
 {
-    char tmpdir[] = "/tmp/test_sm_fork_fb_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
@@ -1406,7 +1323,7 @@ START_TEST(test_fork_unknown_message_id_falls_back_to_index)
     SessionManagerForkResult out = {0};
     ck_assert_int_eq(session_manager_fork_branch(sm, sid, "no-such-id", 0,
                                                  "edited", &out), 0);
-    Session *v = session_manager_load_session(sm, sid);
+    Session *v = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v);
     ck_assert_int_eq(v->messages_count, 1);
     ck_assert_str_eq(v->messages[0].content, "edited");
@@ -1414,14 +1331,11 @@ START_TEST(test_fork_unknown_message_id_falls_back_to_index)
     branch_free_result(&out);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_regenerate_keeps_content)
 {
-    char tmpdir[] = "/tmp/test_sm_regen_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "q1", "assistant", "a1");
@@ -1431,7 +1345,7 @@ START_TEST(test_regenerate_keeps_content)
     ck_assert_int_eq(session_manager_fork_branch(sm, sid, NULL, 0, NULL,
                                                  &out), 0);
     ck_assert_str_eq(out.fork_message.content, "q1");
-    Session *v = session_manager_load_session(sm, sid);
+    Session *v = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v);
     ck_assert_int_eq(v->messages_count, 1);
     ck_assert_str_eq(v->messages[0].content, "q1");
@@ -1440,32 +1354,29 @@ START_TEST(test_regenerate_keeps_content)
     branch_free_result(&out);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_switch_branch_swaps_live_and_preserves_chains)
 {
-    char tmpdir[] = "/tmp/test_sm_switch_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
 
-    /* chain births are second-granularity; sleep so ordering is
-     * deterministic (created_at is compared with strcmp) */
-    sleep(1);
+    /* chain births are strictly monotonic: branch_now_iso() stamps
+     * millisecond timestamps and branch_next_created_at() bump-waits past
+     * any tie, so ordering is deterministic without sleeping (this was
+     * historically ensured with sleep(1), pre-3af9f68) */
     SessionManagerForkResult f1 = {0};
     ck_assert_int_eq(session_manager_fork_branch(sm, sid, NULL, 0, "e1",
                                                  &f1), 0);
-    sleep(1);
     SessionManagerForkResult f2 = {0};
     ck_assert_int_eq(session_manager_fork_branch(sm, sid, NULL, 0, "e2",
                                                  &f2), 0);
 
     /* switch back to the original chain (record br f1.branch_id) */
     ck_assert_int_eq(session_manager_switch_branch(sm, sid, f1.branch_id), 0);
-    Session *v = session_manager_load_session(sm, sid);
+    Session *v = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v);
     ck_assert_int_eq(v->messages_count, 2);
     ck_assert_str_eq(v->messages[0].content, "u0");
@@ -1496,7 +1407,7 @@ START_TEST(test_switch_branch_swaps_live_and_preserves_chains)
 
     /* switch to the middle chain (e1) — live chain again swaps */
     ck_assert_int_eq(session_manager_switch_branch(sm, sid, f2.branch_id), 0);
-    Session *v2 = session_manager_load_session(sm, sid);
+    Session *v2 = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v2);
     ck_assert_int_eq(v2->messages_count, 1);
     ck_assert_str_eq(v2->messages[0].content, "e1");
@@ -1507,14 +1418,11 @@ START_TEST(test_switch_branch_swaps_live_and_preserves_chains)
     branch_free_result(&f2);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_branch_info_counts_multifork_chain)
 {
-    char tmpdir[] = "/tmp/test_sm_info_multi_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
@@ -1523,7 +1431,6 @@ START_TEST(test_branch_info_counts_multifork_chain)
     ck_assert_int_eq(session_manager_add_message(sm, sid, "assistant", "a3",
                                                  NULL, NULL), 0);
 
-    sleep(1);
     SessionManagerForkResult f1 = {0};
     ck_assert_int_eq(session_manager_fork_branch(sm, sid, NULL, 0, "e1",
                                                  &f1), 0);
@@ -1532,7 +1439,6 @@ START_TEST(test_branch_info_counts_multifork_chain)
                                                  NULL, NULL), 0);
     ck_assert_int_eq(session_manager_add_message(sm, sid, "assistant", "a3b",
                                                  NULL, NULL), 0);
-    sleep(1);
     SessionManagerForkResult f2 = {0};
     ck_assert_int_eq(session_manager_fork_branch(sm, sid, NULL, 2, "e2",
                                                  &f2), 0);
@@ -1573,14 +1479,11 @@ START_TEST(test_branch_info_counts_multifork_chain)
     branch_free_result(&f2);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_old_session_without_branches_reports_empty)
 {
-    char tmpdir[] = "/tmp/test_sm_info_legacy_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
@@ -1592,14 +1495,11 @@ START_TEST(test_old_session_without_branches_reports_empty)
 
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_fork_allocation_failure_leaves_session_unchanged)
 {
-    char tmpdir[] = "/tmp/test_sm_fork_oom_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "q1", "assistant", "a1");
@@ -1620,7 +1520,7 @@ START_TEST(test_fork_allocation_failure_leaves_session_unchanged)
     ck_assert_ptr_null(out.fork_message.content);
 
     /* session unchanged on disk: original chain, no groups, no branches */
-    Session *v = session_manager_load_session(sm, sid);
+    Session *v = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v);
     ck_assert_int_eq(v->messages_count, 2);
     ck_assert_str_eq(v->messages[0].content, "q1");
@@ -1633,7 +1533,7 @@ START_TEST(test_fork_allocation_failure_leaves_session_unchanged)
     SessionManagerForkResult out2 = {0};
     ck_assert_int_eq(session_manager_fork_branch(sm, sid, NULL, 0, "edited",
                                                  &out2), 0);
-    Session *v2 = session_manager_load_session(sm, sid);
+    Session *v2 = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v2);
     ck_assert_int_eq(v2->messages_count, 1);
     ck_assert_str_eq(v2->messages[0].content, "edited");
@@ -1642,7 +1542,6 @@ START_TEST(test_fork_allocation_failure_leaves_session_unchanged)
     branch_free_result(&out2);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
@@ -1655,8 +1554,6 @@ START_TEST(test_switch_away_and_back_preserves_branch_data)
      * back clobbered the record of the chain the user had just left
      * (history reverted to the unedited content, pill collapsed to
      * count=1). Records must be appended, never replaced by anchor. */
-    char tmpdir[] = "/tmp/test_sm_switch_back_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
@@ -1667,7 +1564,7 @@ START_TEST(test_switch_away_and_back_preserves_branch_data)
 
     /* switch to the old chain */
     ck_assert_int_eq(session_manager_switch_branch(sm, sid, f1.branch_id), 0);
-    Session *v1 = session_manager_load_session(sm, sid);
+    Session *v1 = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v1);
     ck_assert_int_eq(v1->messages_count, 2);
     ck_assert_str_eq(v1->messages[0].content, "u0");
@@ -1695,7 +1592,7 @@ START_TEST(test_switch_away_and_back_preserves_branch_data)
     /* switch back: the edited content must survive */
     ck_assert_int_eq(session_manager_switch_branch(sm, sid, other_id), 0);
     free(other_id);
-    Session *v2 = session_manager_load_session(sm, sid);
+    Session *v2 = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v2);
     ck_assert_int_eq(v2->messages_count, 1);
     ck_assert_str_eq(v2->messages[0].content, "edited");
@@ -1715,7 +1612,6 @@ START_TEST(test_switch_away_and_back_preserves_branch_data)
     branch_free_result(&f1);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
@@ -1725,8 +1621,6 @@ START_TEST(test_refork_joins_existing_group)
      * fork_group_id: a fresh group would orphan the earlier fork's chains
      * from the pill (its records carry the old group) and the count would
      * not span the whole family. */
-    char tmpdir[] = "/tmp/test_sm_refork_group_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
@@ -1757,7 +1651,6 @@ START_TEST(test_refork_joins_existing_group)
     branch_free_result(&f2);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
@@ -1769,8 +1662,6 @@ START_TEST(test_fork_same_second_orders_active)
      * strcmp ordering won). Deliberately NO sleep here — the fork happens
      * milliseconds after session creation, which the old code misordered
      * and the ms-resolution code orders deterministically. */
-    char tmpdir[] = "/tmp/test_sm_ms_order_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
@@ -1793,23 +1684,20 @@ START_TEST(test_fork_same_second_orders_active)
     branch_free_result(&f1);
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_tag_message_marks_fork_point)
 {
-    char tmpdir[] = "/tmp/test_sm_tag_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
 
-    char *tagged = session_manager_tag_message(sm, sid, 1, "fg_tag");
+    char *tagged = session_manager_tag_message_new(sm, sid, 1, "fg_tag");
     ck_assert_ptr_nonnull(tagged);
     ck_assert_str_ne(tagged, "");
 
-    Session *v = session_manager_load_session(sm, sid);
+    Session *v = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v);
     ck_assert_int_eq(v->messages_count, 2);
     ck_assert_str_eq(v->messages[1].role, "assistant");
@@ -1824,9 +1712,9 @@ START_TEST(test_tag_message_marks_fork_point)
     free(tagged);
 
     /* re-tagging a message that already carries a group keeps the group */
-    char *tagged2 = session_manager_tag_message(sm, sid, 1, "fg_other");
+    char *tagged2 = session_manager_tag_message_new(sm, sid, 1, "fg_other");
     ck_assert_ptr_nonnull(tagged2);
-    Session *v2 = session_manager_load_session(sm, sid);
+    Session *v2 = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v2);
     ck_assert_str_eq(v2->messages[1].fork_group_id, "fg_tag");
     ck_assert_str_ne(v2->messages[1].id, old_id);
@@ -1835,19 +1723,16 @@ START_TEST(test_tag_message_marks_fork_point)
     free(tagged2);
 
     /* out-of-range index: NULL, nothing changes */
-    ck_assert_ptr_null(session_manager_tag_message(sm, sid, 5, "fg_x"));
-    ck_assert_ptr_null(session_manager_tag_message(sm, sid, -1, "fg_x"));
+    ck_assert_ptr_null(session_manager_tag_message_new(sm, sid, 5, "fg_x"));
+    ck_assert_ptr_null(session_manager_tag_message_new(sm, sid, -1, "fg_x"));
 
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
 START_TEST(test_tag_message_oom_leaves_session_unchanged)
 {
-    char tmpdir[] = "/tmp/test_sm_tag_oom_XXXXXX";
-    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
     char *sid = NULL;
     SessionManager *sm = branch_sm_create(tmpdir, &sid);
     branch_add_msgs(sm, sid, "user", "u0", "assistant", "a1");
@@ -1856,23 +1741,22 @@ START_TEST(test_tag_message_oom_leaves_session_unchanged)
      * created_at, decrypted title) and the group dup is tag_message's
      * first — it must fail BEFORE anything is committed. */
     session_manager_test_set_alloc_fail(5);
-    ck_assert_ptr_null(session_manager_tag_message(sm, sid, 1, "fg_tag"));
+    ck_assert_ptr_null(session_manager_tag_message_new(sm, sid, 1, "fg_tag"));
     session_manager_test_set_alloc_fail(-1);
 
-    Session *v = session_manager_load_session(sm, sid);
+    Session *v = session_manager_load_session_alloc(sm, sid);
     ck_assert_ptr_nonnull(v);
     ck_assert_ptr_null(v->messages[1].id);
     ck_assert_ptr_null(v->messages[1].fork_group_id);
     session_free(v);
 
     /* normal operation restored after the fault injection is lifted */
-    char *tagged = session_manager_tag_message(sm, sid, 1, "fg_tag");
+    char *tagged = session_manager_tag_message_new(sm, sid, 1, "fg_tag");
     ck_assert_ptr_nonnull(tagged);
     free(tagged);
 
     free(sid);
     session_manager_free(sm);
-    branch_rm(tmpdir);
 }
 END_TEST
 
@@ -1881,6 +1765,7 @@ Suite *session_mgr_suite(void)
     Suite *s = suite_create("SessionManager");
 
     TCase *tc_encrypt = tcase_create("Encryption");
+    tcase_add_checked_fixture(tc_encrypt, tmpdir_setup, tmpdir_teardown);
     tcase_set_timeout(tc_encrypt, 120);
     tcase_add_test(tc_encrypt, test_title_is_encrypted_at_rest);
     tcase_add_test(tc_encrypt, test_load_returns_null_on_decrypt_failure_preserves_row);
@@ -1890,6 +1775,7 @@ Suite *session_mgr_suite(void)
     suite_add_tcase(s, tc_encrypt);
 
     TCase *tc_oauth = tcase_create("ProviderOAuth");
+    tcase_add_checked_fixture(tc_oauth, tmpdir_setup, tmpdir_teardown);
     tcase_set_timeout(tc_oauth, 180);
     tcase_add_test(tc_oauth, test_provider_oauth_encrypted_roundtrip_and_delete);
     tcase_add_test(tc_oauth,
@@ -1905,6 +1791,7 @@ Suite *session_mgr_suite(void)
     suite_add_tcase(s, tc_oauth);
 
     TCase *tc_crud = tcase_create("CRUD");
+    tcase_add_checked_fixture(tc_crud, tmpdir_setup, tmpdir_teardown);
     tcase_set_timeout(tc_crud, 120);
     tcase_add_test(tc_crud, test_user_memory_table_ready_after_sm_create);
     tcase_add_test(tc_crud, test_save_session_bind_failure_aborts);
@@ -1925,6 +1812,7 @@ Suite *session_mgr_suite(void)
     suite_add_tcase(s, tc_crud);
 
     TCase *tc_branches = tcase_create("Branches");
+    tcase_add_checked_fixture(tc_branches, tmpdir_setup, tmpdir_teardown);
     tcase_set_timeout(tc_branches, 180);
     tcase_add_test(tc_branches, test_fork_creates_branch_record);
     tcase_add_test(tc_branches, test_fork_by_message_id_resolves_index);

@@ -85,11 +85,67 @@ START_TEST(test_str_ends_with_suffix_longer_than_str)
 }
 END_TEST
 
-/* --- sanitize_json --- */
+START_TEST(test_strlcpy_copies_and_terminates_exact_fit)
+{
+    char buf[6];
+    size_t ret = strlcpy(buf, "hello", sizeof(buf));
+    ck_assert_uint_eq(ret, 5);
+    ck_assert_str_eq(buf, "hello");
+}
+END_TEST
+
+START_TEST(test_strlcpy_truncates_and_reports_would_be_length)
+{
+    char buf[4];
+    size_t ret = strlcpy(buf, "hello", sizeof(buf));
+    ck_assert_uint_eq(ret, 5);
+    ck_assert_str_eq(buf, "hel");
+    ck_assert_uint_eq(buf[3], '\0');
+}
+END_TEST
+
+START_TEST(test_strlcpy_zero_size_does_not_touch_buffer)
+{
+    char buf[4] = "xyz";
+    size_t ret = strlcpy(buf, "hello", 0);
+    ck_assert_uint_eq(ret, 5);
+    ck_assert_str_eq(buf, "xyz");
+}
+END_TEST
+
+START_TEST(test_strlcat_appends_within_budget)
+{
+    char buf[16] = "foo";
+    size_t ret = strlcat(buf, "bar", sizeof(buf));
+    ck_assert_uint_eq(ret, 6);
+    ck_assert_str_eq(buf, "foobar");
+}
+END_TEST
+
+START_TEST(test_strlcat_truncates_and_reports_would_be_length)
+{
+    char buf[6] = "foo";
+    size_t ret = strlcat(buf, "bar", sizeof(buf));
+    ck_assert_uint_eq(ret, 6);
+    ck_assert_str_eq(buf, "fooba");
+    ck_assert_uint_eq(buf[5], '\0');
+}
+END_TEST
+
+START_TEST(test_strlcat_full_buffer_is_noop_with_report)
+{
+    char buf[4] = "foo";
+    size_t ret = strlcat(buf, "bar", sizeof(buf));
+    ck_assert_uint_eq(ret, 6);
+    ck_assert_str_eq(buf, "foo");
+}
+END_TEST
+
+/* --- sanitize_json_dup --- */
 
 START_TEST(test_sanitize_json_strips_leading_whitespace)
 {
-    char *r = sanitize_json("  \t\n{\"key\":\"val\"}");
+    char *r = sanitize_json_dup("  \t\n{\"key\":\"val\"}");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "{\"key\":\"val\"}");
     free(r);
@@ -98,7 +154,7 @@ END_TEST
 
 START_TEST(test_sanitize_json_strips_markdown_json_fence)
 {
-    char *r = sanitize_json("```json\n{\"key\":\"val\"}\n```");
+    char *r = sanitize_json_dup("```json\n{\"key\":\"val\"}\n```");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "{\"key\":\"val\"}```");
     free(r);
@@ -107,7 +163,7 @@ END_TEST
 
 START_TEST(test_sanitize_json_strips_markdown_fence_no_lang)
 {
-    char *r = sanitize_json("```\n{\"key\":\"val\"}\n```");
+    char *r = sanitize_json_dup("```\n{\"key\":\"val\"}\n```");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "{\"key\":\"val\"}```");
     free(r);
@@ -116,7 +172,7 @@ END_TEST
 
 START_TEST(test_sanitize_json_removes_newlines_outside_strings)
 {
-    char *r = sanitize_json("{\n  \"key\":\n  \"val\"\n}");
+    char *r = sanitize_json_dup("{\n  \"key\":\n  \"val\"\n}");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "{  \"key\":  \"val\"}");
     free(r);
@@ -125,7 +181,7 @@ END_TEST
 
 START_TEST(test_sanitize_json_preserves_newlines_in_strings)
 {
-    char *r = sanitize_json("{\"text\":\"line1\\nline2\"}");
+    char *r = sanitize_json_dup("{\"text\":\"line1\\nline2\"}");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "{\"text\":\"line1\\nline2\"}");
     free(r);
@@ -134,7 +190,7 @@ END_TEST
 
 START_TEST(test_sanitize_json_removes_trailing_comma_before_bracket)
 {
-    char *r = sanitize_json("{\"a\": 1,}");
+    char *r = sanitize_json_dup("{\"a\": 1,}");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "{\"a\": 1}");
     free(r);
@@ -143,7 +199,7 @@ END_TEST
 
 START_TEST(test_sanitize_json_removes_trailing_comma_before_brace)
 {
-    char *r = sanitize_json("[\"a\", \"b\",]");
+    char *r = sanitize_json_dup("[\"a\", \"b\",]");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "[\"a\", \"b\"]");
     free(r);
@@ -152,7 +208,7 @@ END_TEST
 
 START_TEST(test_sanitize_json_preserves_normal_commas)
 {
-    char *r = sanitize_json("{\"a\":1,\"b\":2}");
+    char *r = sanitize_json_dup("{\"a\":1,\"b\":2}");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "{\"a\":1,\"b\":2}");
     free(r);
@@ -161,13 +217,13 @@ END_TEST
 
 START_TEST(test_sanitize_json_null)
 {
-    ck_assert_ptr_null(sanitize_json(NULL));
+    ck_assert_ptr_null(sanitize_json_dup(NULL));
 }
 END_TEST
 
 START_TEST(test_sanitize_json_empty)
 {
-    char *r = sanitize_json("");
+    char *r = sanitize_json_dup("");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "");
     free(r);
@@ -176,7 +232,7 @@ END_TEST
 
 START_TEST(test_sanitize_json_trims_trailing_whitespace)
 {
-    char *r = sanitize_json("{\"key\":\"val\"}  \t\n");
+    char *r = sanitize_json_dup("{\"key\":\"val\"}  \t\n");
     ck_assert_ptr_nonnull(r);
     ck_assert_str_eq(r, "{\"key\":\"val\"}");
     free(r);
@@ -195,6 +251,12 @@ Suite *string_suite(void)
     tcase_add_test(tc, test_str_dup_null);
     tcase_add_test(tc, test_str_starts_ends_with_null);
     tcase_add_test(tc, test_str_ends_with_suffix_longer_than_str);
+    tcase_add_test(tc, test_strlcpy_copies_and_terminates_exact_fit);
+    tcase_add_test(tc, test_strlcpy_truncates_and_reports_would_be_length);
+    tcase_add_test(tc, test_strlcpy_zero_size_does_not_touch_buffer);
+    tcase_add_test(tc, test_strlcat_appends_within_budget);
+    tcase_add_test(tc, test_strlcat_truncates_and_reports_would_be_length);
+    tcase_add_test(tc, test_strlcat_full_buffer_is_noop_with_report);
     suite_add_tcase(s, tc);
 
     TCase *tc_json = tcase_create("SanitizeJSON");

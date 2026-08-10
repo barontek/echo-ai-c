@@ -112,7 +112,7 @@ void session_free(Session *s)
  * always at least `"[]"` (cJSON_PrintUnformatted of an empty array); the
  * C13 fix in `save_session_core` treats a NULL return here as OOM and
  * refuses the save. */
-char *session_serialize_messages(const Session *session)
+char *session_serialize_messages_new(const Session *session)
 {
     cJSON *arr = messages_to_json_array(session->messages, session->messages_count);
     if (!arr) return NULL;
@@ -271,7 +271,7 @@ partial_fail_msg:
 
 /* C14: serialize/deserialize round-trip COLLAPSES the two distinct
  * "metadata not set" and "metadata explicitly empty {}" combinations into
- * one DB representation. `session_serialize_metadata` returns:
+ * one DB representation. `session_serialize_metadata_new` returns:
  *   NULL  iff session->metadata == NULL (legitimate "no metadata ever set")
  *   "{}"  iff session->metadata is non-NULL but empty (legitimate "user
  *         explicitly cleared it")
@@ -297,7 +297,7 @@ partial_fail_msg:
  *
  * Returns: NULL iff session->metadata is NULL; otherwise caller owns a
  * malloc'd NUL-terminated JSON string (either "{}" or a real object). */
-char *session_serialize_metadata(const Session *session)
+char *session_serialize_metadata_new(const Session *session)
 {
     if (!session->metadata) return NULL;
     char *json = cJSON_PrintUnformatted(session->metadata);
@@ -333,7 +333,7 @@ int session_deserialize_metadata(Session *session, const char *json_str)
  * `session->events` is NULL — if `session->events` is non-NULL and this
  * returns NULL, it is a cJSON-print OOM and `save_session_core` refuses
  * the save. */
-char *session_serialize_events(const Session *session)
+char *session_serialize_events_new(const Session *session)
 {
     if (!session->events) return NULL;
     char *json = cJSON_PrintUnformatted(session->events);

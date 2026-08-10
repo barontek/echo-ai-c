@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <check.h>
 
+#include "../../src/llm/factory.h"
 #include "../../src/llm/provider.h"
 #include "../../src/llm/openai_oauth.h"
 

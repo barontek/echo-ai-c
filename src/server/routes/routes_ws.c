@@ -31,6 +31,40 @@
 #define WS_STATIC static
 #endif
 
+#ifdef ROUTES_WS_TEST
+/* Test-only allocator fault injection: shared counter across calloc and
+ * str_dup so tests can fail the Nth allocation inside ws_chat_enqueue
+ * (calloc of the node, then the data copy). Only the test target defines
+ * ROUTES_WS_TEST. */
+static int routes_ws_test_alloc_counter = 0;
+static int routes_ws_test_alloc_fail_at = -1;
+
+void routes_ws_test_set_alloc_fail(int nth_allocation)
+{
+    routes_ws_test_alloc_counter = 0;
+    routes_ws_test_alloc_fail_at = nth_allocation;
+}
+
+static void *routes_ws_test_calloc(size_t nmemb, size_t size)
+{
+    routes_ws_test_alloc_counter++;
+    if (routes_ws_test_alloc_counter == routes_ws_test_alloc_fail_at)
+        return NULL;
+    return calloc(nmemb, size);
+}
+
+static char *routes_ws_test_strdup(const char *s)
+{
+    routes_ws_test_alloc_counter++;
+    if (routes_ws_test_alloc_counter == routes_ws_test_alloc_fail_at)
+        return NULL;
+    return str_dup(s);
+}
+
+#define calloc routes_ws_test_calloc
+#define str_dup routes_ws_test_strdup
+#endif
+
 typedef struct QueuedMsg {
     char *data;
     struct QueuedMsg *next;
@@ -206,7 +240,7 @@ WS_STATIC void ws_chat_flush_queue(WSChatCtx *c)
                 msg = cJSON_GetObjectItem(json, "message");
             if (msg && msg->valuestring)
             {
-                LLMResponse *resp = agent_run_streaming(c->agent, msg->valuestring,
+                LLMResponse *resp = agent_run_streaming_new(c->agent, msg->valuestring,
                                                         ws_chat_on_chunk, c);
                 if (!c->active_session_id && c->agent && c->agent->session_id)
                 {
@@ -323,7 +357,7 @@ WS_STATIC int ws_swap_agent_messages(WSChatCtx *c, Session *s)
  *    the fork copy would leave it as a ghost in the DB after the wholesale
  *    agent_save_session. Instead the context is truncated at the fork
  *    point WITHOUT the copy; the run appends the new response, and
- *    session_manager_tag_message re-applies the fork group plus a minted
+ *    session_manager_tag_message_new re-applies the fork group plus a minted
  *    id to it afterwards. Emits done with the fresh fork identity and the
  *    fork point's role (fork_role) so the frontend places the pill on the
  *    right message. */
@@ -361,7 +395,7 @@ WS_STATIC void ws_run_fork(WSChatCtx *c, const char *message_id, int idx,
     if (!regen_mode)
     {
         /* Append the minted fork message so the run context ends at the
-         * fork point (agent_run_streaming_context does NOT append a user
+         * fork point (agent_run_streaming_context_new does NOT append a user
          * turn). In regenerate mode the fork copy must NOT be appended:
          * the run would append the response AFTER it and the wholesale
          * agent_save_session would leave the copy as a ghost chain entry
@@ -402,7 +436,7 @@ WS_STATIC void ws_run_fork(WSChatCtx *c, const char *message_id, int idx,
     }
 
     c->active_runs++;
-    LLMResponse *resp = agent_run_streaming_context(c->agent, ws_chat_on_chunk, c);
+    LLMResponse *resp = agent_run_streaming_context_new(c->agent, ws_chat_on_chunk, c);
     c->active_runs--;
     if (c->closing)
     {
@@ -427,7 +461,7 @@ WS_STATIC void ws_run_fork(WSChatCtx *c, const char *message_id, int idx,
      * until reload). */
     char *tagged_id = NULL;
     if (resp && regen_mode && c->active_session_id)
-        tagged_id = session_manager_tag_message(c->sm, c->active_session_id,
+        tagged_id = session_manager_tag_message_new(c->sm, c->active_session_id,
                                                 idx, fork_res.fork_group_id);
 
     if (resp)
@@ -456,26 +490,14 @@ WS_STATIC void ws_run_fork(WSChatCtx *c, const char *message_id, int idx,
     free(fork_res.fork_group_id);
 }
 
-WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void *userdata)
+
+/* Handles an explicit session_id frame: rejects a stale id with an
+ * error frame, or (when no session is active) loads the given session as
+ * the new active one. Returns 1 when an error frame was sent and json
+ * was consumed — the caller must return — and 0 to continue with the
+ * frame body. */
+static int ws_handle_session_id(WSChatCtx *c, WSClient *ws, cJSON *json)
 {
-    (void)len;
-    WSChatCtx *c = (WSChatCtx *)userdata;
-    if (!c || !c->agent) return;
-    if (c->server_ctx &&
-        (c->server_ctx->state != STATE_UNLOCKED ||
-         c->server_ctx->auth_generation != c->auth_generation))
-    {
-        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"authentication expired\"}");
-        return;
-    }
-
-    cJSON *json = cJSON_Parse(data);
-    if (!json)
-    {
-        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"invalid json\"}");
-        return;
-    }
-
     cJSON *session_id_item = cJSON_GetObjectItem(json, "session_id");
     if (session_id_item && session_id_item->valuestring)
     {
@@ -485,12 +507,12 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
             {
                 ws_send_json(ws, "{\"type\":\"error\",\"content\":\"stale session_id\"}");
                 cJSON_Delete(json);
-                return;
+                return 1;
             }
         }
         else if (c->sm && c->agent)
         {
-            Session *s = session_manager_load_session(c->sm, session_id_item->valuestring);
+            Session *s = session_manager_load_session_alloc(c->sm, session_id_item->valuestring);
             if (s)
             {
                 free(c->active_session_id);
@@ -550,15 +572,18 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                  * client's expected session and reality. */
                 cJSON_Delete(json);
                 ws_send_json(ws, "{\"type\":\"error\",\"content\":\"session not found\"}");
-                return;
+                return 1;
             }
         }
     }
+    return 0;
+}
 
-    cJSON *type_item = cJSON_GetObjectItem(json, "type");
-
-    if (!type_item)
-    {
+/* Handles a frame with no "type": a provider/model/effort switch. The
+ * frame's json is always consumed (deleted) here. */
+static void ws_handle_provider_frame(WSChatCtx *c, WSClient *ws, cJSON *json)
+{
+    (void)ws;
         cJSON *provider = cJSON_GetObjectItem(json, "provider");
         if (provider)
         {
@@ -676,56 +701,14 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
         ws_send_json(ws, "{\"type\":\"error\",\"content\":\"missing type\"}");
         cJSON_Delete(json);
         return;
-    }
+}
 
-    if (strcmp(type_item->valuestring, "approval_response") == 0)
-        {
-            cJSON *rid = cJSON_GetObjectItem(json, "request_id");
-            cJSON *ok = cJSON_GetObjectItem(json, "approved");
-            if (rid && rid->valuestring && ok && cJSON_IsBool(ok) &&
-                c->pending_request_id && strcmp(rid->valuestring, c->pending_request_id) == 0)
-            {
-                c->approval_result = cJSON_IsTrue(ok) ? 1 : 0;
-                c->approval_done = 1;
-            }
-            cJSON_Delete(json);
-            return;
-        }
-        if (strcmp(type_item->valuestring, "ask_user_response") == 0)
-        {
-            cJSON *answer = cJSON_GetObjectItem(json, "answer");
-            if (answer && answer->valuestring)
-            {
-                free(c->ask_user_response);
-                c->ask_user_response = str_dup(answer->valuestring);
-                c->ask_user_done = 1;
-            }
-            else
-            {
-                c->ask_user_response = str_dup("");
-                c->ask_user_done = 1;
-            }
-            cJSON_Delete(json);
-            return;
-        }
-        if (strcmp(type_item->valuestring, "edit") == 0)
-        {
-            cJSON *idx_item = cJSON_GetObjectItem(json, "index");
-            cJSON *content_item = cJSON_GetObjectItem(json, "content");
-            cJSON *msgid_item = cJSON_GetObjectItem(json, "message_id");
-            if (idx_item && cJSON_IsNumber(idx_item) && content_item && content_item->valuestring
-                && c->sm && c->agent)
-            {
-                int idx = (int)idx_item->valuedouble;
-                ws_run_fork(c, msgid_item && msgid_item->valuestring
-                                ? msgid_item->valuestring : NULL,
-                            idx, content_item->valuestring, 0);
-            }
-            cJSON_Delete(json);
-            return;
-        }
-        if (strcmp(type_item->valuestring, "regenerate") == 0)
-        {
+/* Handles a "regenerate" frame: forks at the given message (by id or
+ * index, mapping agent positions past any system prefix) and re-runs the
+ * turn. Consumes json. */
+static void ws_handle_regenerate(WSChatCtx *c, WSClient *ws, cJSON *json)
+{
+    (void)ws;
             cJSON *idx_item = cJSON_GetObjectItem(json, "index");
             cJSON *msgid_item = cJSON_GetObjectItem(json, "message_id");
             if (c->sm && c->agent)
@@ -772,9 +755,13 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
             }
             cJSON_Delete(json);
             return;
-        }
-        if (strcmp(type_item->valuestring, "branch_switch") == 0)
-        {
+}
+
+/* Handles a "branch_switch" frame: switches the session to the given
+ * branch, reloads it, and re-emits history + branch_info. Consumes json. */
+static void ws_handle_branch_switch(WSChatCtx *c, WSClient *ws, cJSON *json)
+{
+    (void)ws;
             cJSON *sid_item = cJSON_GetObjectItem(json, "session_id");
             cJSON *bid_item = cJSON_GetObjectItem(json, "branch_id");
             if (c->sm && c->agent && bid_item && bid_item->valuestring &&
@@ -785,7 +772,7 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
                 if (session_manager_switch_branch(c->sm, c->active_session_id,
                                                   bid_item->valuestring) == 0)
                 {
-                    Session *s = session_manager_load_session(c->sm,
+                    Session *s = session_manager_load_session_alloc(c->sm,
                                                               c->active_session_id);
                     if (s)
                     {
@@ -824,31 +811,14 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
             }
             cJSON_Delete(json);
             return;
-        }
+}
 
-        if (strcmp(type_item->valuestring, "branch_info") == 0)
-        {
-            if (c->sm && c->agent)
-                ws_emit_branch_info(c);
-            cJSON_Delete(json);
-            return;
-        }
-
-        if (strcmp(type_item->valuestring, "stop") == 0)
-        {
-            agent_cancel(c->agent);
-            c->approval_done = 1;
-            c->ask_user_done = 1;
-            cJSON_Delete(json);
-            return;
-        }
-
-        if (strcmp(type_item->valuestring, "message") != 0)
-        {
-            cJSON_Delete(json);
-            return;
-        }
-
+/* Runs the main "message" frame: sends the user text through the agent
+ * (streaming) and emits the done/error frame. Consumes json; data is
+ * the raw frame text used for queueing when not ready. */
+static void ws_handle_message_frame(WSChatCtx *c, WSClient *ws, cJSON *json,
+                                    const char *data)
+{
     cJSON *msg = cJSON_GetObjectItem(json, "content");
     if (!msg || !msg->valuestring)
         msg = cJSON_GetObjectItem(json, "message");
@@ -867,7 +837,7 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
     }
 
     c->active_runs++;
-    LLMResponse *resp = agent_run_streaming(c->agent, msg->valuestring,
+    LLMResponse *resp = agent_run_streaming_new(c->agent, msg->valuestring,
                                              ws_chat_on_chunk, c);
     c->active_runs--;
     cJSON_Delete(json);
@@ -901,6 +871,129 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
         free(s);
         cJSON_Delete(err);
     }
+}
+
+WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, void *userdata)
+{
+    (void)len;
+    WSChatCtx *c = (WSChatCtx *)userdata;
+    if (!c || !c->agent) return;
+    if (c->server_ctx &&
+        (c->server_ctx->state != STATE_UNLOCKED ||
+         c->server_ctx->auth_generation != c->auth_generation))
+    {
+        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"authentication expired\"}");
+        return;
+    }
+
+    cJSON *json = cJSON_Parse(data);
+    if (!json)
+    {
+        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"invalid json\"}");
+        return;
+    }
+
+    if (ws_handle_session_id(c, ws, json) != 0) return;
+
+    cJSON *type_item = cJSON_GetObjectItem(json, "type");
+
+    if (!type_item)
+    {
+        ws_handle_provider_frame(c, ws, json);
+        return;
+    }
+
+    if (strcmp(type_item->valuestring, "approval_response") == 0)
+        {
+            cJSON *rid = cJSON_GetObjectItem(json, "request_id");
+            cJSON *ok = cJSON_GetObjectItem(json, "approved");
+            if (rid && rid->valuestring && ok && cJSON_IsBool(ok) &&
+                c->pending_request_id && strcmp(rid->valuestring, c->pending_request_id) == 0)
+            {
+                c->approval_result = cJSON_IsTrue(ok) ? 1 : 0;
+                c->approval_done = 1;
+            }
+            cJSON_Delete(json);
+            return;
+        }
+
+        if (strcmp(type_item->valuestring, "ask_user_response") == 0)
+        {
+            cJSON *answer = cJSON_GetObjectItem(json, "answer");
+            if (answer && answer->valuestring)
+            {
+                free(c->ask_user_response);
+                c->ask_user_response = str_dup(answer->valuestring);
+                c->ask_user_done = 1;
+            }
+            else
+            {
+                c->ask_user_response = str_dup("");
+                c->ask_user_done = 1;
+            }
+            cJSON_Delete(json);
+            return;
+        }
+
+        if (strcmp(type_item->valuestring, "edit") == 0)
+        {
+            cJSON *idx_item = cJSON_GetObjectItem(json, "index");
+            cJSON *content_item = cJSON_GetObjectItem(json, "content");
+            cJSON *msgid_item = cJSON_GetObjectItem(json, "message_id");
+            if (idx_item && cJSON_IsNumber(idx_item) && content_item && content_item->valuestring
+                && c->sm && c->agent)
+            {
+                int idx = (int)idx_item->valuedouble;
+                ws_run_fork(c, msgid_item && msgid_item->valuestring
+                                ? msgid_item->valuestring : NULL,
+                            idx, content_item->valuestring, 0);
+            }
+            cJSON_Delete(json);
+            return;
+        }
+
+    if (strcmp(type_item->valuestring, "regenerate") == 0)
+    {
+        ws_handle_regenerate(c, ws, json);
+        return;
+    }
+
+    if (strcmp(type_item->valuestring, "branch_switch") == 0)
+    {
+        ws_handle_branch_switch(c, ws, json);
+        return;
+    }
+
+        if (strcmp(type_item->valuestring, "branch_info") == 0)
+        {
+            if (c->sm && c->agent)
+                ws_emit_branch_info(c);
+            cJSON_Delete(json);
+            return;
+        }
+
+        if (strcmp(type_item->valuestring, "stop") == 0)
+        {
+            agent_cancel(c->agent);
+            c->approval_done = 1;
+            c->ask_user_done = 1;
+            cJSON_Delete(json);
+            return;
+        }
+
+        if (strcmp(type_item->valuestring, "message") != 0)
+        {
+            cJSON_Delete(json);
+            return;
+        }
+
+    if (strcmp(type_item->valuestring, "message") != 0)
+    {
+        cJSON_Delete(json);
+        return;
+    }
+
+    ws_handle_message_frame(c, ws, json, data);
 }
 
 WS_STATIC void ws_title_update_cb(const char *session_id, const char *title, void *userdata)
@@ -1065,66 +1158,14 @@ WS_STATIC void ws_chat_emit_session_start(WSChatCtx *c)
     c->session_start_emitted = 1;
 }
 
-void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
+/* Applies a session_id from the websocket URL query: loads that session
+ * into the connection (replacing any in-memory agent messages) and emits
+ * its history + branch_info. No-op when query has no session_id or the
+ * load fails. */
+static void ws_apply_query_session(WSChatCtx *c, WSClient *ws, const char *query)
 {
-    WSChatCtx *c = calloc(1, sizeof(WSChatCtx));
-    if (!c) return;
-
-    /* D2: mint per-connection Agent instead of sharing ctx->agent.
-     * Each WS client owns its own messages, session_id, and callbacks. */
-    c->agent = agent_create(&ctx->agent_cfg);
-    if (!c->agent)
-    {
-        log_error("ws_chat_init: agent_create failed", NULL);
-        free(c);
-        return;
-    }
-    c->sm = session_manager_retain(ctx->sm);
-    c->safety = ctx->safety;
-    c->ws = ws;
-    c->loop = ctx->loop;
-    c->server_ctx = ctx;
-    c->auth_generation = ctx->auth_generation;
-    c->next = ctx->ws_chat_contexts;
-    ctx->ws_chat_contexts = c;
-
-    /* ask_user_timeout (seconds, default 60) bounds how long a blocked
-     * ask_user tool call waits for a client reply before giving up. */
-    c->ask_user_timeout = ctx->conf
-        ? conf_get_int(ctx->conf, "ask_user_timeout", 60) : 60;
-
-    /* Copy the provider-creation params so the config handshake can
-     * rebuild the provider when the client switches it mid-session. */
-    c->base_url = ctx->agent_cfg.base_url;
-    c->api_token = ctx->agent_cfg.api_token;
-    c->num_ctx = ctx->agent_cfg.num_ctx;
-    c->keep_alive_secs = ctx->agent_cfg.keep_alive_secs;
-    c->effort = ctx->agent_cfg.effort ? str_dup(ctx->agent_cfg.effort) : NULL;
-    if (ctx->agent_cfg.effort && !c->effort)
-        log_error("ws_chat_init: effort copy failed; using API default", NULL);
-
-    ws->on_message = ws_chat_on_message;
-    ws->on_close = ws_chat_on_close;
-    ws->userdata = c;
-
-    /* Wire shared read-mostly resources onto the per-connection Agent.
-     * These mirror what main.c sets on the REST-path shared agent. */
-    if (c->sm)
-        agent_set_session_manager(c->agent, c->sm);
-    if (ctx->metrics)
-        agent_set_metrics(c->agent, ctx->metrics);
-
-    /* D2: callbacks now act on the per-connection Agent, not the shared one */
-    agent_set_approval_callback(c->agent, ws_approval_cb, c);
-    agent_set_title_callback(c->agent, ws_title_update_cb, c);
-    agent_set_tool_start_callback(c->agent, ws_tool_start_cb, c);
-    agent_set_tool_end_callback(c->agent, ws_tool_end_cb, c);
-    agent_set_safety(c->agent, c->safety);
-
-    agent_set_ask_user_callback(c->agent, ws_ask_user_cb, c);
-
-    if (query && query[0] && c->sm && c->agent)
-    {
+    (void)ws;
+    if (!query || !query[0] || !c->sm || !c->agent) return;
         const char *sid_start = strstr(query, "session_id=");
         if (sid_start)
         {
@@ -1140,7 +1181,7 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
                 free(c->active_session_id);
                 c->active_session_id = str_dup(session_id);
 
-                Session *s = session_manager_load_session(c->sm, session_id);
+                Session *s = session_manager_load_session_alloc(c->sm, session_id);
                 if (s)
                 {
                     free(c->agent->session_id);
@@ -1148,17 +1189,17 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
 
                     /* J5: previously this only emitted a `history` frame to
                      * the client without populating `agent->messages`, so
-                     * the first `agent_run_streaming` would
+                     * the first `agent_run_streaming_new` would
                      * `agent_save_session` against a still-empty in-memory
                      * state — silently wiping the DB row's existing
                      * messages on the first turn after reconnect. Now we
-                     * mirror the logic that the in-line session_id_item
-                     * path below (around line 1249) uses: free prior
+                     * mirror the logic that the session_id_item frame path
+                     * uses: free prior
                      * agent->messages and copy the loaded session's
                      * messages in. The history frame to the client is
                      * still emitted so the UI shows the prior conversation.
                      * NOTE this does NOT save back — there is nothing to
-                     * add yet; the next `agent_run_streaming`
+                     * add yet; the next `agent_run_streaming_new`
                      * (`routes.c:1413`) does `agent_save_session` after
                      * appending the new user turn, which now correctly
                      * saves the full prior+new history instead of just
@@ -1217,13 +1258,11 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
                 }
             }
         }
-    }
+}
 
-    if (!c->active_session_id && c->agent && c->agent->session_id)
-        c->active_session_id = str_dup(c->agent->session_id);
-
-    ws_chat_emit_session_start(c);
-
+/* Emits the {"type":"ready"} frame once the connection is initialized. */
+static void ws_emit_ready(WSChatCtx *c, WSClient *ws)
+{
     cJSON *ready = cJSON_CreateObject();
     cJSON_AddStringToObject(ready, "type", "ready");
     if (c->agent && c->agent->session_id)
@@ -1232,6 +1271,74 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
     if (ready_str) ws_send_json(ws, ready_str);
     free(ready_str);
     cJSON_Delete(ready);
+}
+
+void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
+{
+    WSChatCtx *c = calloc(1, sizeof(WSChatCtx));
+    if (!c) return;
+
+    /* D2: mint per-connection Agent instead of sharing ctx->agent.
+     * Each WS client owns its own messages, session_id, and callbacks. */
+    c->agent = agent_create(&ctx->agent_cfg);
+    if (!c->agent)
+    {
+        log_error("ws_chat_init: agent_create failed", NULL);
+        free(c);
+        return;
+    }
+    c->sm = session_manager_retain(ctx->sm);
+    c->safety = ctx->safety;
+    c->ws = ws;
+    c->loop = ctx->loop;
+    c->server_ctx = ctx;
+    c->auth_generation = ctx->auth_generation;
+    c->next = ctx->ws_chat_contexts;
+    ctx->ws_chat_contexts = c;
+
+    /* ask_user_timeout (seconds, default 60) bounds how long a blocked
+     * ask_user tool call waits for a client reply before giving up. */
+    c->ask_user_timeout = ctx->conf
+        ? conf_get_int(ctx->conf, "ask_user_timeout", 60) : 60;
+
+    /* Copy the provider-creation params so the config handshake can
+     * rebuild the provider when the client switches it mid-session. */
+    c->base_url = ctx->agent_cfg.base_url;
+    c->api_token = ctx->agent_cfg.api_token;
+    c->num_ctx = ctx->agent_cfg.num_ctx;
+    c->keep_alive_secs = ctx->agent_cfg.keep_alive_secs;
+    c->effort = ctx->agent_cfg.effort ? str_dup(ctx->agent_cfg.effort) : NULL;
+    if (ctx->agent_cfg.effort && !c->effort)
+        log_error("ws_chat_init: effort copy failed; using API default", NULL);
+
+    ws->on_message = ws_chat_on_message;
+    ws->on_close = ws_chat_on_close;
+    ws->userdata = c;
+
+    /* Wire shared read-mostly resources onto the per-connection Agent.
+     * These mirror what main.c sets on the REST-path shared agent. */
+    if (c->sm)
+        agent_set_session_manager(c->agent, c->sm);
+    if (ctx->metrics)
+        agent_set_metrics(c->agent, ctx->metrics);
+
+    /* D2: callbacks now act on the per-connection Agent, not the shared one */
+    agent_set_approval_callback(c->agent, ws_approval_cb, c);
+    agent_set_title_callback(c->agent, ws_title_update_cb, c);
+    agent_set_tool_start_callback(c->agent, ws_tool_start_cb, c);
+    agent_set_tool_end_callback(c->agent, ws_tool_end_cb, c);
+    agent_set_safety(c->agent, c->safety);
+
+    agent_set_ask_user_callback(c->agent, ws_ask_user_cb, c);
+
+    ws_apply_query_session(c, ws, query);
+
+    if (!c->active_session_id && c->agent && c->agent->session_id)
+        c->active_session_id = str_dup(c->agent->session_id);
+
+    ws_chat_emit_session_start(c);
+
+    ws_emit_ready(c, ws);
 
     ws_chat_flush_queue(c);
 }

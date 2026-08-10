@@ -57,6 +57,44 @@ char *str_dup(const char *str);
 int str_append(char **target, const char *value);
 
 /**
+ * strlcpy - bounded copy with guaranteed NUL termination
+ * @dst: destination buffer, must be non-NULL and writable.
+ * @src: NUL-terminated source; must be non-NULL.
+ * @size: capacity of @dst in bytes, including room for the NUL.
+ *
+ * POSIX strlcpy semantics: copies at most @size - 1 bytes and always
+ * NUL-terminates @dst. Unlike strncpy it never pads with NULs and never
+ * leaves the buffer unterminated.
+ *
+ * On Apple these are provided by libSystem (under _FORTIFY_SOURCE they
+ * become __builtin___strlcat_chk macros, which would collide with a
+ * definition here), so the declarations and definitions below are
+ * non-Apple only. Semantics are identical either way.
+ *
+ * Return: the length of @src (the would-be copied length). Callers must
+ * check for truncation: a return >= @size means the copy was cut short.
+ * Never fails; thread-safe as long as the buffers are not shared.
+ */
+#if !defined(__APPLE__)
+size_t strlcpy(char *dst, const char *src, size_t size);
+
+/**
+ * strlcat - bounded append with guaranteed NUL termination
+ * @dst: NUL-terminated destination buffer, must be non-NULL and writable.
+ * @src: NUL-terminated source; must be non-NULL.
+ * @size: capacity of @dst in bytes, including room for the NUL.
+ *
+ * POSIX strlcat semantics: appends at most @size - strlen(dst) - 1 bytes
+ * and always NUL-terminates @dst.
+ *
+ * Return: the would-be total length (strlen(dst) + strlen(src)). Callers
+ * must check for truncation: a return >= @size means the append was cut
+ * short. Never fails; thread-safe as long as the buffers are not shared.
+ */
+size_t strlcat(char *dst, const char *src, size_t size);
+#endif
+
+/**
  * str_starts_with - prefix test
  * @str: string to test; NULL yields 0.
  * @prefix: prefix to look for; NULL yields 0. The empty string
@@ -112,7 +150,7 @@ StrArray str_split(const char *str, char delimiter);
 void str_array_free(StrArray *arr);
 
 /**
- * sanitize_json - normalize an LLM-produced JSON fragment
+ * sanitize_json_dup - normalize an LLM-produced JSON fragment
  * @str: NUL-terminated input; NULL yields NULL.
  *
  * Removes surrounding whitespace, optional ``` (or ```json) markdown
@@ -123,10 +161,10 @@ void str_array_free(StrArray *arr);
  * (free with free()), or NULL on allocation failure. Thread-safe; no
  * shared state.
  */
-char *sanitize_json(const char *str);
+char *sanitize_json_dup(const char *str);
 
 /**
- * str_truncate_ellipsis - hard-truncate a string with an omission marker
+ * str_truncate_ellipsis_dup - hard-truncate a string with an omission marker
  * @text: NUL-terminated input; NULL yields NULL.
  * @max_chars: maximum byte length of the result.
  *
@@ -138,6 +176,6 @@ char *sanitize_json(const char *str);
  * (free with free()), or NULL on allocation failure. Thread-safe; no
  * shared state.
  */
-char *str_truncate_ellipsis(const char *text, size_t max_chars);
+char *str_truncate_ellipsis_dup(const char *text, size_t max_chars);
 
 #endif

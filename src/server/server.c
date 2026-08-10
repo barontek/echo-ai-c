@@ -175,21 +175,31 @@ static void sse_write_done(uv_write_t *req, int status)
  * buffers. Declared in routes/routes.h; HTTP only — websocket clients
  * are ignored. Failures (allocation, queue full) drop the frame silently.
  * Non-atomic per frame; the loop serializes writes per handle. */
-void server_sse_write(Client *client, const char *data)
+int server_sse_write(Client *client, const char *data)
 {
-    if (!client || client->is_ws) return;
+    if (!client || client->is_ws) return -1;
     char *copy = str_dup(data);
-    if (!copy) return;
+    if (!copy)
+    {
+        log_error("server_sse_write: OOM duplicating frame", NULL);
+        return -1;
+    }
     uv_buf_t buf = {.base = copy, .len = strlen(copy)};
     uv_write_t *req = malloc(sizeof(uv_write_t));
-    if (!req) { free(copy); return; }
+    if (!req)
+    {
+        log_error("server_sse_write: OOM allocating write request", NULL);
+        free(copy);
+        return -1;
+    }
     req->data = copy;
     uv_write(req, (uv_stream_t *)&client->handle, &buf, 1, sse_write_done);
+    return 0;
 }
 
-void server_response(Client *client, int status, const char *content_type, const char *body)
+int server_response(Client *client, int status, const char *content_type, const char *body)
 {
-    if (!client || client->is_ws) return;
+    if (!client || client->is_ws) return -1;
 
     client->response_status = status;
     char status_buf[16];
@@ -217,7 +227,12 @@ void server_response(Client *client, int status, const char *content_type, const
             "Access-Control-Allow-Origin: *\r\n"
             "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
             "Access-Control-Allow-Headers: Content-Type, X-Unlock-Token\r\n"
-            "\r\n") < 0) return;
+            "\r\n") < 0)
+        {
+            log_error("server_response: OOM building 204 response",
+                      "req_id", client->req_id, NULL);
+            return -1;
+        }
     }
     else
     {
@@ -230,30 +245,43 @@ void server_response(Client *client, int status, const char *content_type, const
             "Access-Control-Allow-Headers: Content-Type, X-Unlock-Token\r\n"
             "\r\n"
             "%s",
-            status, status_str, ct, body_len, body ? body : "") < 0) return;
+            status, status_str, ct, body_len, body ? body : "") < 0)
+        {
+            log_error("server_response: OOM building response",
+                      "status", status_buf, "req_id", client->req_id, NULL);
+            return -1;
+        }
     }
 
     size_t resp_len = strlen(resp);
     uv_buf_t buf = {.base = resp, .len = resp_len};
     uv_write_t *req = malloc(sizeof(uv_write_t));
-    if (!req) { free(resp); return; }
+    if (!req)
+    {
+        log_error("server_response: OOM allocating write request",
+                  "status", status_buf, "req_id", client->req_id, NULL);
+        free(resp);
+        return -1;
+    }
     req->data = client;
     uv_write(req, (uv_stream_t *)&client->handle, &buf, 1, write_done);
+    return 0;
 }
 
-void server_response_json(Client *client, int status, const char *json)
+int server_response_json(Client *client, int status, const char *json)
 {
-    server_response(client, status, "application/json", json);
+    return server_response(client, status, "application/json", json);
 }
 
-void server_response_error(Client *client, int status, const char *msg)
+int server_response_error(Client *client, int status, const char *msg)
 {
     cJSON *json = cJSON_CreateObject();
     cJSON_AddStringToObject(json, "error", msg);
     char *str = cJSON_PrintUnformatted(json);
-    server_response_json(client, status, str);
+    int rc = server_response_json(client, status, str);
     free(str);
     cJSON_Delete(json);
+    return rc;
 }
 
 static void serve_static(Client *client, const char *path, ServerContext *ctx)

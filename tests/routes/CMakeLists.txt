@@ -21,6 +21,7 @@ add_executable(test_routes_session_handlers
     ../../src/utils/string_utils.c
     test_routes_session_handlers.c
 )
+target_compile_definitions(test_routes_session_handlers PRIVATE ROUTES_SESSION_ALLOC_TEST=1)
 target_include_directories(test_routes_session_handlers PRIVATE ../../src)
 target_link_libraries(test_routes_session_handlers PRIVATE echo_ai_test_deps)
 add_test(NAME test_routes_session_handlers COMMAND test_routes_session_handlers)

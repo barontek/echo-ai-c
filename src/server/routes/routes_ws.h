@@ -45,4 +45,19 @@ void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query);
  */
 void routes_ws_invalidate_auth(ServerContext *ctx);
 
+#ifdef ROUTES_WS_TEST
+/**
+ * routes_ws_test_set_alloc_fail - make the Nth allocation fail here
+ * @nth_allocation: 1-based index of the next calloc/str_dup call to fail;
+ *   -1 disables fault injection.
+ *
+ * Test-only hook. Resets the shared call counter, fails the Nth
+ * allocation (only that call), and leaves every other allocation to
+ * behave normally. Single-threaded tests only.
+ *
+ * Return: nothing.
+ */
+void routes_ws_test_set_alloc_fail(int nth_allocation);
+#endif
+
 #endif

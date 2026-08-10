@@ -102,51 +102,57 @@ Tool *tool_humanizer_create(SafetyConfig *safety);
 /* Test builds wire the registry by hand, so the real factories are skipped
  * to keep the test binary from linking every built-in tool module. */
 #ifndef REGISTRY_TEST
-void registry_init(SafetyConfig *safety)
+int registry_init(SafetyConfig *safety)
 {
     safety_global = safety;
     tool_count = 0;
 
-    registry_register(tool_bash_create(safety));
-    registry_register(tool_read_file_create(safety));
-    registry_register(tool_write_file_create(safety));
-    registry_register(tool_list_dir_create(safety));
-    registry_register(tool_glob_create(safety));
-    registry_register(tool_grep_create(safety));
-    registry_register(tool_web_fetch_create(safety));
-    registry_register(tool_web_search_create(safety));
-    registry_register(tool_replace_in_file_create(safety));
-    registry_register(tool_python_execute_create(safety));
-    registry_register(tool_rest_api_create(safety));
-    registry_register(tool_notes_create(safety));
-    registry_register(tool_git_create(safety));
-    registry_register(tool_ingest_document_create(safety));
-    registry_register(tool_semantic_search_create(safety));
-    registry_register(tool_deep_search_create(safety));
-    registry_register(tool_memory_create(safety));
-    registry_register(tool_delegate_create(safety));
-    registry_register(tool_sqlite_query_create(safety));
-    registry_register(tool_sqlite_schema_create(safety));
-    registry_register(tool_ask_user_create(safety));
-    registry_register(tool_humanizer_create(safety));
+    /* A failed registration (OOM in a tool factory, full table) leaves
+     * the tool absent; report the count so the caller can log context
+     * instead of a silently partial tool table. */
+    int failed = 0;
+    failed += registry_register(tool_bash_create(safety));
+    failed += registry_register(tool_read_file_create(safety));
+    failed += registry_register(tool_write_file_create(safety));
+    failed += registry_register(tool_list_dir_create(safety));
+    failed += registry_register(tool_glob_create(safety));
+    failed += registry_register(tool_grep_create(safety));
+    failed += registry_register(tool_web_fetch_create(safety));
+    failed += registry_register(tool_web_search_create(safety));
+    failed += registry_register(tool_replace_in_file_create(safety));
+    failed += registry_register(tool_python_execute_create(safety));
+    failed += registry_register(tool_rest_api_create(safety));
+    failed += registry_register(tool_notes_create(safety));
+    failed += registry_register(tool_git_create(safety));
+    failed += registry_register(tool_ingest_document_create(safety));
+    failed += registry_register(tool_semantic_search_create(safety));
+    failed += registry_register(tool_deep_search_create(safety));
+    failed += registry_register(tool_memory_create(safety));
+    failed += registry_register(tool_delegate_create(safety));
+    failed += registry_register(tool_sqlite_query_create(safety));
+    failed += registry_register(tool_sqlite_schema_create(safety));
+    failed += registry_register(tool_ask_user_create(safety));
+    failed += registry_register(tool_humanizer_create(safety));
+    return failed;
 }
 #endif
 
-void registry_register(Tool *tool)
+int registry_register(Tool *tool)
 {
-    if (tool_count >= MAX_TOOLS || !tool) return;
+    if (tool_count >= MAX_TOOLS || !tool) return -1;
 
     tool->enabled = 0; /* disabled by default, enabled via config */
     tools[tool_count++] = tool;
     log_info("registered tool", "name", tool->name, NULL);
+    return 0;
 }
 
-void registry_set_enabled(const char *names)
+int registry_set_enabled(const char *names)
 {
-    if (!names || !names[0]) return;
+    if (!names || !names[0]) return 0;
 
     char *buf = str_dup(names);
-    if (!buf) return;
+    if (!buf) return -1;
 
     char *save = NULL;
     char *tok = strtok_r(buf, ", ", &save);
@@ -162,6 +168,7 @@ void registry_set_enabled(const char *names)
         tok = strtok_r(NULL, ", ", &save);
     }
     free(buf);
+    return 0;
 }
 
 Tool *registry_get(const char *name)

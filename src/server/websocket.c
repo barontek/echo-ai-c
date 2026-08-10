@@ -121,12 +121,18 @@ static void ws_ping_timer_cb(uv_timer_t *timer)
     (void)ws_send_control(ws, 0x9, NULL, 0);
 }
 
-void ws_start_ping_timer(WSClient *ws)
+int ws_start_ping_timer(WSClient *ws)
 {
     ws->last_pong = time(NULL);
-    uv_timer_init(uv_handle_get_loop((uv_handle_t *)ws->handle), &ws->ping_timer);
+    /* uv_timer_init can fail only on OOM; report it so the caller can
+     * decide between retrying and closing the connection instead of
+     * silently running without a keepalive. */
+    if (uv_timer_init(uv_handle_get_loop((uv_handle_t *)ws->handle),
+                      &ws->ping_timer) != 0)
+        return -1;
     ws->ping_timer.data = ws;
     uv_timer_start(&ws->ping_timer, ws_ping_timer_cb, 15000, 15000);
+    return 0;
 }
 
 void ws_stop_ping_timer(WSClient *ws)
@@ -140,6 +146,70 @@ static void ws_alloc_cb(uv_handle_t *handle, size_t size, uv_buf_t *buf)
     buf->base = malloc(size);
     buf->len = size;
 }
+
+/* Parses the RFC 6455 frame header at data[*pos]. On success fills
+ * *opcode, *masked, *payload_len, copies the mask key (if masked) and
+ * advances *pos past the header; returns 1. Returns 0 when the buffer
+ * ends mid-header (caller treats that as "need more data"). */
+static int ws_frame_header(const unsigned char *data, size_t len, size_t *pos,
+                           int *opcode, int *masked, uint64_t *payload_len,
+                           unsigned char mask_key[4])
+{
+    if (len - *pos < 2) return 0;
+    unsigned char first = data[*pos];
+    unsigned char second = data[*pos + 1];
+    *opcode = first & 0x0F;
+    *masked = (second & 0x80) ? 1 : 0;
+    *payload_len = second & 0x7F;
+    *pos += 2;
+
+    if (*payload_len == 126)
+    {
+        if (len - *pos < 2) return 0;
+        *payload_len = ((uint64_t)data[*pos] << 8) | data[*pos + 1];
+        *pos += 2;
+    }
+    else if (*payload_len == 127)
+    {
+        if (len - *pos < 8) return 0;
+        *payload_len = 0;
+        for (int i = 0; i < 8; i++)
+            *payload_len = (*payload_len << 8) | data[*pos + i];
+        *pos += 8;
+    }
+
+    if (*masked)
+    {
+        if (len - *pos < 4) return 0;
+        memcpy(mask_key, data + *pos, 4);
+        *pos += 4;
+    }
+    return 1;
+}
+
+#ifdef WEBSOCKET_TEST
+/* Frame walker over a raw byte stream, sharing ws_frame_header with the
+ * real read loop (one implementation, not a mirror). Returns the number
+ * of bytes consumed: == len for a fully valid stream, otherwise the
+ * offset where parsing stopped (truncated header/payload). */
+size_t websocket_test_frame_walk(const unsigned char *data, size_t len)
+{
+    size_t pos = 0;
+    while (pos < len)
+    {
+        int opcode;
+        int masked;
+        uint64_t payload_len;
+        unsigned char mask_key[4];
+        if (!ws_frame_header(data, len, &pos, &opcode, &masked,
+                             &payload_len, mask_key))
+            break;
+        if ((uint64_t)(len - pos) < payload_len) break;
+        pos += (size_t)payload_len;
+    }
+    return pos;
+}
+#endif
 
 static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 {
@@ -168,37 +238,14 @@ static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 
     while (pos < (size_t)nread)
     {
-        if ((size_t)(nread - pos) < 2) break;
+        int opcode;
+        int masked;
+        uint64_t payload_len;
+        unsigned char mask_key[4];
 
-        unsigned char first = data[pos];
-        unsigned char second = data[pos + 1];
-        int opcode = first & 0x0F;
-        int masked = (second & 0x80) ? 1 : 0;
-        uint64_t payload_len = second & 0x7F;
-        pos += 2;
-
-        if (payload_len == 126)
-        {
-            if ((size_t)(nread - pos) < 2) break;
-            payload_len = ((uint64_t)data[pos] << 8) | data[pos + 1];
-            pos += 2;
-        }
-        else if (payload_len == 127)
-        {
-            if ((size_t)(nread - pos) < 8) break;
-            payload_len = 0;
-            for (int i = 0; i < 8; i++)
-                payload_len = (payload_len << 8) | data[pos + i];
-            pos += 8;
-        }
-
-        unsigned char mask_key[4] = {0, 0, 0, 0};
-        if (masked)
-        {
-            if ((size_t)(nread - pos) < 4) break;
-            memcpy(mask_key, data + pos, 4);
-            pos += 4;
-        }
+        if (!ws_frame_header(data, (size_t)nread, &pos, &opcode, &masked,
+                             &payload_len, mask_key))
+            break;
 
         if ((size_t)(nread - pos) < payload_len) break;
 

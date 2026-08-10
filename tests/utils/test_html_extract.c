@@ -21,7 +21,7 @@ int main(void)
 
 START_TEST(test_extracts_plain_text)
 {
-    char *out = html_extract_text("<html><body><p>Hello world this is fine.</p></body></html>",
+    char *out = html_extract_text_alloc("<html><body><p>Hello world this is fine.</p></body></html>",
                                   strlen("<html><body><p>Hello world this is fine.</p></body></html>"),
                                   1000);
     ck_assert_ptr_nonnull(out);
@@ -39,7 +39,7 @@ START_TEST(test_strips_boilerplate_tags)
         "<aside>Related links</aside>"
         "<div>Main content here now.</div>"
         "</body></html>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "Title: Test Page\n\nMain content here now.");
     free(out);
@@ -54,7 +54,7 @@ START_TEST(test_strips_script_and_style)
         "<style>p { color: red; }</style>"
         "<p>Real text content here.</p>"
         "</body></html>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "Real text content here.");
     free(out);
@@ -64,7 +64,7 @@ END_TEST
 START_TEST(test_decodes_entities)
 {
     const char *html = "<p>Fish &amp; chips &#65;&#x42; &lt;tag&gt; &quot;quoted&quot;</p>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "Fish & chips AB <tag> \"quoted\"");
     free(out);
@@ -74,7 +74,7 @@ END_TEST
 START_TEST(test_literal_ampersand_preserved)
 {
     const char *html = "<p>a && b && c && d</p>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "a && b && c && d");
     free(out);
@@ -85,7 +85,7 @@ START_TEST(test_block_tags_become_newlines)
 {
     const char *html = "<p>one two three four</p><p>five six seven eight</p>"
                        "<p>nine ten eleven twelve</p>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "one two three four\nfive six seven eight\nnine ten eleven twelve");
     free(out);
@@ -95,7 +95,7 @@ END_TEST
 START_TEST(test_collapses_whitespace)
 {
     const char *html = "<p>  lots   of\n\t spaces  here  </p>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "lots of spaces here");
     free(out);
@@ -105,7 +105,7 @@ END_TEST
 START_TEST(test_inline_tags_do_not_break_words)
 {
     const char *html = "<p>a very <b>bold</b> word now</p>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "a very bold word now");
     free(out);
@@ -115,7 +115,7 @@ END_TEST
 START_TEST(test_title_is_prefixed)
 {
     const char *html = "<html><head><title>My Page</title></head><body><p>hi there everyone now</p></body></html>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "Title: My Page\n\nhi there everyone now");
     free(out);
@@ -129,7 +129,7 @@ START_TEST(test_citations_collected)
         "<p>See <a href=\"https://example.com/a\">this link</a> and "
         "<a href=\"https://example.com/b\">that one</a>.</p>"
         "</body></html>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out,
                      "See this link [1] and that one [2].\n\n"
@@ -143,7 +143,7 @@ START_TEST(test_citation_deduplicated)
     const char *html =
         "<html><body><p><a href=\"https://example.com/a\">first</a> then "
         "<a href=\"https://example.com/a\">again</a>.</p></body></html>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out,
                      "first [1] then again [1].\n\nLinks:\n1. https://example.com/a\n");
@@ -166,7 +166,7 @@ START_TEST(test_nav_class_blocks_pruned)
         "<a href=\"u\">tag two</a></div>"
         "<article>Real article content here.</article>"
         "</body></html>";
-    char *out = html_extract_text(html, strlen(html), 1000);
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "Real article content here.");
     free(out);
@@ -184,7 +184,7 @@ START_TEST(test_small_budget_truncates_with_marker)
     n += (size_t)snprintf(html + n, sizeof(html) - n, "</p></body></html>");
     ck_assert_uint_le(n, sizeof(html));
 
-    char *out = html_extract_text(html, n, 120);
+    char *out = html_extract_text_alloc(html, n, 120);
     ck_assert_ptr_nonnull(out);
     ck_assert_uint_le(strlen(out), 120);
     ck_assert_int_eq(strncmp(out, "Title: Big Page\n\n", 17), 0);
@@ -199,7 +199,7 @@ END_TEST
 START_TEST(test_dispatch_html_by_type)
 {
     const char *html = "<html><body><p>typed html content here</p></body></html>";
-    char *out = content_extract_for_llm("text/html; charset=utf-8",
+    char *out = content_extract_for_llm_alloc("text/html; charset=utf-8",
                                         html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "typed html content here");
@@ -210,7 +210,7 @@ END_TEST
 START_TEST(test_dispatch_sniffs_missing_type)
 {
     const char *html = "<!DOCTYPE html><p>sniffed content works fine</p>";
-    char *out = content_extract_for_llm(NULL, html, strlen(html), 1000);
+    char *out = content_extract_for_llm_alloc(NULL, html, strlen(html), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "sniffed content works fine");
     free(out);
@@ -220,7 +220,7 @@ END_TEST
 START_TEST(test_dispatch_plain_text_passthrough)
 {
     const char *txt = "just some plain text";
-    char *out = content_extract_for_llm("text/plain", txt, strlen(txt), 1000);
+    char *out = content_extract_for_llm_alloc("text/plain", txt, strlen(txt), 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "just some plain text");
     free(out);
@@ -230,7 +230,7 @@ END_TEST
 START_TEST(test_dispatch_json_truncated)
 {
     const char *json = "{\"key\":\"value\"}";
-    char *out = content_extract_for_llm("application/json", json, strlen(json), 10);
+    char *out = content_extract_for_llm_alloc("application/json", json, strlen(json), 10);
     ck_assert_ptr_nonnull(out);
     ck_assert_uint_le(strlen(out), 10);
     free(out);
@@ -240,7 +240,7 @@ END_TEST
 START_TEST(test_dispatch_binary_descriptor)
 {
     const char *bin = "\x89PNG\r\n\x1a\n";
-    char *out = content_extract_for_llm("image/png", bin, 8, 1000);
+    char *out = content_extract_for_llm_alloc("image/png", bin, 8, 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out,
                      "Binary content (image/png, 8 bytes). "
@@ -257,10 +257,10 @@ START_TEST(test_oom_allocation_failure)
                        "<p>epsilon zeta eta theta</p></body></html>";
     size_t n = strlen(html);
     html_extract_test_set_alloc_fail(1);
-    char *out = html_extract_text(html, n, 1000);
+    char *out = html_extract_text_alloc(html, n, 1000);
     ck_assert_ptr_null(out);
     html_extract_test_set_alloc_fail(-1);
-    out = html_extract_text(html, n, 1000);
+    out = html_extract_text_alloc(html, n, 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "alpha beta gamma delta\nepsilon zeta eta theta");
     free(out);
@@ -274,21 +274,21 @@ START_TEST(test_oom_mid_parse_rolls_back)
     size_t n = strlen(html);
     /* Fail the final output allocation: must return NULL, not partial text. */
     html_extract_test_set_alloc_fail(2);
-    char *out = html_extract_text(html, n, 1000);
+    char *out = html_extract_text_alloc(html, n, 1000);
     ck_assert_ptr_null(out);
     html_extract_test_set_alloc_fail(-1);
-    out = html_extract_text(html, n, 1000);
+    out = html_extract_text_alloc(html, n, 1000);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "gamma delta kappa lambda\nmu nu xi omicron");
     free(out);
 }
 END_TEST
 
-/* ---- str_truncate_ellipsis ---- */
+/* ---- str_truncate_ellipsis_dup ---- */
 
 START_TEST(test_ellipsis_short_passthrough)
 {
-    char *out = str_truncate_ellipsis("short", 100);
+    char *out = str_truncate_ellipsis_dup("short", 100);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "short");
     free(out);
@@ -297,7 +297,7 @@ END_TEST
 
 START_TEST(test_ellipsis_truncates)
 {
-    char *out = str_truncate_ellipsis("0123456789abcdef", 10);
+    char *out = str_truncate_ellipsis_dup("0123456789abcdef", 10);
     ck_assert_ptr_nonnull(out);
     ck_assert_uint_le(strlen(out), 10);
     ck_assert_str_eq(out, "0123456789");
@@ -307,7 +307,7 @@ END_TEST
 
 START_TEST(test_ellipsis_keeps_marker_when_room)
 {
-    char *out = str_truncate_ellipsis("0123456789abcdef0123456789abcdef0123456789abcdef", 45);
+    char *out = str_truncate_ellipsis_dup("0123456789abcdef0123456789abcdef0123456789abcdef", 45);
     ck_assert_ptr_nonnull(out);
     ck_assert_uint_le(strlen(out), 45);
     ck_assert_str_eq(out, "012345678[... truncated, 3 chars omitted ...]");

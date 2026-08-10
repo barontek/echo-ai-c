@@ -50,7 +50,7 @@ int openai_compatible_reasoning_effort_valid(const char *effort);
 
 #ifdef OPENAI_COMPATIBLE_TEST
 /**
- * openai_compatible_test_parse_stream - parse a whole SSE payload as one buffer
+ * openai_compatible_test_parse_stream_alloc - parse a whole SSE payload as one buffer
  * @input: complete SSE response text ("data: ..." lines, optionally
  *   terminated by "data: [DONE]").
  * @on_chunk: callback fired once per content delta with the raw text
@@ -64,11 +64,11 @@ int openai_compatible_reasoning_effort_valid(const char *effort);
  * NULL on allocation or parse failure. Free with llm_response_free().
  * Thread-safe; no shared state.
  */
-LLMResponse *openai_compatible_test_parse_stream(
+LLMResponse *openai_compatible_test_parse_stream_alloc(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata);
 
 /**
- * openai_compatible_test_stream_fragments - parse SSE split across fragments
+ * openai_compatible_test_stream_fragments_alloc - parse SSE split across fragments
  * @fragments: array of byte fragments that together form the SSE payload.
  * @lengths: per-fragment byte lengths, or NULL to strlen() each fragment.
  * @count: number of fragments (>= 1).
@@ -83,12 +83,12 @@ LLMResponse *openai_compatible_test_parse_stream(
  * NULL on invalid arguments, allocation, or parse failure. Free with
  * llm_response_free(). Thread-safe; no shared state.
  */
-LLMResponse *openai_compatible_test_stream_fragments(
+LLMResponse *openai_compatible_test_stream_fragments_alloc(
     const char **fragments, size_t *lengths, int count,
     void (*on_chunk)(const char *, void *), void *userdata);
 
 /**
- * openai_compatible_test_build_url - resolve a chat-completions endpoint URL
+ * openai_compatible_test_build_url_alloc - resolve a chat-completions endpoint URL
  * @base_url: endpoint; a path already ending in /chat/completions is used
  *   as-is, a /v1 suffix gets /chat/completions appended, anything else gets
  *   /v1/chat/completions appended.
@@ -99,10 +99,10 @@ LLMResponse *openai_compatible_test_stream_fragments(
  * Return: caller-owned null-terminated URL string, or NULL on allocation
  * failure. Free with free(). Thread-safe; no shared state.
  */
-char *openai_compatible_test_build_url(const char *base_url);
+char *openai_compatible_test_build_url_alloc(const char *base_url);
 
 /**
- * openai_compatible_test_build_body - build a chat-completions request body
+ * openai_compatible_test_build_body_alloc - build a chat-completions request body
  * @model: model name string.
  * @msgs_json: pre-serialized "messages" array JSON.
  * @stream: 1 for a streaming request body, 0 otherwise.
@@ -120,7 +120,7 @@ char *openai_compatible_test_build_url(const char *base_url);
  * Return: caller-owned JSON string, or NULL on invalid effort or allocation
  * failure. Free with free(). Thread-safe; no shared state.
  */
-char *openai_compatible_test_build_body(const char *model, const char *msgs_json,
+char *openai_compatible_test_build_body_alloc(const char *model, const char *msgs_json,
                                         int stream, double temperature,
                                         const char *tools_json,
                                         const char *json_schema,

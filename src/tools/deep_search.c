@@ -10,11 +10,64 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef DEEP_SEARCH_TEST
+#include <stdarg.h>
+#endif
+
 #include "tool.h"
 #include "registry.h"
 #include "../safety/safety.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
+
+#ifdef DEEP_SEARCH_TEST
+/* Test-only allocator fault injection: shared counter across str_dup,
+ * asprintf and malloc so tests can fail the Nth allocation inside
+ * deep_search_execute. Only the test target defines DEEP_SEARCH_TEST. */
+static int deep_search_test_alloc_counter = 0;
+static int deep_search_test_alloc_fail_at = -1;
+
+void deep_search_test_set_alloc_fail(int nth_allocation)
+{
+    deep_search_test_alloc_counter = 0;
+    deep_search_test_alloc_fail_at = nth_allocation;
+}
+
+static char *deep_search_test_strdup(const char *s)
+{
+    deep_search_test_alloc_counter++;
+    if (deep_search_test_alloc_counter == deep_search_test_alloc_fail_at)
+        return NULL;
+    return str_dup(s);
+}
+
+static int deep_search_test_asprintf(char **strp, const char *fmt, ...)
+{
+    deep_search_test_alloc_counter++;
+    if (deep_search_test_alloc_counter == deep_search_test_alloc_fail_at)
+    {
+        *strp = NULL;
+        return -1;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    int rc = vasprintf(strp, fmt, ap);
+    va_end(ap);
+    return rc;
+}
+
+static void *deep_search_test_malloc(size_t size)
+{
+    deep_search_test_alloc_counter++;
+    if (deep_search_test_alloc_counter == deep_search_test_alloc_fail_at)
+        return NULL;
+    return malloc(size);
+}
+
+#define str_dup deep_search_test_strdup
+#define asprintf deep_search_test_asprintf
+#define malloc deep_search_test_malloc
+#endif
 
 static ToolResult *deep_search_execute(Tool *self, const char *args_json)
 {
@@ -31,6 +84,11 @@ static ToolResult *deep_search_execute(Tool *self, const char *args_json)
     }
 
     char *query = str_dup(cJSON_GetStringValue(query_json));
+    if (!query)
+    {
+        cJSON_Delete(args);
+        return tool_result_error("oom", "execution_error");
+    }
     cJSON_Delete(args);
 
     /* Step 1: search the web */
@@ -168,6 +226,14 @@ Tool *tool_deep_search_create(SafetyConfig *safety)
         "\"query\":{\"type\":\"string\",\"description\":\"Research query\"}"
         "},\"required\":[\"query\"]}"
     );
+    if (!t->name || !t->description || !t->parameters_schema)
+    {
+        free(t->name);
+        free(t->description);
+        free(t->parameters_schema);
+        free(t);
+        return NULL;
+    }
     t->execute = deep_search_execute;
     t->destroy = deep_search_destroy;
     t->ctx = NULL;

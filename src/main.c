@@ -20,6 +20,7 @@
 #include "llm/openai_oauth.h"
 #include "tools/registry.h"
 #include "tools/search_provider.h"
+#include "llm/factory.h"
 #include "safety/safety.h"
 #include "session/session_manager.h"
 #include "session/encryption.h"
@@ -43,7 +44,12 @@ static SafetyConfig *load_safety_config(Conf *conf)
 {
     SafetyConfig *safety = safety_config_create();
     if (!safety) return NULL;
-    safety_load_from_conf(safety, conf);
+    if (safety_load_from_conf(safety, conf) != 0)
+    {
+        log_error("failed to load safety config (allocation failure)", NULL);
+        safety_config_free(safety);
+        return NULL;
+    }
     if (!safety->workspace) safety->workspace = str_dup(".");
     return safety;
 }
@@ -118,7 +124,7 @@ static SessionManager *init_session_manager(Conf *conf)
     char *data_dir = NULL;
     if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0) return NULL;
 
-    char *password = encryption_resolve_password();
+    char *password = encryption_resolve_password_alloc();
     if (!password)
     {
         int is_first_run = encryption_first_run_detect(data_dir);
@@ -163,11 +169,16 @@ static void run_chat(Conf *conf)
     SafetyConfig *safety = load_safety_config(conf);
     if (!safety) { log_error("failed to load safety config", NULL); return; }
 
-    registry_init(safety);
+    {
+        int reg_failed = registry_init(safety);
+        if (reg_failed > 0)
+            log_error("tool registry partially initialized", "failed_count", NULL);
+    }
 
     {
         const char *enabled = conf_get(conf, "tools.enabled");
-        if (enabled) registry_set_enabled(enabled);
+        if (enabled && registry_set_enabled(enabled) != 0)
+            log_error("failed to enable tools from config", "names", enabled, NULL);
     }
 
     const char *sp_name = conf_get(conf, "search.provider");
@@ -242,7 +253,7 @@ static void run_chat(Conf *conf)
         if (line[0] == '\0') continue;
 
         printf("\n");
-        LLMResponse *resp = agent_run(agent, line);
+        LLMResponse *resp = agent_run_new(agent, line);
 
         if (resp && resp->content)
             printf("%s\n\n", resp->content);
@@ -318,11 +329,16 @@ static void run_cli(Conf *conf)
     SafetyConfig *safety = load_safety_config(conf);
     if (!safety) { log_error("failed to load safety config", NULL); return; }
 
-    registry_init(safety);
+    {
+        int reg_failed = registry_init(safety);
+        if (reg_failed > 0)
+            log_error("tool registry partially initialized", "failed_count", NULL);
+    }
 
     {
         const char *enabled = conf_get(conf, "tools.enabled");
-        if (enabled) registry_set_enabled(enabled);
+        if (enabled && registry_set_enabled(enabled) != 0)
+            log_error("failed to enable tools from config", "names", enabled, NULL);
     }
 
     {
@@ -470,7 +486,7 @@ static void run_cli(Conf *conf)
                 printf("Usage: /save <name>\n\n");
                 continue;
             }
-            Session *s = session_manager_load_session(g_session_manager, agent->session_id);
+            Session *s = session_manager_load_session_alloc(g_session_manager, agent->session_id);
             if (s)
             {
                 free(s->title);
@@ -499,7 +515,7 @@ static void run_cli(Conf *conf)
                 printf("Usage: /load <id>\n\n");
                 continue;
             }
-            Session *s = session_manager_load_session(g_session_manager, sid);
+            Session *s = session_manager_load_session_alloc(g_session_manager, sid);
             if (!s)
             {
                 printf("Session '%s' not found.\n\n", sid);
@@ -553,7 +569,7 @@ static void run_cli(Conf *conf)
         if (line[0] == '\0') continue;
 
         printf("\n");
-        LLMResponse *resp = agent_run(agent, line);
+        LLMResponse *resp = agent_run_new(agent, line);
 
         if (resp && resp->content)
         {
@@ -585,11 +601,16 @@ static void run_web(Conf *conf, const char *config_path)
     SafetyConfig *safety = load_safety_config(conf);
     if (!safety) { log_error("failed to load safety config", NULL); return; }
 
-    registry_init(safety);
+    {
+        int reg_failed = registry_init(safety);
+        if (reg_failed > 0)
+            log_error("tool registry partially initialized", "failed_count", NULL);
+    }
 
     {
         const char *enabled = conf_get(conf, "tools.enabled");
-        if (enabled) registry_set_enabled(enabled);
+        if (enabled && registry_set_enabled(enabled) != 0)
+            log_error("failed to enable tools from config", "names", enabled, NULL);
     }
 
     {
@@ -731,7 +752,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    log_init();
+    if (log_init() != 0)
+    {
+        fprintf(stderr, "fatal: logging subsystem unavailable (stderr not writable)\n");
+        return 1;
+    }
     if (debug) log_set_level(LOG_DEBUG);
     log_info("starting echo-ai", "mode", mode == MODE_CLI ? "cli" :
                                      mode == MODE_CHAT ? "chat" : "web", NULL);

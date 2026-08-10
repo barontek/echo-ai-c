@@ -17,6 +17,12 @@
  *
  * The index is a process-wide singleton with fixed capacity (MAX_DOCS
  * documents, MAX_TOKENS distinct terms); overflow and allocation
+ * failures are reported through the return value. The index is only
+ * committed (doc_count incremented) when the whole document fit.
+ *
+ * Return: 0 on success (or NULL content, which indexes nothing); -1
+ * when the index is full or an allocation failed. Thread-safety: not
+ * thread-safe; the caller serializes access. Overflow and allocation
  * failures are silently dropped, and the arrays are allocated lazily on
  * first use. A document whose indexing fails partway is not counted, so
  * the index stays consistent. The index lives for the whole process and
@@ -27,7 +33,7 @@
  * semantic_search_execute(), semantic_search_destroy(), or
  * semantic_search_test_reset(), which share the same static index.
  */
-void semantic_search_index_document(const char *content);
+int semantic_search_index_document(const char *content);
 
 /**
  * tool_semantic_search_create - construct the semantic_search tool

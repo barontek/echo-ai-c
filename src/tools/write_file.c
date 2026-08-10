@@ -62,7 +62,7 @@ static ToolResult *write_file_execute(Tool *self, const char *args_json)
         return tool_result_error("content exceeds max file size", "policy_denied");
     }
 
-    char *resolved = safety_resolve_path(ctx->safety, path);
+    char *resolved = safety_resolve_path_alloc(ctx->safety, path);
     if (!resolved)
     {
         free(path);

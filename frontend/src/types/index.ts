@@ -1,11 +1,16 @@
 // Centralized types for the application
 
+/** Session - one entry in the session list sidebar. */
 export interface Session {
   id: string;
   title: string;
   created_at: string;
 }
 
+/** Message - a chat message on the active chain. Optional ids link the
+ * branching model: parent_id chains the message, fork_group_id marks
+ * messages sharing a fork point. `title`/`created_at` are absent for
+ * inline messages; `thinking` holds the assistant's internal reasoning. */
 export interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
@@ -20,7 +25,7 @@ export interface Message {
   tool_name?: string;
 }
 
-/* Branching state for one fork point on the active chain: how many chains
+/** BranchInfo - branching state for one fork point on the active chain: how many chains
  * (live + snapshotted) share the fork point, and the live chain's position
  * among them (1-based). Keyed by the fork point message id as it appears in
  * the active chain. branchIds holds the snapshot record ids of the non-live
@@ -33,6 +38,9 @@ export interface BranchInfo {
   branchIds: string[];
 }
 
+/** ToolCall - a tool invocation. Renderers read `result`; the
+ * result_content/result_error fields are the raw backend wire shape and
+ * are normalized to `result` on ingestion. */
 export interface ToolCall {
   name: string;
   arguments: string | Record<string, unknown>;
@@ -47,6 +55,7 @@ export interface ToolCall {
   result_error?: string;
 }
 
+/** Config - the backend's runtime configuration (/api/config). */
 export interface Config {
   provider: string;
   model: string;
@@ -55,6 +64,8 @@ export interface Config {
   session_enabled: boolean;
 }
 
+/** ApprovalRequest - backend request to approve/deny a dangerous tool
+ * call; carried inside a stream frame of type 'approval_request'. */
 export interface ApprovalRequest {
   type: 'approval_request';
   request_id: string;
@@ -62,11 +73,17 @@ export interface ApprovalRequest {
   arguments: string;
 }
 
+/** AskUserRequest - backend request for a free-form user answer; carried
+ * inside a stream frame of type 'ask_user'. */
 export interface AskUserRequest {
   type: 'ask_user';
   question: string;
 }
 
+/** StreamEvent - one frame from the /ws/chat websocket. Which optional
+ * fields are populated depends on `type` (e.g. `content` only on
+ * 'content', `branches` only on 'branch_info', `fork_*` only on the
+ * 'done' frame after an edit/regenerate). */
 export interface StreamEvent {
   type:
     | 'ready'
@@ -116,6 +133,8 @@ export interface StreamEvent {
   }>;
 }
 
+/** ApiError - the backend's error envelope; `error` is the display
+ * message and `detail` an optional extra hint. */
 export interface ApiError {
   error: string;
   detail?: string;

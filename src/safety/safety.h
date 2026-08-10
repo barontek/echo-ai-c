@@ -75,11 +75,13 @@ void safety_config_free(SafetyConfig *cfg);
  * default list (bash, write_file, replace_in_file, git, python_execute,
  * delegate) is installed.
  *
- * Return: void. Parse/allocation failures are silent — the affected list
- * stays empty. Not thread-safe with respect to concurrent use of the same
- * cfg.
+ * Return: 0 on success; -1 when any policy field could not be allocated
+ * (workspace/audit path dup or list parse) — the config is then
+ * incomplete and the caller should abort with context rather than run
+ * with a silently weakened safety policy. Not thread-safe with respect
+ * to concurrent use of the same cfg.
  */
-void safety_load_from_conf(SafetyConfig *cfg, const Conf *conf);
+int safety_load_from_conf(SafetyConfig *cfg, const Conf *conf);
 
 /**
  * safety_check_path - reject unsafe paths before file access
@@ -93,7 +95,7 @@ void safety_load_from_conf(SafetyConfig *cfg, const Conf *conf);
  * (defaults .key .pem .env .token .password .aws .netrc .htpasswd .crt
  * .p12 plus cfg's list), and paths containing a blocked path (defaults
  * /etc/passwd /etc/shadow /etc/sudoers .git/config plus cfg's list). Use
- * safety_resolve_path()/safety_path_is_within_workspace() when
+ * safety_resolve_path_alloc()/safety_path_is_within_workspace() when
  * realpath-resolved checks are needed.
  *
  * Return: 1 if allowed, 0 if blocked. Never fails; thread-safe.
@@ -206,7 +208,7 @@ int safety_needs_approval(const SafetyConfig *cfg, const char *tool_name);
 int safety_audit_log(const SafetyConfig *cfg, const char *entry);
 
 /**
- * safety_resolve_path - canonicalize a path and pin it inside the workspace
+ * safety_resolve_path_alloc - canonicalize a path and pin it inside the workspace
  * @cfg: safety config; must be non-NULL and have workspace set.
  * @path: path to resolve (absolute, or relative to the workspace root),
  *   borrowed; NULL, or containing "..", returns NULL.
@@ -220,7 +222,7 @@ int safety_audit_log(const SafetyConfig *cfg, const char *entry);
  * any failure: bad arguments, realpath failure, outside the workspace, or
  * allocation failure. Thread-safe; no shared state.
  */
-char *safety_resolve_path(const SafetyConfig *cfg, const char *path);
+char *safety_resolve_path_alloc(const SafetyConfig *cfg, const char *path);
 
 /**
  * safety_path_is_within_workspace - is the canonical path under the workspace?

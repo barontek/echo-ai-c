@@ -5,6 +5,7 @@ add_executable(test_message
     ../../src/utils/json.c
     test_message.c
 )
+target_compile_definitions(test_message PRIVATE MESSAGE_TEST=1)
 target_include_directories(test_message PRIVATE ../../src)
 target_link_libraries(test_message PRIVATE echo_ai_test_deps)
 add_test(NAME test_message COMMAND test_message)
@@ -16,6 +17,7 @@ add_executable(test_context
     ../../src/utils/json.c
     test_context.c
 )
+target_compile_definitions(test_context PRIVATE CONTEXT_TEST=1)
 target_include_directories(test_context PRIVATE ../../src)
 target_link_libraries(test_context PRIVATE echo_ai_test_deps)
 add_test(NAME test_context COMMAND test_context)

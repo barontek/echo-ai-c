@@ -2,6 +2,15 @@ import { useChat } from '../context';
 
 const DESTRUCTIVE_TOOLS = new Set(['bash', 'write_file', 'memory', 'sqlite_query']);
 
+/**
+ * ApprovalDialog - overlay asking the user to approve/deny a dangerous
+ * tool call.
+ *
+ * Renders null when there is no pending approval (pendingApproval from
+ * useChat() is null — the overlay appears only while a request is
+ * waiting). Approve/Deny resolve the request via resolveApproval. Owns
+ * no effects.
+ */
 export function ApprovalDialog() {
   const { pendingApproval, resolveApproval } = useChat();
 

@@ -21,6 +21,54 @@ typedef struct {
     char *base_url;
 } BraveCtx;
 
+/* Converts a parsed Brave API response into the shared
+ * [{"title","url","snippet"}] JSON array string; caller frees. */
+static char *brave_results_to_json(cJSON *json)
+{
+    cJSON *web = cJSON_GetObjectItem(json, "web");
+    cJSON *results = web ? cJSON_GetObjectItem(web, "results") : NULL;
+
+    cJSON *out_arr = cJSON_CreateArray();
+    if (results && cJSON_IsArray(results))
+    {
+        int count = cJSON_GetArraySize(results);
+        for (int i = 0; i < count; i++)
+        {
+            cJSON *r = cJSON_GetArrayItem(results, i);
+            if (!r) continue;
+            cJSON *item = cJSON_CreateObject();
+            cJSON *title = cJSON_GetObjectItem(r, "title");
+            cJSON *url_item = cJSON_GetObjectItem(r, "url");
+            cJSON *desc = cJSON_GetObjectItem(r, "description");
+            if (title && title->valuestring)
+                cJSON_AddStringToObject(item, "title", title->valuestring);
+            if (url_item && url_item->valuestring)
+                cJSON_AddStringToObject(item, "url", url_item->valuestring);
+            if (desc && desc->valuestring)
+                cJSON_AddStringToObject(item, "snippet", desc->valuestring);
+            cJSON_AddItemToArray(out_arr, item);
+        }
+    }
+
+    char *result = cJSON_PrintUnformatted(out_arr);
+    cJSON_Delete(out_arr);
+    if (!result) return str_dup("(no results)");
+    return result;
+}
+
+#ifdef SEARCH_BRAVE_TEST
+/* Test-only hook: parse a raw Brave API response (no network). Caller
+ * frees the returned JSON string. */
+char *search_brave_test_parse_response(const char *raw)
+{
+    cJSON *json = cJSON_Parse(raw);
+    if (!json) return str_dup("Error: failed to parse Brave response");
+    char *result = brave_results_to_json(json);
+    cJSON_Delete(json);
+    return result;
+}
+#endif
+
 static char *search_brave_search(SearchProvider *self, const char *query, int num_results)
 {
     BraveCtx *ctx = self->ctx;
@@ -77,33 +125,8 @@ static char *search_brave_search(SearchProvider *self, const char *query, int nu
     cJSON *json = cJSON_Parse(buf.data);
     if (!json) { free(buf.data); return str_dup("Error: failed to parse Brave response"); }
 
-    cJSON *web = cJSON_GetObjectItem(json, "web");
-    cJSON *results = web ? cJSON_GetObjectItem(web, "results") : NULL;
+    char *result = brave_results_to_json(json);
 
-    cJSON *out_arr = cJSON_CreateArray();
-    if (results && cJSON_IsArray(results))
-    {
-        int count = cJSON_GetArraySize(results);
-        for (int i = 0; i < count; i++)
-        {
-            cJSON *r = cJSON_GetArrayItem(results, i);
-            if (!r) continue;
-            cJSON *item = cJSON_CreateObject();
-            cJSON *title = cJSON_GetObjectItem(r, "title");
-            cJSON *url_item = cJSON_GetObjectItem(r, "url");
-            cJSON *desc = cJSON_GetObjectItem(r, "description");
-            if (title && title->valuestring)
-                cJSON_AddStringToObject(item, "title", title->valuestring);
-            if (url_item && url_item->valuestring)
-                cJSON_AddStringToObject(item, "url", url_item->valuestring);
-            if (desc && desc->valuestring)
-                cJSON_AddStringToObject(item, "snippet", desc->valuestring);
-            cJSON_AddItemToArray(out_arr, item);
-        }
-    }
-
-    char *result = cJSON_PrintUnformatted(out_arr);
-    cJSON_Delete(out_arr);
     cJSON_Delete(json);
     free(buf.data);
 

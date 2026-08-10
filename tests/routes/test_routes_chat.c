@@ -125,45 +125,49 @@ int middleware_check_unlock_query(HTTPRequest *req, ServerContext *ctx)
 
 void client_close(Client *client) { (void)client; captured_close_count++; }
 
-void server_response(Client *client, int status, const char *content_type,
+int server_response(Client *client, int status, const char *content_type,
                      const char *body)
 {
     (void)client; (void)content_type;
     captured_status = status;
     free(captured_body);
     captured_body = body ? str_dup(body) : NULL;
+    return 0;
 }
 
-void server_response_json(Client *client, int status, const char *json)
+int server_response_json(Client *client, int status, const char *json)
 {
     server_response(client, status, "application/json", json);
+    return 0;
 }
 
-void server_response_error(Client *client, int status, const char *msg)
+int server_response_error(Client *client, int status, const char *msg)
 {
     (void)client;
     captured_status = status;
     free(captured_body);
     captured_body = msg ? str_dup(msg) : NULL;
+    return 0;
 }
 
-void server_sse_write(Client *client, const char *data)
+int server_sse_write(Client *client, const char *data)
 {
     (void)client;
-    if (!data) return;
+    if (!data) return -1;
     size_t existing = strlen(captured_sse_buf);
     size_t remain = sizeof(captured_sse_buf) - existing - 1;
     if (remain > 0) strncat(captured_sse_buf, data, remain);
     captured_sse_count++;
+    return 0;
 }
 
-LLMResponse *agent_run(Agent *agent, const char *user_input)
+LLMResponse *agent_run_new(Agent *agent, const char *user_input)
 {
     (void)agent; (void)user_input;
     return stub_agent_run_resp;
 }
 
-LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
+LLMResponse *agent_run_streaming_new(Agent *agent, const char *user_input,
                                   void (*on_chunk)(const char *, void *),
                                   void *userdata)
 {

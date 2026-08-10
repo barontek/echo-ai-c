@@ -24,24 +24,24 @@
  * Registry owns all created Tool objects and releases them via their
  * destroy() callbacks in registry_destroy().
  *
- * Return: nothing; tools whose factory returns NULL are silently skipped
- * — the registry emits no log entry for a failed factory. Not
- * thread-safe — call once on startup, before any agent runs.
+ * Return: the number of tool registrations that failed (OOM in a tool
+ * factory or a full table); 0 means every built-in tool registered.
+ * Not thread-safe; call once at startup.
  */
-void registry_init(SafetyConfig *safety);
+int registry_init(SafetyConfig *safety);
 
 /**
  * registry_register - hand a Tool over to the registry
  * @tool: caller-allocated Tool; ownership transfers to the registry.
  *
  * The tool is set to disabled and appended to the table; it is
- * released via its destroy() callback by registry_destroy(). Silently
- * ignored when the table is full (MAX_TOOLS) or tool is NULL.
+ * released via its destroy() callback by registry_destroy().
  *
- * Return: nothing. Not thread-safe; call during setup, not while tools
- * are running.
+ * Return: 0 on success; -1 when the tool is NULL or the table is full
+ * (MAX_TOOLS) — the tool is NOT registered in that case. Not
+ * thread-safe; call during setup, not while tools are running.
  */
-void registry_register(Tool *tool);
+int registry_register(Tool *tool);
 
 /**
  * registry_set_enabled - enable tools named in a comma/space-separated list
@@ -49,11 +49,13 @@ void registry_register(Tool *tool);
  *   duration of the call; NULL or empty is a no-op.
  *
  * Each listed name is matched against registered tools and enabled;
- * unknown or unregistered names are silently ignored.
+ * unknown or unregistered names are silently ignored (forward
+ * compatibility with config files naming tools this build lacks).
  *
- * Return: nothing. Not thread-safe.
+ * Return: 0 on success; -1 on allocation failure (no names enabled).
+ * Not thread-safe.
  */
-void registry_set_enabled(const char *names);
+int registry_set_enabled(const char *names);
 
 /**
  * registry_get - look up an enabled tool by name

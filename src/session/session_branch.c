@@ -266,19 +266,11 @@ static void session_truncate_messages(Session *s, int index)
     s->messages_count = index;
 }
 
-int session_manager_fork_branch(SessionManager *sm, const char *session_id,
-                                const char *message_id, int index,
-                                const char *new_content,
-                                SessionManagerForkResult *out)
+/* Resolves the fork point to a message index: by message id when given,
+ * else by the raw index. Returns -1 when the resolved index is out of
+ * range. */
+static int branch_find_fork_index(Session *s, const char *message_id, int index)
 {
-    if (out) memset(out, 0, sizeof(*out));
-    if (!sm || !session_id || !sm->key_initialized || !sm->db || !out)
-        return -1;
-
-    session_manager_lock(sm);
-    Session *s = session_manager_load_session_nolock(sm, session_id);
-    if (!s) { session_manager_unlock(sm); return -1; }
-
     int fi = -1;
     if (message_id)
     {
@@ -289,12 +281,21 @@ int session_manager_fork_branch(SessionManager *sm, const char *session_id,
     if (fi < 0)
         fi = index;
     if (fi < 0 || fi >= s->messages_count)
-    {
-        session_free(s);
-        session_manager_unlock(sm);
         return -1;
-    }
+    return fi;
+}
 
+
+/* Performs the fork once the fork point index is known: mints ids,
+ * snapshots the pre-fork chain, truncates the live array, re-births the
+ * chain, persists, and fills *out. The session must be loaded and the
+ * manager lock held. Returns 0 on success, -1 on any failure (the
+ * session on disk is untouched on failure — all-or-nothing per plan
+ * §3.2). */
+static int branch_do_fork(SessionManager *sm, Session *s, int fi,
+                          const char *new_content,
+                          SessionManagerForkResult *out)
+{
     int rc = -1;
     cJSON *list = NULL;
     char *created_at = NULL;
@@ -416,6 +417,32 @@ cleanup:
     free(created_at);
     free(fork_message_id);
     free(fork_group_id);
+    return rc;
+}
+
+
+int session_manager_fork_branch(SessionManager *sm, const char *session_id,
+                               const char *message_id, int index,
+                               const char *new_content,
+                               SessionManagerForkResult *out)
+{
+    if (out) memset(out, 0, sizeof(*out));
+    if (!sm || !session_id || !sm->key_initialized || !sm->db || !out)
+        return -1;
+
+    session_manager_lock(sm);
+    Session *s = session_manager_load_session_nolock_alloc(sm, session_id);
+    if (!s) { session_manager_unlock(sm); return -1; }
+
+    int fi = branch_find_fork_index(s, message_id, index);
+    if (fi < 0)
+    {
+        session_free(s);
+        session_manager_unlock(sm);
+        return -1;
+    }
+
+    int rc = branch_do_fork(sm, s, fi, new_content, out);
     session_free(s);
     session_manager_unlock(sm);
     return rc;
@@ -428,7 +455,7 @@ int session_manager_switch_branch(SessionManager *sm, const char *session_id,
         return -1;
 
     session_manager_lock(sm);
-    Session *s = session_manager_load_session_nolock(sm, session_id);
+    Session *s = session_manager_load_session_nolock_alloc(sm, session_id);
     if (!s) { session_manager_unlock(sm); return -1; }
 
     int rc = -1;
@@ -519,14 +546,14 @@ cleanup:
  * when the agent context is saved over the live chain after the run, so
  * the marker is re-applied here. All-or-nothing: on any failure the
  * session is unchanged on disk and NULL is returned. Caller frees. */
-char *session_manager_tag_message(SessionManager *sm, const char *session_id,
+char *session_manager_tag_message_new(SessionManager *sm, const char *session_id,
                                   int index, const char *fork_group_id)
 {
     if (!sm || !session_id || !fork_group_id || !sm->key_initialized || !sm->db)
         return NULL;
 
     session_manager_lock(sm);
-    Session *s = session_manager_load_session_nolock(sm, session_id);
+    Session *s = session_manager_load_session_nolock_alloc(sm, session_id);
     if (!s) { session_manager_unlock(sm); return NULL; }
 
     int rc = -1;
@@ -608,7 +635,7 @@ char *session_manager_branch_info_alloc(SessionManager *sm, const char *session_
     if (!sm || !session_id || !sm->key_initialized || !sm->db) return NULL;
 
     session_manager_lock(sm);
-    Session *s = session_manager_load_session_nolock(sm, session_id);
+    Session *s = session_manager_load_session_nolock_alloc(sm, session_id);
     if (!s) { session_manager_unlock(sm); return NULL; }
 
     char *result = NULL;

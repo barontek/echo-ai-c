@@ -41,7 +41,7 @@ static ToolResult *read_file_execute(Tool *self, const char *args_json)
         return tool_result_error("path rejected by safety policy", "policy_denied");
     }
 
-    char *resolved = safety_resolve_path(ctx->safety, path);
+    char *resolved = safety_resolve_path_alloc(ctx->safety, path);
     free(path);
     if (!resolved) return tool_result_error("path resolution failed", "execution_error");
 

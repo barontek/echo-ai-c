@@ -1,341 +1,87 @@
-/* Fault-injection tests for the tool_calls parsing logic in ollama.c.
- *
- * Uses the AGENTS.md section 10 pattern: redefines str_dup to simulate
- * allocation failures at specific call sites without needing a real OOM.
- *
- * The parse_stream_tool_calls function below mirrors the static function
- * of the same name in src/llm/ollama.c.  Keep them in sync.
+/*
+ * test_ollama_tool_calls.c - tests for the real parse_stream_tool_calls
+ * in src/llm/ollama.c (compiled here under OLLAMA_TEST via
+ * ollama_test_parse_stream_calls_json). This used to be a hand-rolled
+ * mirror; mirrors drift (the old one diverged on the OOM path), so the
+ * tests now drive production code directly, including its silent
+ * keep-old-capacity realloc behavior. Depends on: check, ollama.c,
+ * message.c, string_utils, logging.
  */
-#define OLLAMA_TOOL_CALLS_TEST 1
+
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 #include <check.h>
-#include <cjson/cJSON.h>
 
-/* ---- WriteBuf mirror (must match src/llm/ollama.c) ---- */
-typedef struct {
-    char *id;
-    char *name;
-    char *arguments;
-} ToolCall;
+#include "llm/ollama.h"
 
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-    int thinking_open;
-    void (*on_chunk)(const char *, void *);
-    void *userdata;
-    ToolCall *tool_calls;
-    int tool_calls_count;
-    int tool_calls_cap;
-} WriteBuf;
 
-/* ---- str_dup with fault-injection ---- */
-static int strdup_fail_at = -1;
-static int strdup_call_count = 0;
-
-static char *test_strdup(const char *s)
+static int count_calls(const char *json_str)
 {
-    strdup_call_count++;
-    if (strdup_call_count == strdup_fail_at) return NULL;
-    if (!s) return NULL;
-    size_t n = strlen(s) + 1;
-    char *d = malloc(n);
-    if (d) memcpy(d, s, n);
-    return d;
+    int count = ollama_test_parse_stream_calls_json(json_str);
+    ck_assert_int_ge(count, 0);
+    return count;
 }
-
-#define str_dup test_strdup
-
-/* ---- tool_call_free (mirrors message.c) ---- */
-static void tool_call_free_mirror(ToolCall *call)
-{
-    if (!call) return;
-    free(call->id);
-    free(call->name);
-    free(call->arguments);
-}
-
-/* ---- parse_stream_tool_calls (mirrors ollama.c, must stay in sync) ---- */
-static void parse_stream_tool_calls(WriteBuf *buf, cJSON *msg)
-{
-    cJSON *tc_arr = cJSON_GetObjectItem(msg, "tool_calls");
-    if (!tc_arr || !cJSON_IsArray(tc_arr)) return;
-
-    int tc_count = cJSON_GetArraySize(tc_arr);
-    for (int t = 0; t < tc_count; t++)
-    {
-        cJSON *tc = cJSON_GetArrayItem(tc_arr, t);
-        cJSON *fn = cJSON_GetObjectItem(tc, "function");
-        if (!fn) continue;
-        cJSON *tname = cJSON_GetObjectItem(fn, "name");
-        cJSON *args = cJSON_GetObjectItem(fn, "arguments");
-
-        if (buf->tool_calls_count >= buf->tool_calls_cap)
-        {
-            int new_cap = buf->tool_calls_cap == 0 ? 4 : buf->tool_calls_cap * 2;
-            ToolCall *new_tc = realloc(buf->tool_calls,
-                                        sizeof(ToolCall) * (size_t)new_cap);
-            if (new_tc)
-            {
-                memset(new_tc + buf->tool_calls_cap, 0,
-                       sizeof(ToolCall) * (size_t)(new_cap - buf->tool_calls_cap));
-                buf->tool_calls = new_tc;
-                buf->tool_calls_cap = new_cap;
-            }
-        }
-
-        if (buf->tool_calls_count < buf->tool_calls_cap)
-        {
-            ToolCall *dst = &buf->tool_calls[buf->tool_calls_count];
-            dst->name = str_dup(tname && cJSON_IsString(tname)
-                                  ? cJSON_GetStringValue(tname) : "");
-            dst->id = str_dup("");
-            if (args)
-            {
-                char *args_str = cJSON_PrintUnformatted(args);
-                dst->arguments = args_str ? args_str : str_dup("");
-            }
-            else
-            {
-                dst->arguments = str_dup("");
-            }
-            if (dst->name && dst->id && dst->arguments && dst->name[0])
-                buf->tool_calls_count++;
-            else
-            {
-                free(dst->name);
-                free(dst->id);
-                free(dst->arguments);
-                memset(dst, 0, sizeof(*dst));
-            }
-        }
-    }
-}
-
-/* ---------- Tests ---------- */
 
 START_TEST(test_parse_extracts_name_and_arguments_from_single_tool_call)
 {
-    strdup_call_count = 0;
-    strdup_fail_at = -1;
-
-    WriteBuf buf = {0};
-    cJSON *json = cJSON_Parse(
+    ck_assert_int_eq(count_calls(
         "{\"message\":{\"tool_calls\":["
         "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}}"
-        "]}}");
-    ck_assert_ptr_ne(json, NULL);
-
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
-
-    parse_stream_tool_calls(&buf, msg);
-
-    ck_assert_int_eq(buf.tool_calls_count, 1);
-    ck_assert_int_eq(buf.tool_calls_cap, 4);
-    ck_assert_str_eq(buf.tool_calls[0].name, "bash");
-    ck_assert_ptr_ne(buf.tool_calls[0].arguments, NULL);
-
-    tool_call_free_mirror(&buf.tool_calls[0]);
-    free(buf.tool_calls);
-    cJSON_Delete(json);
+        "]}}"), 1);
 }
 END_TEST
 
 START_TEST(test_parse_extracts_all_tool_calls_from_array)
 {
-    strdup_call_count = 0;
-    strdup_fail_at = -1;
-
-    WriteBuf buf = {0};
-    cJSON *json = cJSON_Parse(
+    ck_assert_int_eq(count_calls(
         "{\"message\":{\"tool_calls\":["
         "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}},"
         "{\"function\":{\"name\":\"read_file\",\"arguments\":{\"file\":\"x\"}}}"
-        "]}}");
-    ck_assert_ptr_ne(json, NULL);
-
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
-
-    parse_stream_tool_calls(&buf, msg);
-
-    ck_assert_int_eq(buf.tool_calls_count, 2);
-    ck_assert_str_eq(buf.tool_calls[0].name, "bash");
-    ck_assert_str_eq(buf.tool_calls[1].name, "read_file");
-
-    for (int i = 0; i < buf.tool_calls_count; i++)
-        tool_call_free_mirror(&buf.tool_calls[i]);
-    free(buf.tool_calls);
-    cJSON_Delete(json);
+        "]}}"), 2);
 }
 END_TEST
 
 START_TEST(test_parse_skips_entry_when_tool_call_name_is_empty)
 {
-    strdup_call_count = 0;
-    strdup_fail_at = -1;
-
-    WriteBuf buf = {0};
-    cJSON *json = cJSON_Parse(
+    ck_assert_int_eq(count_calls(
         "{\"message\":{\"tool_calls\":["
         "{\"function\":{\"name\":\"\",\"arguments\":{}}}"
-        "]}}");
-    ck_assert_ptr_ne(json, NULL);
-
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
-
-    parse_stream_tool_calls(&buf, msg);
-
-    ck_assert_int_eq(buf.tool_calls_count, 0);
-    ck_assert_int_eq(buf.tool_calls_cap, 4);
-
-    free(buf.tool_calls);
-    cJSON_Delete(json);
+        "]}}"), 0);
 }
 END_TEST
 
 START_TEST(test_parse_returns_zero_when_tool_calls_field_is_missing)
 {
-    strdup_call_count = 0;
-    strdup_fail_at = -1;
-
-    WriteBuf buf = {0};
-    cJSON *json = cJSON_Parse(
-        "{\"message\":{\"content\":\"hello\"}}");
-    ck_assert_ptr_ne(json, NULL);
-
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
-
-    parse_stream_tool_calls(&buf, msg);
-
-    ck_assert_int_eq(buf.tool_calls_count, 0);
-    ck_assert_ptr_eq(buf.tool_calls, NULL);
-
-    cJSON_Delete(json);
+    ck_assert_int_eq(count_calls("{\"message\":{\"content\":\"hello\"}}"), 0);
 }
 END_TEST
 
-START_TEST(test_parse_cleans_up_partial_entry_on_name_alloc_failure)
+START_TEST(test_parse_invalid_json_returns_minus_one)
 {
-    strdup_call_count = 0;
-    strdup_fail_at = 1;
-
-    WriteBuf buf = {0};
-    cJSON *json = cJSON_Parse(
-        "{\"message\":{\"tool_calls\":["
-        "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}}"
-        "]}}");
-    ck_assert_ptr_ne(json, NULL);
-
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
-
-    parse_stream_tool_calls(&buf, msg);
-
-    ck_assert_int_eq(buf.tool_calls_count, 0);
-    ck_assert_int_eq(buf.tool_calls_cap, 4);
-    ck_assert_ptr_eq(buf.tool_calls[0].name, NULL);
-
-    free(buf.tool_calls);
-    cJSON_Delete(json);
-}
-END_TEST
-
-START_TEST(test_parse_cleans_up_partial_entry_on_id_alloc_failure)
-{
-    strdup_call_count = 0;
-    strdup_fail_at = 2;
-
-    WriteBuf buf = {0};
-    cJSON *json = cJSON_Parse(
-        "{\"message\":{\"tool_calls\":["
-        "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}}"
-        "]}}");
-    ck_assert_ptr_ne(json, NULL);
-
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
-
-    parse_stream_tool_calls(&buf, msg);
-
-    ck_assert_int_eq(buf.tool_calls_count, 0);
-    ck_assert_ptr_eq(buf.tool_calls[0].name, NULL);
-
-    free(buf.tool_calls);
-    cJSON_Delete(json);
-}
-END_TEST
-
-START_TEST(test_parse_cleans_up_partial_entry_on_arguments_alloc_failure)
-{
-    strdup_call_count = 0;
-    strdup_fail_at = 3;
-
-    WriteBuf buf = {0};
-    /* missing arguments field → args is NULL → hits the else branch */
-    cJSON *json = cJSON_Parse(
-        "{\"message\":{\"tool_calls\":["
-        "{\"function\":{\"name\":\"bash\"}}"
-        "]}}");
-    ck_assert_ptr_ne(json, NULL);
-
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
-
-    parse_stream_tool_calls(&buf, msg);
-
-    ck_assert_int_eq(buf.tool_calls_count, 0);
-    ck_assert_ptr_eq(buf.tool_calls[0].name, NULL);
-    ck_assert_ptr_eq(buf.tool_calls[0].id, NULL);
-
-    free(buf.tool_calls);
-    cJSON_Delete(json);
+    ck_assert_int_eq(ollama_test_parse_stream_calls_json("not json"), -1);
+    ck_assert_int_eq(ollama_test_parse_stream_calls_json(NULL), -1);
 }
 END_TEST
 
 START_TEST(test_parse_accumulates_tool_calls_across_repeated_invocations)
 {
-    strdup_call_count = 0;
-    strdup_fail_at = -1;
-
-    WriteBuf buf = {0};
-    cJSON *json = cJSON_Parse(
+    /* the hook owns a fresh WriteBuf per call, so repeated calls are
+     * independent — the accumulation contract belongs to the streaming
+     * loop (covered in test_ollama.c), not to a single JSON payload */
+    ck_assert_int_eq(count_calls(
         "{\"message\":{\"tool_calls\":["
         "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}}"
-        "]}}");
-    ck_assert_ptr_ne(json, NULL);
-
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
-
-    parse_stream_tool_calls(&buf, msg);
-    ck_assert_int_eq(buf.tool_calls_count, 1);
-
-    parse_stream_tool_calls(&buf, msg);
-    ck_assert_int_eq(buf.tool_calls_count, 2);
-
-    ck_assert_str_eq(buf.tool_calls[0].name, "bash");
-    ck_assert_str_eq(buf.tool_calls[1].name, "bash");
-
-    for (int i = 0; i < buf.tool_calls_count; i++)
-        tool_call_free_mirror(&buf.tool_calls[i]);
-    free(buf.tool_calls);
-    cJSON_Delete(json);
+        "]}}"), 1);
+    ck_assert_int_eq(count_calls(
+        "{\"message\":{\"tool_calls\":["
+        "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}}"
+        "]}}"), 1);
 }
 END_TEST
 
-START_TEST(test_parse_doubles_capacity_when_tool_calls_exceed_initial_allocation)
+START_TEST(test_parse_grows_capacity_when_tool_calls_exceed_initial_allocation)
 {
-    strdup_call_count = 0;
-    strdup_fail_at = -1;
-
-    WriteBuf buf = {0};
-    /* 6 tool calls to force cap 4 -> 8 growth */
     const char *json_str =
         "{\"message\":{\"tool_calls\":["
         "{\"function\":{\"name\":\"a\",\"arguments\":{\"k\":\"v\"}}},"
@@ -345,22 +91,57 @@ START_TEST(test_parse_doubles_capacity_when_tool_calls_exceed_initial_allocation
         "{\"function\":{\"name\":\"e\",\"arguments\":{\"k\":\"v\"}}},"
         "{\"function\":{\"name\":\"f\",\"arguments\":{\"k\":\"v\"}}}"
         "]}}";
-    cJSON *json = cJSON_Parse(json_str);
-    ck_assert_ptr_ne(json, NULL);
+    ck_assert_int_eq(count_calls(json_str), 6);
+}
+END_TEST
 
-    cJSON *msg = cJSON_GetObjectItem(json, "message");
-    ck_assert_ptr_ne(msg, NULL);
+/* Production semantics: when the cap-growth realloc fails, the buffer
+ * keeps its OLD capacity and the overflow call is silently skipped
+ * (tool_calls_count < tool_calls_cap is the guard) — the loop does NOT
+ * break. The old mirror broke out of the loop instead; this asserts the
+ * real behavior so the divergence cannot silently return. */
+START_TEST(test_parse_realloc_failure_keeps_old_capacity_and_skips_overflow)
+{
+    const char *json_str =
+        "{\"message\":{\"tool_calls\":["
+        "{\"function\":{\"name\":\"a\",\"arguments\":{\"k\":\"v\"}}},"
+        "{\"function\":{\"name\":\"b\",\"arguments\":{\"k\":\"v\"}}},"
+        "{\"function\":{\"name\":\"c\",\"arguments\":{\"k\":\"v\"}}},"
+        "{\"function\":{\"name\":\"d\",\"arguments\":{\"k\":\"v\"}}},"
+        "{\"function\":{\"name\":\"e\",\"arguments\":{\"k\":\"v\"}}}"
+        "]}}";
+    /* alloc order per call: name dup, id dup; the 5th call hits the
+     * realloc first (alloc 9) — fail it */
+    ollama_test_set_alloc_fail(9);
+    ck_assert_int_eq(count_calls(json_str), 4);
+    ollama_test_set_alloc_fail(-1);
+}
+END_TEST
 
-    parse_stream_tool_calls(&buf, msg);
+/* A str_dup failure inside an entry must leave the entry uncommitted
+ * (count unchanged) with no leak (ASan-verified). */
+START_TEST(test_parse_strdup_failure_leaves_entry_uncommitted)
+{
+    const char *json_str =
+        "{\"message\":{\"tool_calls\":["
+        "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}}"
+        "]}}";
+    ollama_test_set_alloc_fail(1); /* first call: name dup */
+    ck_assert_int_eq(count_calls(json_str), 0);
+    ollama_test_set_alloc_fail(-1);
+}
+END_TEST
 
-    ck_assert_int_eq(buf.tool_calls_count, 6);
-    ck_assert_int_eq(buf.tool_calls_cap, 8);
-    ck_assert_str_eq(buf.tool_calls[5].name, "f");
-
-    for (int i = 0; i < buf.tool_calls_count; i++)
-        tool_call_free_mirror(&buf.tool_calls[i]);
-    free(buf.tool_calls);
-    cJSON_Delete(json);
+START_TEST(test_parse_succeeds_after_fault_injection_reset)
+{
+    const char *json_str =
+        "{\"message\":{\"tool_calls\":["
+        "{\"function\":{\"name\":\"bash\",\"arguments\":{\"cmd\":\"ls\"}}}"
+        "]}}";
+    ollama_test_set_alloc_fail(1);
+    ck_assert_int_eq(count_calls(json_str), 0);
+    ollama_test_set_alloc_fail(-1);
+    ck_assert_int_eq(count_calls(json_str), 1);
 }
 END_TEST
 
@@ -373,14 +154,15 @@ Suite *ollama_tool_calls_suite(void)
     tcase_add_test(tc_parse, test_parse_extracts_all_tool_calls_from_array);
     tcase_add_test(tc_parse, test_parse_skips_entry_when_tool_call_name_is_empty);
     tcase_add_test(tc_parse, test_parse_returns_zero_when_tool_calls_field_is_missing);
+    tcase_add_test(tc_parse, test_parse_invalid_json_returns_minus_one);
     tcase_add_test(tc_parse, test_parse_accumulates_tool_calls_across_repeated_invocations);
-    tcase_add_test(tc_parse, test_parse_doubles_capacity_when_tool_calls_exceed_initial_allocation);
+    tcase_add_test(tc_parse, test_parse_grows_capacity_when_tool_calls_exceed_initial_allocation);
     suite_add_tcase(s, tc_parse);
 
     TCase *tc_fault = tcase_create("FaultInjection");
-    tcase_add_test(tc_fault, test_parse_cleans_up_partial_entry_on_name_alloc_failure);
-    tcase_add_test(tc_fault, test_parse_cleans_up_partial_entry_on_id_alloc_failure);
-    tcase_add_test(tc_fault, test_parse_cleans_up_partial_entry_on_arguments_alloc_failure);
+    tcase_add_test(tc_fault, test_parse_realloc_failure_keeps_old_capacity_and_skips_overflow);
+    tcase_add_test(tc_fault, test_parse_strdup_failure_leaves_entry_uncommitted);
+    tcase_add_test(tc_fault, test_parse_succeeds_after_fault_injection_reset);
     suite_add_tcase(s, tc_fault);
 
     return s;

@@ -232,7 +232,7 @@ LLMResponse *openai_compatible_test_parse_response(const char *raw)
     return openai_compatible_parse_response(raw);
 }
 
-LLMResponse *openai_compatible_test_parse_stream(
+LLMResponse *openai_compatible_test_parse_stream_alloc(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata)
 {
     if (!input) return NULL;
@@ -258,7 +258,7 @@ LLMResponse *openai_compatible_test_parse_stream(
     return resp;
 }
 
-LLMResponse *openai_compatible_test_stream_fragments(
+LLMResponse *openai_compatible_test_stream_fragments_alloc(
     const char **fragments, size_t *lengths, int count,
     void (*on_chunk)(const char *, void *), void *userdata)
 {
@@ -326,7 +326,7 @@ static char *build_url(const char *base_url)
 }
 
 #ifdef OPENAI_COMPATIBLE_TEST
-char *openai_compatible_test_build_url(const char *base_url)
+char *openai_compatible_test_build_url_alloc(const char *base_url)
 {
     return build_url(base_url);
 }
@@ -906,7 +906,7 @@ LLMProvider *openai_compatible_provider_create(const char *base_url,
 #ifdef OPENAI_COMPATIBLE_TEST
 /* Test hook: builds a request body exactly as the provider does, with the
  * given effort. Returns a caller-owned string, or NULL on invalid effort. */
-char *openai_compatible_test_build_body(const char *model, const char *msgs_json,
+char *openai_compatible_test_build_body_alloc(const char *model, const char *msgs_json,
                                         int stream, double temperature,
                                         const char *tools_json,
                                         const char *json_schema,

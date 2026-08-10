@@ -73,7 +73,7 @@ int memory_set(sqlite3 *db, const char *key, const char *value)
     return rc == SQLITE_DONE ? 0 : -1;
 }
 
-char *memory_get(sqlite3 *db, const char *key)
+char *memory_get_dup(sqlite3 *db, const char *key)
 {
     if (!db || !key) return NULL;
 

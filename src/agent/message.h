@@ -187,7 +187,7 @@ void llm_response_free(LLMResponse *resp);
 cJSON *messages_to_json_array(Message *msgs, int count);
 
 /**
- * llm_messages_format - serialize messages to a JSON string with an
+ * llm_messages_format_new - serialize messages to a JSON string with an
  * optional system prompt
  * @msgs: messages to serialize, borrowed and not modified.
  * @count: number of messages in msgs.
@@ -199,8 +199,23 @@ cJSON *messages_to_json_array(Message *msgs, int count);
  * Return: caller-owned JSON string (free with free()), or NULL on
  * allocation failure. Thread-safe; no shared state.
  */
-char *llm_messages_format(Message *msgs, int count,
+char *llm_messages_format_new(Message *msgs, int count,
                           const char *system_prompt,
                           const char *system_context);
+
+#ifdef MESSAGE_TEST
+/**
+ * message_test_set_alloc_fail - make the Nth allocation fail here
+ * @nth_allocation: 1-based index of the next str_dup/calloc call to fail;
+ *   -1 disables fault injection.
+ *
+ * Test-only hook. Resets the shared call counter, fails the Nth
+ * allocation (only that call), and leaves every other allocation to
+ * behave normally. Single-threaded tests only.
+ *
+ * Return: nothing.
+ */
+void message_test_set_alloc_fail(int nth_allocation);
+#endif
 
 #endif

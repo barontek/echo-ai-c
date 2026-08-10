@@ -13,6 +13,20 @@ const UNLOCK_TOKEN_STORAGE_KEY = 'echo-ai-unlock-token';
 
 type TokenExpiredCallback = () => void;
 
+/**
+ * ApiClient - thin axios wrapper around the echo-ai backend REST API.
+ *
+ * Owns the unlock token (mirrored into localStorage under the
+ * 'echo-ai-unlock-token' key, so a page refresh stays unlocked — this
+ * state is browser-only and does NOT exist server-side).
+ *
+ * Failure convention: every method except `healthCheck` throws an
+ * `Error`. The message is the backend's `error` field when present. If
+ * the backend is unreachable (no HTTP response at all), the thrown
+ * message is exactly `'__BACKEND_UNREACHABLE__'` — consumers pattern
+ * match on that sentinel string. A 401 additionally clears the token and
+ * fires the `setOnTokenExpired` callback.
+ */
 class ApiClient {
   private client;
   private unlockToken: string | null = null;
@@ -61,39 +75,83 @@ class ApiClient {
     );
   }
 
-  /** Register a callback for when the unlock token expires. */
+  /**
+   * Register a callback invoked when the backend rejects the unlock token
+   * with a 401 (the token is cleared first).
+   *
+   * @param cb - Callback to run on expiry; replaces any previous one.
+   * @returns void. Never throws.
+   */
   setOnTokenExpired(cb: TokenExpiredCallback): void {
     this.onTokenExpired = cb;
   }
 
-  /** Return whether a valid unlock token is held. */
+  /**
+   * Whether an unlock token is currently held (memory or localStorage).
+   * Note this is client-side bookkeeping only — the token may already be
+   * rejected by the server; `getStatus()` is the source of truth.
+   */
   get isUnlocked(): boolean {
     return this.unlockToken !== null;
   }
 
-  /** Return the current unlock token, or null. */
+  /**
+   * The current unlock token, or null when none is held (fresh load with
+   * no stored token, or after clearUnlockToken()).
+   *
+   */
   get unlockTokenValue(): string | null {
     return this.unlockToken;
   }
 
-  /** Store the unlock token from a setup or unlock response. */
+  /**
+   * Store the unlock token from a setup or unlock response, mirroring it
+   * into localStorage so a page refresh stays unlocked.
+   *
+   * @param token - The token issued by the backend.
+   * @returns void.
+   */
   private setUnlockToken(token: string): void {
     this.unlockToken = token;
     localStorage.setItem(UNLOCK_TOKEN_STORAGE_KEY, token);
   }
 
-  /** Clear the unlock token. */
+  /**
+   * Forget the unlock token in memory and in localStorage. Called on 401
+   * and on logout; safe to call repeatedly.
+   *
+   * @returns void. Never throws.
+   */
   clearUnlockToken(): void {
     this.unlockToken = null;
     localStorage.removeItem(UNLOCK_TOKEN_STORAGE_KEY);
   }
 
+  /**
+   * Fetch the available model names for a provider.
+   *
+   * @param provider - Optional provider name filter (e.g. 'ollama');
+   *   omitted to list models for the default provider.
+   * @param signal - AbortSignal to cancel the request on unmount.
+   * @returns The model name list (empty array when the backend returns
+   *   none — never null).
+   * @throws {Error} Per the class contract; '`__BACKEND_UNREACHABLE__`'
+   *   when the backend is down.
+   */
   async getModels(provider?: string, signal?: AbortSignal): Promise<string[]> {
     const params = provider ? `?provider=${encodeURIComponent(provider)}` : '';
     const res = await this.client.get<{ models: string[] }>(`/api/models${params}`, { signal });
     return res.data.models || [];
   }
 
+  /**
+   * Fetch the provider catalog: names, which support "effort" levels, and
+   * each provider's effort options.
+   *
+   * @returns Provider names, effort-supported flags, and the effort
+   *   options map; absent backend fields default to [] / {} — never null.
+   * @throws {Error} Per the class contract.
+   */
   async getProviders(): Promise<{
     providers: string[];
     effortSupported: string[];
@@ -111,6 +169,17 @@ class ApiClient {
     };
   }
 
+  /**
+   * Fetch the OpenAI OAuth login state.
+   *
+   * @param loginId - Optional id of a started login; when present the
+   *   backend reports that login's progress instead of the global state.
+   * @param signal - AbortSignal to cancel on unmount.
+   * @returns `{ state }` where state is 'signed_out' | 'pending' |
+   *   'signed_in'; `error` is present only when the backend reports one.
+   *   `account_id`/`plan_type` are present only when signed in.
+   * @throws {Error} Per the class contract.
+   */
   async getOpenAIOAuthStatus(
     loginId?: string,
     signal?: AbortSignal
@@ -132,6 +201,14 @@ class ApiClient {
     return res.data;
   }
 
+  /**
+   * Start an OpenAI OAuth login, returning the authorization URL to open
+   * in a popup and a login id to poll with getOpenAIOAuthStatus().
+   *
+   * @param signal - AbortSignal to cancel on unmount.
+   * @returns `{ authorization_url, login_id }`.
+   * @throws {Error} Per the class contract.
+   */
   async startOpenAIOAuth(
     signal?: AbortSignal
   ): Promise<{ authorization_url: string; login_id: string }> {
@@ -143,27 +220,64 @@ class ApiClient {
     return res.data;
   }
 
+  /**
+   * Sign out of OpenAI OAuth.
+   *
+   * @param loginId - Optional login id to sign out; omitted signs out the
+   *   current account.
+   * @param signal - AbortSignal to cancel on unmount.
+   * @returns void.
+   * @throws {Error} Per the class contract.
+   */
   async logoutOpenAIOAuth(loginId?: string, signal?: AbortSignal): Promise<void> {
     await this.client.post('/api/auth/openai/logout', loginId ? { login_id: loginId } : undefined, {
       signal,
     });
   }
 
+  /**
+   * Fetch the server config (settings the frontend renders).
+   *
+   * @returns The full {@link Config}.
+   * @throws {Error} Per the class contract.
+   */
   async getConfig(): Promise<Config> {
     const res = await this.client.get<{ config: Config }>('/api/config');
     return res.data.config;
   }
 
+  /**
+   * Fetch the session list (ids, titles, creation timestamps).
+   *
+   * @returns The sessions; empty array when none exist — never null.
+   * @throws {Error} Per the class contract.
+   */
   async getSessions(): Promise<Session[]> {
     const res = await this.client.get<{ sessions: Session[] }>('/api/sessions');
     return res.data.sessions || [];
   }
 
+  /**
+   * Create a new empty session.
+   *
+   * @returns `{ session_id }` of the created session.
+   * @throws {Error} Per the class contract.
+   */
   async createSession(): Promise<{ session_id: string }> {
     const res = await this.client.post<{ session_id: string }>('/api/sessions');
     return res.data;
   }
 
+  /**
+   * Fetch one session's full record (messages plus branch metadata).
+   *
+   * @param sessionId - Id of the session to load.
+   * @returns The session record. `title` is null when the session was
+   *   never titled (backend behavior — not an error); `branches` is
+   *   present only when the session has been forked.
+   * @throws {Error} Per the class contract; a 404 means the session was
+   *   deleted server-side.
+   */
   async loadSession(sessionId: string): Promise<{
     session_id: string;
     title: string | null;
@@ -189,14 +303,36 @@ class ApiClient {
     return res.data;
   }
 
+  /**
+   * Delete a session permanently.
+   *
+   * @param sessionId - Id of the session to delete.
+   * @returns void.
+   * @throws {Error} Per the class contract.
+   */
   async deleteSession(sessionId: string): Promise<void> {
     await this.client.delete(`/api/sessions/${sessionId}`);
   }
 
+  /**
+   * Rename a session.
+   *
+   * @param sessionId - Id of the session.
+   * @param newTitle - New title; sent verbatim to the backend.
+   * @returns void.
+   * @throws {Error} Per the class contract.
+   */
   async renameSession(sessionId: string, newTitle: string): Promise<void> {
     await this.client.post('/api/sessions/rename', { session_id: sessionId, new_title: newTitle });
   }
 
+  /**
+   * Ping the backend health endpoint. This is the ONE method that does
+   * NOT throw: any failure (backend down, 4xx/5xx) resolves to `false`.
+   *
+   * @returns true only when the backend answered with HTTP 200; false
+   *   on every other outcome.
+   */
   async healthCheck(): Promise<boolean> {
     try {
       const res = await this.client.get('/api/health');
@@ -206,11 +342,28 @@ class ApiClient {
     }
   }
 
+  /**
+   * Fetch the vault status gate.
+   *
+   * @returns `{ locked, needs_setup }` — `locked` means the vault is
+   *   password-protected and must be unlocked; `needs_setup` means no
+   *   password exists yet and setup is required.
+   * @throws {Error} Per the class contract.
+   */
   async getStatus(): Promise<{ locked: boolean; needs_setup: boolean }> {
     const res = await this.client.get<{ locked: boolean; needs_setup: boolean }>('/api/status');
     return res.data;
   }
 
+  /**
+   * Unlock the vault with a password. On success the returned token is
+   * stored and attached to all subsequent requests.
+   *
+   * @param password - The vault password.
+   * @returns void.
+   * @throws {Error} Per the class contract; the backend reports a wrong
+   *   password as an error message on the 401/403 path.
+   */
   async unlock(password: string): Promise<void> {
     const res = await this.client.post<{ status: string; token?: string }>('/api/unlock', {
       password,
@@ -220,6 +373,16 @@ class ApiClient {
     }
   }
 
+  /**
+   * Initialize the vault with a new password (first-run setup). On
+   * success the returned token is stored like unlock().
+   *
+   * @param password - The new vault password.
+   * @param confirm - Must equal `password`; the backend rejects a
+   *   mismatch.
+   * @returns void.
+   * @throws {Error} Per the class contract.
+   */
   async setup(password: string, confirm: string): Promise<void> {
     const res = await this.client.post<{ status: string; token?: string }>('/api/setup', {
       password,
@@ -230,6 +393,13 @@ class ApiClient {
     }
   }
 
+  /**
+   * Log out: tells the backend and always clears the local token, even
+   * when the backend request fails.
+   *
+   * @returns void; resolves after the token is cleared regardless of the
+   *   backend call's outcome (the backend error is swallowed by design).
+   */
   async logout(): Promise<void> {
     try {
       await this.client.post('/api/logout');
@@ -238,6 +408,16 @@ class ApiClient {
     }
   }
 
+  /**
+   * Change the vault password.
+   *
+   * @param currentPassword - The current password (server-verified).
+   * @param newPassword - The new password.
+   * @param confirm - Must equal `newPassword`.
+   * @returns void.
+   * @throws {Error} Per the class contract; a wrong current password is
+   *   reported by the backend as an error.
+   */
   async changePassword(
     currentPassword: string,
     newPassword: string,

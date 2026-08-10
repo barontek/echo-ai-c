@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <check.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,7 +111,7 @@ Message *apply_context_window(Message *msgs, int *count, int max_msgs, int max_c
     return msgs; /* identity — keep all messages */
 }
 
-char *split_thinking_content(const char *raw) { return str_dup(raw); }
+char *split_thinking_content_dup(const char *raw) { return str_dup(raw); }
 
 int metrics_counter_inc(Metrics *m, const char *n, const char *h) { (void)m; (void)n; (void)h; return 0; }
 int metrics_histogram_observe(Metrics *m, const char *n, const char *h, double v,
@@ -161,7 +162,7 @@ START_TEST(test_agent_save_session_persists_empty_state)
     ck_assert_ptr_nonnull(agent.session_id);
 
     /* Confirm the message landed in the DB. */
-    Session *s = session_manager_load_session(sm, agent.session_id);
+    Session *s = session_manager_load_session_alloc(sm, agent.session_id);
     ck_assert_ptr_nonnull(s);
     ck_assert_int_eq(s->messages_count, 1);
     ck_assert_str_eq(s->messages[0].content, "hello");
@@ -181,7 +182,7 @@ START_TEST(test_agent_save_session_persists_empty_state)
     agent_save_session(&agent);
 
     /* Reload and assert the empty state is now reflected in the DB. */
-    s = session_manager_load_session(sm, agent.session_id);
+    s = session_manager_load_session_alloc(sm, agent.session_id);
     ck_assert_ptr_nonnull(s);
     ck_assert_int_eq(s->messages_count, 0);
     session_free(s);

@@ -11,13 +11,14 @@ int rate_limiter_allow(RateLimiter *rl, const char *ip)
     return 1;
 }
 
-void server_response(Client *client, int status, const char *content_type,
+int server_response(Client *client, int status, const char *content_type,
                      const char *body)
 {
     (void)client;
     (void)status;
     (void)content_type;
     (void)body;
+    return 0;
 }
 
 void log_error(const char *fmt, ...) { (void)fmt; }

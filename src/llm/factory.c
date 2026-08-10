@@ -9,6 +9,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "factory.h"
+#include "ollama.h"
 #include "provider.h"
 #include "openai.h"
 #include "openai_oauth.h"
@@ -33,7 +35,6 @@ LLMProvider *get_provider_with_auth(const char *name, const char *model,
 
     if (strcmp(name, "ollama") == 0)
     {
-        extern LLMProvider *ollama_provider_create(const char *, int, int, const char *);
         return ollama_provider_create(base_url, num_ctx, keep_alive_secs, effort);
     }
 

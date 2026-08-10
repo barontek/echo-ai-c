@@ -7,6 +7,10 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
+    # Toolchain versions are fixed by the committed flake.lock snapshot; do
+    # not run `nix flake update` casually. CMake defaults to clang; gcc is
+    # available for the odd GNU-only flag check. See AGENTS.md
+    # "Environment and toolchain".
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -17,6 +21,7 @@
             cmake
             gnumake
             clang
+            gcc
             pkg-config
             libuv
             curl

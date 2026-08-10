@@ -9,7 +9,7 @@
 #include <cjson/cJSON.h>
 
 /**
- * json_string_escape - escape a C string for embedding in a JSON string
+ * json_string_escape_dup - escape a C string for embedding in a JSON string
  * @str: NUL-terminated input; NULL yields NULL.
  *
  * Escapes '"', '\\', newline, tab, and carriage return; other bytes pass
@@ -19,7 +19,7 @@
  * (free with free()), or NULL on allocation failure. Pure function; no
  * shared state; safe to call concurrently.
  */
-char *json_string_escape(const char *str);
+char *json_string_escape_dup(const char *str);
 
 /**
  * json_add_string - add a string field to a JSON object

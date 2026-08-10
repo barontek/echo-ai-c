@@ -293,6 +293,15 @@ function ToolCallEntry({ tc }: { tc: ToolCall }) {
   );
 }
 
+/**
+ * MessageList - renders the active session's messages, including
+ * streaming chunks, thinking blocks, and tool-call results.
+ *
+ * Re-renders on every message-array/isStreaming change from useChat().
+ * Owns an auto-scroll effect (respects the user's scroll position) that
+ * runs when messages or the streaming flag change; no other effects or
+ * subscriptions.
+ */
 export const MessageList = memo(function MessageList() {
   const { messages, isStreaming, editMessage, regenerateMessage, switchBranch, branchInfo } =
     useChat();

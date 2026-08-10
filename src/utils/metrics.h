@@ -72,7 +72,7 @@ int metrics_histogram_observe(Metrics *m, const char *name, const char *help,
                               double value, const double *buckets, int bucket_count);
 
 /**
- * metrics_render - serialize the registry as Prometheus text format
+ * metrics_render_new - serialize the registry as Prometheus text format
  * @m: registry to render; NULL yields the empty string.
  *
  * Emits # HELP (when present) / # TYPE lines followed by one line per
@@ -82,7 +82,7 @@ int metrics_histogram_observe(Metrics *m, const char *name, const char *help,
  * (free with free()), or NULL on allocation failure. Thread-safety: the
  * registry must not be concurrently mutated while rendering.
  */
-char *metrics_render(Metrics *m);
+char *metrics_render_new(Metrics *m);
 
 #ifdef METRICS_TEST
 /**

@@ -12,6 +12,32 @@
 #include <cjson/cJSON.h>
 #endif
 
+#ifdef ROUTES_SESSION_ALLOC_TEST
+/* Test-only allocator fault injection: shared counter across str_dup so
+ * tests can fail the Nth allocation inside the session handlers (title
+ * dups before create/rename). Only the handlers test target defines it. */
+#include "../../utils/string_utils.h"
+
+static int routes_session_test_alloc_counter = 0;
+static int routes_session_test_alloc_fail_at = -1;
+
+void routes_session_test_set_alloc_fail(int nth_allocation)
+{
+    routes_session_test_alloc_counter = 0;
+    routes_session_test_alloc_fail_at = nth_allocation;
+}
+
+static char *routes_session_test_strdup(const char *s)
+{
+    routes_session_test_alloc_counter++;
+    if (routes_session_test_alloc_counter == routes_session_test_alloc_fail_at)
+        return NULL;
+    return str_dup(s);
+}
+
+#define str_dup routes_session_test_strdup
+#endif
+
 #include "routes.h"
 #include "routes_session.h"
 #ifndef ROUTES_SESSION_TEST
@@ -96,6 +122,11 @@ void handle_create_session(HTTPRequest *req, Client *client, ServerContext *ctx)
             }
             cJSON_Delete(json);
         }
+    }
+    if (!title)
+    {
+        server_response_error(client, 500, "failed to create session");
+        return;
     }
 
     Session *s = session_manager_create_session(ctx->sm, title);
@@ -207,7 +238,7 @@ void handle_session_get(HTTPRequest *req, Client *client, ServerContext *ctx)
         if (!id_copy) { server_response_error(client, 500, "oom"); return; }
         size_t slen = export_suffix_len(sid);
         id_copy[strlen(id_copy) - slen] = '\0';
-        char *exported = session_manager_export_session(ctx->sm, id_copy);
+        char *exported = session_manager_export_session_new(ctx->sm, id_copy);
         free(id_copy);
         if (exported)
         {
@@ -219,7 +250,7 @@ void handle_session_get(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
 
-    Session *s = session_manager_load_session(ctx->sm, sid);
+    Session *s = session_manager_load_session_alloc(ctx->sm, sid);
     if (!s)
     {
         server_response_error(client, 404, "session not found");
@@ -325,7 +356,7 @@ void handle_session_update(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
 
-    Session *s = session_manager_load_session(ctx->sm, sid);
+    Session *s = session_manager_load_session_alloc(ctx->sm, sid);
     if (!s)
     {
         cJSON_Delete(json);
@@ -333,8 +364,16 @@ void handle_session_update(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
 
+    char *new_title = str_dup(title->valuestring);
+    if (!new_title)
+    {
+        cJSON_Delete(json);
+        session_free(s);
+        server_response_error(client, 500, "failed to rename session");
+        return;
+    }
     free(s->title);
-    s->title = str_dup(title->valuestring);
+    s->title = new_title;
     int rc = session_manager_save_session(ctx->sm, s);
     cJSON_Delete(json);
 
@@ -393,7 +432,7 @@ void handle_sessions_rename(HTTPRequest *req, Client *client, ServerContext *ctx
         return;
     }
 
-    Session *s = session_manager_load_session(ctx->sm, sid_item->valuestring);
+    Session *s = session_manager_load_session_alloc(ctx->sm, sid_item->valuestring);
     if (!s)
     {
         cJSON_Delete(json);
@@ -401,8 +440,16 @@ void handle_sessions_rename(HTTPRequest *req, Client *client, ServerContext *ctx
         return;
     }
 
+    char *new_title = str_dup(title_item->valuestring);
+    if (!new_title)
+    {
+        cJSON_Delete(json);
+        session_free(s);
+        server_response_error(client, 500, "failed to rename session");
+        return;
+    }
     free(s->title);
-    s->title = str_dup(title_item->valuestring);
+    s->title = new_title;
     int rc = session_manager_save_session(ctx->sm, s);
     cJSON_Delete(json);
 
@@ -439,7 +486,7 @@ void handle_session_import(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
 
-    Session *s = session_manager_import_session(ctx->sm, req->body);
+    Session *s = session_manager_import_session_new(ctx->sm, req->body);
     if (!s)
     {
         server_response_error(client, 400, "import failed — duplicate or invalid session data");

@@ -2079,12 +2079,12 @@ int openai_oauth_logout(OpenAIOAuth *auth)
 }
 
 #ifdef OPENAI_OAUTH_TEST
-char *openai_oauth_test_build_authorize_url(const char *state, const char *challenge)
+char *openai_oauth_test_build_authorize_url_alloc(const char *state, const char *challenge)
 {
     return build_authorize_url_values(state, challenge);
 }
 
-char *openai_oauth_test_pkce_challenge(const char *verifier)
+char *openai_oauth_test_pkce_challenge_alloc(const char *verifier)
 {
     return pkce_challenge(verifier);
 }

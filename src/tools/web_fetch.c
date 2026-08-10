@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <curl/curl.h>
@@ -300,31 +301,14 @@ static int error_path_retry_with_impersonator(HttpBuffer *buf, char **ctype,
     return retry_with_impersonator(buf, ctype, url, 0, timeout_s);
 }
 
-static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
+/* Configures the curl handle for a web fetch: timeout, protocols,
+ * browser-shaped headers, socket policy hook, and the response buffer.
+ * Returns the handle (caller cleans up), or NULL on init failure. */
+static CURL *web_fetch_setup_curl(WebCtx *ctx, const char *url, FetchCtx *fctx,
+                                  HttpBuffer *buf, struct curl_slist **hdrs_out)
 {
-    WebCtx *ctx = self->ctx;
-
-    cJSON *args = cJSON_Parse(args_json);
-    if (!args) return tool_result_error("invalid arguments JSON", "validation_error");
-
-    cJSON *url_json = cJSON_GetObjectItem(args, "url");
-    if (!url_json || !cJSON_IsString(url_json))
-    {
-        cJSON_Delete(args);
-        return tool_result_error("missing 'url' argument", "validation_error");
-    }
-
-    char *url = str_dup(cJSON_GetStringValue(url_json));
-    cJSON_Delete(args);
-
-    if (!safety_check_url(ctx->safety, url))
-    {
-        free(url);
-        return tool_result_error("URL rejected by network policy", "policy_denied");
-    }
-
     CURL *curl = curl_easy_init();
-    if (!curl) { free(url); return tool_result_error("curl init failed", "execution_error"); }
+    if (!curl) return NULL;
 
     /* url stays alive: it is re-used by the impersonator fallback below. */
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -358,12 +342,71 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(curl, CURLOPT_PROXY, "");
     curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, open_socket_cb);
-    FetchCtx fctx = {.safety = ctx->safety};
-    curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, &fctx);
+    fctx->safety = ctx->safety;
+    curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, fctx);
 
-    HttpBuffer buf = {.limit = ctx->safety->max_file_size};
+    buf->limit = ctx->safety->max_file_size;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_buffer_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, buf);
+    *hdrs_out = hdrs;
+    return curl;
+}
+
+/* Converts a still-failing fetch into the appropriate ToolResult:
+ * network-policy rejection, oversize, or a generic curl error with
+ * context. Consumes the buffer/ctype/url. */
+static ToolResult *web_fetch_error_result(FetchCtx *fctx, HttpBuffer *buf,
+                                          char *ctype_copy, char *url,
+                                          CURLcode res)
+{
+    free(buf->data);
+    free(ctype_copy);
+    free(url);
+    if (fctx->socket_policy_rejected)
+        return tool_result_error("connection blocked by network policy",
+                                 "policy_denied");
+    if (buf->too_large)
+        return tool_result_error("response too large", "policy_denied");
+    char *err = NULL;
+    if (asprintf(&err, "HTTP request failed: %s", curl_easy_strerror(res)) < 0)
+        err = str_dup("HTTP request failed");
+    ToolResult *tr = tool_result_error(err, "execution_error");
+    free(err);
+    return tr;
+}
+
+static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
+{
+    WebCtx *ctx = self->ctx;
+
+    cJSON *args = cJSON_Parse(args_json);
+    if (!args) return tool_result_error("invalid arguments JSON", "validation_error");
+
+    cJSON *url_json = cJSON_GetObjectItem(args, "url");
+    if (!url_json || !cJSON_IsString(url_json))
+    {
+        cJSON_Delete(args);
+        return tool_result_error("missing 'url' argument", "validation_error");
+    }
+
+    char *url = str_dup(cJSON_GetStringValue(url_json));
+    cJSON_Delete(args);
+
+    if (!safety_check_url(ctx->safety, url))
+    {
+        free(url);
+        return tool_result_error("URL rejected by network policy", "policy_denied");
+    }
+
+    FetchCtx fctx = {0};
+    HttpBuffer buf = {0};
+    struct curl_slist *hdrs = NULL;
+    CURL *curl = web_fetch_setup_curl(ctx, url, &fctx, &buf, &hdrs);
+    if (!curl)
+    {
+        free(url);
+        return tool_result_error("curl init failed", "execution_error");
+    }
 
     CURLcode res = curl_easy_perform(curl);
 
@@ -393,25 +436,10 @@ static ToolResult *web_fetch_execute(Tool *self, const char *args_json)
     }
 
     if (res != CURLE_OK)
-    {
-        free(buf.data);
-        free(ctype_copy);
-        free(url);
-        if (fctx.socket_policy_rejected)
-            return tool_result_error("connection blocked by network policy",
-                                     "policy_denied");
-        if (buf.too_large)
-            return tool_result_error("response too large", "policy_denied");
-        char *err = NULL;
-        if (asprintf(&err, "HTTP request failed: %s", curl_easy_strerror(res)) < 0)
-            err = str_dup("HTTP request failed");
-        ToolResult *tr = tool_result_error(err, "execution_error");
-        free(err);
-        return tr;
-    }
+        return web_fetch_error_result(&fctx, &buf, ctype_copy, url, res);
     free(url);
 
-    char *simplified = content_extract_for_llm(ctype_copy, buf.data, buf.len,
+    char *simplified = content_extract_for_llm_alloc(ctype_copy, buf.data, buf.len,
                                                ctx->safety->web_fetch_max_chars);
     free(ctype_copy);
     if (!simplified)

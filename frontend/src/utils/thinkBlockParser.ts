@@ -9,6 +9,17 @@ function trimPartialTag(s: string): string {
   return s;
 }
 
+/** parseThinkBlocks - split raw text into visible + thinking segments.
+ *
+ * Pure function: returns a NEW array every call (the input string is
+ * never mutated). Tolerates unclosed `<think>` tags by treating the rest
+ * of the text as a thinking block. Never throws.
+ *
+ * @param content - The raw assistant text to parse.
+ * @returns Array of { type: 'thinking' | 'content'; text: string }
+ *   segments in document order; empty segments are omitted and an empty
+ *   input yields an empty array.
+ */
 export function parseThinkBlocks(
   content: string
 ): Array<{ type: 'thinking' | 'content'; text: string }> {

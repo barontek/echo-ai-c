@@ -176,36 +176,37 @@ static int add_term(const char *term)
     return t;
 }
 
-void semantic_search_index_document(const char *content)
+int semantic_search_index_document(const char *content)
 {
-    if (search_index.doc_count >= MAX_DOCS) return;
+    if (!content) return 0; /* tolerated: indexes nothing */
+    if (search_index.doc_count >= MAX_DOCS) return -1;
 
     /* The large backing arrays are allocated on first use so an empty
      * index costs nothing; a failure here leaves the index reusable. */
     if (!search_index.documents)
     {
         search_index.documents = calloc(MAX_DOCS, sizeof(char *));
-        if (!search_index.documents) return;
+        if (!search_index.documents) return -1;
     }
     if (!search_index.all_terms)
     {
         search_index.all_terms = calloc(MAX_TOKENS, sizeof(char *));
-        if (!search_index.all_terms) return;
+        if (!search_index.all_terms) return -1;
     }
     if (!search_index.term_freqs)
     {
         search_index.term_freqs = calloc(MAX_DOCS, sizeof(int *));
-        if (!search_index.term_freqs) return;
+        if (!search_index.term_freqs) return -1;
     }
     if (!search_index.doc_lengths)
     {
         search_index.doc_lengths = calloc(MAX_DOCS, sizeof(int));
-        if (!search_index.doc_lengths) return;
+        if (!search_index.doc_lengths) return -1;
     }
 
     int idx = search_index.doc_count;
     char *doc_dup = str_dup(content);
-    if (!doc_dup) return;
+    if (!doc_dup) return -1;
     search_index.documents[idx] = doc_dup;
 
     char tokens[MAX_TOKENS][MAX_TOKEN_LEN];
@@ -217,7 +218,7 @@ void semantic_search_index_document(const char *content)
     {
         free(search_index.documents[idx]);
         search_index.documents[idx] = NULL;
-        return;
+        return -1;
     }
 
     search_index.doc_lengths[idx] = 0;
@@ -233,6 +234,7 @@ void semantic_search_index_document(const char *content)
     }
 
     search_index.doc_count++;
+    return 0;
 }
 
 static double compute_tfidf(const int *freqs, int doc_len, int term_idx, int total_docs)

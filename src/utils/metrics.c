@@ -179,7 +179,7 @@ int metrics_histogram_observe(Metrics *m, const char *name, const char *help,
     return 0;
 }
 
-char *metrics_render(Metrics *m)
+char *metrics_render_new(Metrics *m)
 {
     if (!m) return str_dup("");
 

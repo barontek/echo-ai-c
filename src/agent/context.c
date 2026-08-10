@@ -12,7 +12,47 @@
 #include "message.h"
 #include "../utils/string_utils.h"
 
-char *split_thinking_content(const char *raw)
+#ifdef CONTEXT_TEST
+/* Test-only allocator fault injection: shared counter across calloc,
+ * str_dup and realloc so tests can fail the Nth allocation inside
+ * smart_select_alloc / trim_messages_by_tokens_new (which allocate several arrays
+ * and then commit a result). Only the test target defines CONTEXT_TEST. */
+static int context_test_alloc_counter = 0;
+static int context_test_alloc_fail_at = -1;
+
+void context_test_set_alloc_fail(int nth_allocation)
+{
+    context_test_alloc_counter = 0;
+    context_test_alloc_fail_at = nth_allocation;
+}
+
+static void *context_test_calloc(size_t nmemb, size_t size)
+{
+    context_test_alloc_counter++;
+    if (context_test_alloc_counter == context_test_alloc_fail_at) return NULL;
+    return calloc(nmemb, size);
+}
+
+static char *context_test_strdup(const char *s)
+{
+    context_test_alloc_counter++;
+    if (context_test_alloc_counter == context_test_alloc_fail_at) return NULL;
+    return str_dup(s);
+}
+
+static void *context_test_realloc(void *ptr, size_t size)
+{
+    context_test_alloc_counter++;
+    if (context_test_alloc_counter == context_test_alloc_fail_at) return NULL;
+    return realloc(ptr, size);
+}
+
+#define calloc context_test_calloc
+#define str_dup context_test_strdup
+#define realloc context_test_realloc
+#endif
+
+char *split_thinking_content_dup(const char *raw)
 {
     if (!raw) return NULL;
 
@@ -74,7 +114,7 @@ static int is_assistant_role(const char *role)
     return role && strcmp(role, "assistant") == 0;
 }
 
-Message *smart_select(Message *msgs, int count, int keep_count)
+Message *smart_select_alloc(Message *msgs, int count, int keep_count)
 {
     if (count <= keep_count)
     {
@@ -231,7 +271,7 @@ static int estimate_tokens(const char *text)
     return (int)(strlen(text) / 4) + 1;
 }
 
-Message *trim_messages_by_tokens(Message *msgs, int *count, int max_tokens)
+Message *trim_messages_by_tokens_new(Message *msgs, int *count, int max_tokens)
 {
     if (!msgs || !count || *count == 0) return msgs;
 
@@ -319,16 +359,16 @@ Message *apply_context_window(Message *msgs, int *count,
         if (total_chars <= max_chars) return msgs;
     }
 
-    /* trim by messages first using smart_select */
+    /* trim by messages first using smart_select_alloc */
     int msg_budget = max_messages;
-    Message *selected = smart_select(msgs, *count, msg_budget);
+    Message *selected = smart_select_alloc(msgs, *count, msg_budget);
     if (!selected) return msgs;
 
     /* then trim by token budget */
     int approx_tokens = max_chars / 4;
     if (approx_tokens < 1) approx_tokens = 1;
     int new_count = *count < msg_budget ? *count : msg_budget;
-    Message *result = trim_messages_by_tokens(selected, &new_count, approx_tokens);
+    Message *result = trim_messages_by_tokens_new(selected, &new_count, approx_tokens);
 
     *count = new_count;
     return result;

@@ -8,7 +8,7 @@ START_TEST(test_metrics_empty)
 {
     Metrics *m = metrics_create();
     ck_assert_ptr_nonnull(m);
-    char *out = metrics_render(m);
+    char *out = metrics_render_new(m);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "");
     free(out);
@@ -22,7 +22,7 @@ START_TEST(test_metrics_counter_increments_and_renders_prometheus_format)
     metrics_counter_inc(m, "test_total", "Test counter");
     metrics_counter_inc(m, "test_total", "");
     metrics_counter_inc(m, "other_total", "Other");
-    char *out = metrics_render(m);
+    char *out = metrics_render_new(m);
     ck_assert_ptr_nonnull(out);
     ck_assert_ptr_ne(strstr(out, "test_total 2"), NULL);
     ck_assert_ptr_ne(strstr(out, "other_total 1"), NULL);
@@ -38,7 +38,7 @@ START_TEST(test_metrics_histogram_observes_and_renders_buckets_and_sum)
     metrics_histogram_observe(m, "test_duration", "Test", 2, buckets, 3);
     metrics_histogram_observe(m, "test_duration", "Test", 7, buckets, 3);
     metrics_histogram_observe(m, "test_duration", "Test", 12, buckets, 3);
-    char *out = metrics_render(m);
+    char *out = metrics_render_new(m);
     ck_assert_ptr_nonnull(out);
     ck_assert_ptr_ne(strstr(out, "test_duration_count 3"), NULL);
     ck_assert_ptr_ne(strstr(out, "test_duration_sum 21"), NULL);
@@ -55,13 +55,13 @@ START_TEST(test_metrics_counter_alloc_fail_mid)
     Metrics *m = metrics_create();
     metrics_test_set_alloc_fail(2);
     ck_assert_int_eq(metrics_counter_inc(m, "test_total", "Test counter"), -1);
-    char *out = metrics_render(m);
+    char *out = metrics_render_new(m);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "");
     free(out);
     metrics_test_set_alloc_fail(-1);
     metrics_counter_inc(m, "other_total", "Other");
-    out = metrics_render(m);
+    out = metrics_render_new(m);
     ck_assert_ptr_nonnull(out);
     ck_assert_ptr_ne(strstr(out, "other_total 1"), NULL);
     free(out);
@@ -107,13 +107,13 @@ START_TEST(test_metrics_histogram_alloc_fail_mid)
     metrics_test_set_alloc_fail(3);
     double buckets[] = {1, 5, 10};
     metrics_histogram_observe(m, "test_duration", "Test", 2, buckets, 3);
-    char *out = metrics_render(m);
+    char *out = metrics_render_new(m);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "");
     free(out);
     metrics_test_set_alloc_fail(-1);
     metrics_histogram_observe(m, "test_duration2", "Test", 2, buckets, 3);
-    out = metrics_render(m);
+    out = metrics_render_new(m);
     ck_assert_ptr_nonnull(out);
     ck_assert_ptr_ne(strstr(out, "test_duration2_count 1"), NULL);
     free(out);

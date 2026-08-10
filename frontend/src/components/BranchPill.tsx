@@ -1,9 +1,17 @@
 import { memo } from 'react';
 import type { BranchInfo } from '../types';
 
-/* Branch-switch pill for a fork point: `‹ 1/k ›`. Hidden when the chain has
- * no alternatives (count <= 1); arrows disabled at the bounds (no
- * wrap-around). Clicking an arrow moves the active chain one step. */
+/**
+ * BranchPill - branch-switch pill for a fork point: `‹ 1/k ›`.
+ *
+ * Renders null when the chain has no alternatives (count <= 1). Arrows
+ * are disabled at the bounds (no wrap-around). Clicking an arrow calls
+ * onSwitch with the next/previous branch.
+ *
+ * Re-renders when the branch info for the fork point changes (the
+ * backend pushes branch_info frames while the session streams). Owns no
+ * effects.
+ */
 export const BranchPill = memo(function BranchPill({
   info,
   onSwitch,

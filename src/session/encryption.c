@@ -152,6 +152,31 @@ static int decrypt_fernet_token(const unsigned char *aes_key, const unsigned cha
     return 0;
 }
 
+#ifdef ENCRYPTION_TEST
+/* Structural validation of the real Fernet-token parse path over
+ * arbitrary bytes (version byte, minimum length, layout arithmetic,
+ * HMAC comparison) using fixed zero keys — the fuzzer cannot forge a
+ * matching HMAC, so the decrypt branch only runs on genuinely valid
+ * tokens, while the bounds logic is exercised on everything else.
+ * Returns 1 when the token parses, 0 when it is rejected. */
+int encryption_test_validate_token(const unsigned char *token, int token_len)
+{
+    if (!token || token_len <= 0) return 0;
+    unsigned char aes_key[KEY_SIGNING_HALF] = {0};
+    unsigned char hmac_key[KEY_SIGNING_HALF] = {0};
+    unsigned char *plaintext = NULL;
+    int plaintext_len = 0;
+    int rc = decrypt_fernet_token(aes_key, hmac_key, token, token_len,
+                                  &plaintext, &plaintext_len);
+    if (rc == 0)
+    {
+        free(plaintext);
+        return 1;
+    }
+    return 0;
+}
+#endif
+
 unsigned char *encryption_encrypt(const EncryptionKey *key, const unsigned char *plaintext, int plaintext_len, int *out_len)
 {
     if (!key || !plaintext || plaintext_len <= 0 || !out_len) return NULL;
@@ -184,7 +209,7 @@ unsigned char *encryption_decrypt(const EncryptionKey *key, const unsigned char 
     return plaintext;
 }
 
-char *encryption_resolve_password(void)
+char *encryption_resolve_password_alloc(void)
 {
     const char *password = getenv("ECHO_PASSWORD");
     if (password) return str_dup(password);

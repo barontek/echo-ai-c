@@ -10,6 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef TOOL_MEMORY_TEST
+#include <stdarg.h>
+#endif
+
 #include <cjson/cJSON.h>
 
 #include "tool.h"
@@ -17,6 +21,56 @@
 #include "../session/memory.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
+
+#ifdef TOOL_MEMORY_TEST
+/* Test-only allocator fault injection: shared counter across str_dup,
+ * asprintf and realloc so tests can fail the Nth allocation inside
+ * tool_memory_create / memory_execute's list path. Only the test target
+ * defines TOOL_MEMORY_TEST. */
+static int tool_memory_test_alloc_counter = 0;
+static int tool_memory_test_alloc_fail_at = -1;
+
+void tool_memory_test_set_alloc_fail(int nth_allocation)
+{
+    tool_memory_test_alloc_counter = 0;
+    tool_memory_test_alloc_fail_at = nth_allocation;
+}
+
+static char *tool_memory_test_strdup(const char *s)
+{
+    tool_memory_test_alloc_counter++;
+    if (tool_memory_test_alloc_counter == tool_memory_test_alloc_fail_at)
+        return NULL;
+    return str_dup(s);
+}
+
+static int tool_memory_test_asprintf(char **strp, const char *fmt, ...)
+{
+    tool_memory_test_alloc_counter++;
+    if (tool_memory_test_alloc_counter == tool_memory_test_alloc_fail_at)
+    {
+        *strp = NULL;
+        return -1;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    int rc = vasprintf(strp, fmt, ap);
+    va_end(ap);
+    return rc;
+}
+
+static void *tool_memory_test_realloc(void *ptr, size_t size)
+{
+    tool_memory_test_alloc_counter++;
+    if (tool_memory_test_alloc_counter == tool_memory_test_alloc_fail_at)
+        return NULL;
+    return realloc(ptr, size);
+}
+
+#define str_dup tool_memory_test_strdup
+#define asprintf tool_memory_test_asprintf
+#define realloc tool_memory_test_realloc
+#endif
 
 typedef struct {
     SafetyConfig *safety;
@@ -52,7 +106,7 @@ static ToolResult *memory_execute(Tool *self, const char *args_json)
             cJSON_Delete(args);
             return tool_result_error("missing 'key' for get", "validation_error");
         }
-        char *val = memory_get(sm->db, cJSON_GetStringValue(key));
+        char *val = memory_get_dup(sm->db, cJSON_GetStringValue(key));
         cJSON_Delete(args);
         ToolResult *tr = tool_result_create(val ? val : "(not found)");
         free(val);
@@ -159,6 +213,15 @@ Tool *tool_memory_create(SafetyConfig *safety)
         "\"value\":{\"type\":\"string\",\"description\":\"Memory value (required for set)\"}"
         "},\"required\":[\"action\"]}"
     );
+    if (!t->name || !t->description || !t->parameters_schema)
+    {
+        free(t->name);
+        free(t->description);
+        free(t->parameters_schema);
+        free(ctx);
+        free(t);
+        return NULL;
+    }
     t->execute = memory_execute;
     t->destroy = memory_destroy;
     t->ctx = ctx;

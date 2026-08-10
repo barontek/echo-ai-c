@@ -127,7 +127,7 @@ void session_manager_free(SessionManager *sm);
 Session *session_manager_create_session(SessionManager *sm, const char *title);
 
 /**
- * session_manager_load_session - load and decrypt a session
+ * session_manager_load_session_alloc - load and decrypt a session
  * @sm: manager; must be non-NULL with key_initialized and db.
  * @id: session id; must be non-NULL and non-empty; borrowed.
  *
@@ -139,7 +139,7 @@ Session *session_manager_create_session(SessionManager *sm, const char *title);
  * the id is absent, on invalid arguments, or a decrypt/parse/allocation
  * failure. Thread-safe via sm->lock.
  */
-Session *session_manager_load_session(SessionManager *sm, const char *id);
+Session *session_manager_load_session_alloc(SessionManager *sm, const char *id);
 
 /**
  * session_manager_save_session - encrypt and upsert a session
@@ -238,7 +238,7 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
 int session_manager_truncate_history(SessionManager *sm, const char *session_id, int index);
 
 /**
- * session_manager_export_session - export a session as plaintext JSON
+ * session_manager_export_session_new - export a session as plaintext JSON
  * @sm: manager; must be non-NULL with key_initialized and db.
  * @session_id: session id; must be non-NULL; borrowed.
  *
@@ -250,10 +250,10 @@ int session_manager_truncate_history(SessionManager *sm, const char *session_id,
  * Return: caller-owned JSON string (free with free()), or NULL on load
  * failure or OOM. Thread-safe via sm->lock (held during the load).
  */
-char *session_manager_export_session(SessionManager *sm, const char *session_id);
+char *session_manager_export_session_new(SessionManager *sm, const char *session_id);
 
 /**
- * session_manager_import_session - import a session from plaintext JSON
+ * session_manager_import_session_new - import a session from plaintext JSON
  * @sm: manager; must be non-NULL with key_initialized.
  * @json_str: exported session JSON; must be non-NULL; borrowed.
  *
@@ -267,7 +267,7 @@ char *session_manager_export_session(SessionManager *sm, const char *session_id)
  * invalid arguments, parse failure, duplicate id, OOM, or save failure.
  * Thread-safe via sm->lock.
  */
-Session *session_manager_import_session(SessionManager *sm, const char *json_str);
+Session *session_manager_import_session_new(SessionManager *sm, const char *json_str);
 
 /**
  * session_manager_purge_sessions - delete sessions older than N days
@@ -338,7 +338,7 @@ ProviderOAuthLoadResult session_manager_load_provider_oauth_ex(
     SessionManager *sm, const char *provider_name, char **data_out);
 
 /**
- * session_manager_load_provider_oauth - load provider credentials
+ * session_manager_load_provider_oauth_alloc - load provider credentials
  * @sm: manager; must be non-NULL with key_initialized and db.
  * @provider_name: provider key; must be non-NULL and non-empty; borrowed.
  *
@@ -348,7 +348,7 @@ ProviderOAuthLoadResult session_manager_load_provider_oauth_ex(
  * Return: caller-owned NUL-terminated payload (free with free()), or NULL
  * on any failure. Thread-safe via sm->lock.
  */
-char *session_manager_load_provider_oauth(SessionManager *sm,
+char *session_manager_load_provider_oauth_alloc(SessionManager *sm,
                                            const char *provider_name);
 
 /**
@@ -405,12 +405,12 @@ void session_manager_lock(SessionManager *sm);
 void session_manager_unlock(SessionManager *sm);
 
 /**
- * session_manager_load_session_nolock - load a session while already
+ * session_manager_load_session_nolock_alloc - load a session while already
  * holding sm->lock
  * @sm: manager; must be non-NULL with key_initialized and db.
  * @id: session id; must be non-NULL and non-empty; borrowed.
  *
- * Same contract as session_manager_load_session() but does not take the
+ * Same contract as session_manager_load_session_alloc() but does not take the
  * mutex. The caller MUST hold sm->lock for the duration of the call — do
  * not call any non-_nolock session_manager_* API from within, or the
  * non-recursive mutex deadlocks.
@@ -418,7 +418,7 @@ void session_manager_unlock(SessionManager *sm);
  * Return: caller-owned Session (free with session_free()), or NULL on
  * missing session, invalid arguments, or decrypt/parse/allocation failure.
  */
-Session *session_manager_load_session_nolock(SessionManager *sm, const char *id);
+Session *session_manager_load_session_nolock_alloc(SessionManager *sm, const char *id);
 
 /**
  * session_manager_save_session_nolock - save a session while already

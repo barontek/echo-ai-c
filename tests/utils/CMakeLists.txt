@@ -4,6 +4,14 @@ target_include_directories(test_config PRIVATE ../../src)
 target_link_libraries(test_config PRIVATE echo_ai_test_deps)
 add_test(NAME test_config COMMAND test_config)
 
+add_executable(test_logging
+    ../../src/utils/logging.c
+    test_logging.c
+)
+target_include_directories(test_logging PRIVATE ../../src)
+target_link_libraries(test_logging PRIVATE echo_ai_test_deps)
+add_test(NAME test_logging COMMAND test_logging)
+
 add_executable(test_string ../../src/utils/string_utils.c test_string.c)
 target_include_directories(test_string PRIVATE ../../src)
 target_link_libraries(test_string PRIVATE echo_ai_test_deps)

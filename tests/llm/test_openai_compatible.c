@@ -5,16 +5,16 @@
 
 LLMResponse *openai_compatible_test_parse_response(const char *raw);
 
-LLMResponse *openai_compatible_test_parse_stream(
+LLMResponse *openai_compatible_test_parse_stream_alloc(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata);
 
-LLMResponse *openai_compatible_test_stream_fragments(
+LLMResponse *openai_compatible_test_stream_fragments_alloc(
     const char **fragments, size_t *lengths, int count,
     void (*on_chunk)(const char *, void *), void *userdata);
 
-char *openai_compatible_test_build_url(const char *base_url);
+char *openai_compatible_test_build_url_alloc(const char *base_url);
 
-char *openai_compatible_test_build_body(const char *model, const char *msgs_json,
+char *openai_compatible_test_build_body_alloc(const char *model, const char *msgs_json,
                                         int stream, double temperature,
                                         const char *tools_json,
                                         const char *json_schema,
@@ -45,7 +45,7 @@ START_TEST(test_openai_compatible_stream_accumulates_content_and_tool_calls)
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"} \"}}]}}]}\n\n"
         "data: [DONE]\n\n";
     ChunkCapture capture = {0};
-    LLMResponse *resp = openai_compatible_test_parse_stream(stream, capture_chunk, &capture);
+    LLMResponse *resp = openai_compatible_test_parse_stream_alloc(stream, capture_chunk, &capture);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "Hello");
     ck_assert_int_eq(capture.calls, 2);
@@ -60,7 +60,7 @@ END_TEST
 
 START_TEST(test_openai_compatible_stream_handles_empty_response)
 {
-    LLMResponse *resp = openai_compatible_test_parse_stream("data: [DONE]", NULL, NULL);
+    LLMResponse *resp = openai_compatible_test_parse_stream_alloc("data: [DONE]", NULL, NULL);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "");
     llm_response_free(resp);
@@ -78,7 +78,7 @@ START_TEST(test_openai_compatible_stream_wraps_reasoning_content_in_think_block)
         "data: {\"choices\":[{\"delta\":{\"content\":\"The answer\"}}]}\n\n"
         "data: [DONE]\n\n";
     ChunkCapture capture = {0};
-    LLMResponse *resp = openai_compatible_test_parse_stream(
+    LLMResponse *resp = openai_compatible_test_parse_stream_alloc(
         stream, capture_chunk, &capture);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content,
@@ -97,7 +97,7 @@ START_TEST(test_openai_compatible_stream_accepts_reasoning_field_variant)
         "data: {\"choices\":[{\"delta\":{\"content\":\"Result\"}}]}\n\n"
         "data: [DONE]\n\n";
     ChunkCapture capture = {0};
-    LLMResponse *resp = openai_compatible_test_parse_stream(
+    LLMResponse *resp = openai_compatible_test_parse_stream_alloc(
         stream, capture_chunk, &capture);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "<think>\nthinking\n</think>\n\nResult");
@@ -114,7 +114,7 @@ START_TEST(test_openai_compatible_stream_closes_think_block_at_end)
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"planning\"}}]}\n\n"
         "data: [DONE]\n\n";
     ChunkCapture capture = {0};
-    LLMResponse *resp = openai_compatible_test_parse_stream(
+    LLMResponse *resp = openai_compatible_test_parse_stream_alloc(
         stream, capture_chunk, &capture);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "<think>\nplanning\n</think>\n\n");
@@ -129,7 +129,7 @@ START_TEST(test_openai_compatible_stream_skips_empty_reasoning_deltas)
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\"}}]}\n\n"
         "data: {\"choices\":[{\"delta\":{\"content\":\"Plain\"}}]}\n\n"
         "data: [DONE]\n\n";
-    LLMResponse *resp = openai_compatible_test_parse_stream(stream, NULL, NULL);
+    LLMResponse *resp = openai_compatible_test_parse_stream_alloc(stream, NULL, NULL);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "Plain");
     llm_response_free(resp);
@@ -185,7 +185,7 @@ START_TEST(test_openai_compatible_stream_splits_lines_across_fragments)
     const char *fragments[] = {frag1, frag2, frag3, frag4};
 
     ChunkCapture capture = {0};
-    LLMResponse *resp = openai_compatible_test_stream_fragments(
+    LLMResponse *resp = openai_compatible_test_stream_fragments_alloc(
         fragments, NULL, 4, capture_chunk, &capture);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "Hello!");
@@ -203,7 +203,7 @@ START_TEST(test_openai_compatible_stream_final_line_without_newline)
     const char *fragments[] = {frag1, frag2};
 
     ChunkCapture capture = {0};
-    LLMResponse *resp = openai_compatible_test_stream_fragments(
+    LLMResponse *resp = openai_compatible_test_stream_fragments_alloc(
         fragments, NULL, 2, capture_chunk, &capture);
     ck_assert_ptr_nonnull(resp);
     ck_assert_str_eq(resp->content, "bye!!");
@@ -216,7 +216,7 @@ START_TEST(test_build_url_appends_v1_chat_completions)
 {
     /* Plain endpoint without a version prefix gets /v1/chat/completions
      * appended (api.openai.com convention). */
-    char *url = openai_compatible_test_build_url("https://api.openai.com");
+    char *url = openai_compatible_test_build_url_alloc("https://api.openai.com");
     ck_assert_ptr_nonnull(url);
     ck_assert_str_eq(url, "https://api.openai.com/v1/chat/completions");
     free(url);
@@ -227,7 +227,7 @@ START_TEST(test_build_url_v1_base_appends_chat_completions)
 {
     /* OpenCode Zen's documented base already includes /v1; appending
      * /v1/chat/completions would produce a doubled /v1/v1 path. */
-    char *url = openai_compatible_test_build_url("https://opencode.ai/zen/v1");
+    char *url = openai_compatible_test_build_url_alloc("https://opencode.ai/zen/v1");
     ck_assert_ptr_nonnull(url);
     ck_assert_str_eq(url, "https://opencode.ai/zen/v1/chat/completions");
     free(url);
@@ -237,7 +237,7 @@ END_TEST
 START_TEST(test_build_url_bare_base_appends_v1_chat_completions)
 {
     /* Host root without a version prefix gets the full /v1 path. */
-    char *url = openai_compatible_test_build_url("https://opencode.ai/zen");
+    char *url = openai_compatible_test_build_url_alloc("https://opencode.ai/zen");
     ck_assert_ptr_nonnull(url);
     ck_assert_str_eq(url, "https://opencode.ai/zen/v1/chat/completions");
     free(url);
@@ -246,7 +246,7 @@ END_TEST
 
 START_TEST(test_build_url_keeps_exact_chat_completions_endpoint)
 {
-    char *url = openai_compatible_test_build_url("https://opencode.ai/zen/v1/chat/completions");
+    char *url = openai_compatible_test_build_url_alloc("https://opencode.ai/zen/v1/chat/completions");
     ck_assert_ptr_nonnull(url);
     ck_assert_str_eq(url, "https://opencode.ai/zen/v1/chat/completions");
     free(url);
@@ -255,7 +255,7 @@ END_TEST
 
 START_TEST(test_body_embeds_reasoning_effort_when_set)
 {
-    char *body = openai_compatible_test_build_body(
+    char *body = openai_compatible_test_build_body_alloc(
         "qwen3", "[{\"role\":\"user\",\"content\":\"hi\"}]", 1, 0.7,
         NULL, NULL, 0, "none");
     ck_assert_ptr_nonnull(body);
@@ -263,7 +263,7 @@ START_TEST(test_body_embeds_reasoning_effort_when_set)
     ck_assert(strstr(body, "\"stream\":true") != NULL);
     free(body);
 
-    body = openai_compatible_test_build_body(
+    body = openai_compatible_test_build_body_alloc(
         "qwen3", "[]", 0, 0.7, NULL, NULL, 0, "max");
     ck_assert_ptr_nonnull(body);
     ck_assert(strstr(body, "\"reasoning_effort\":\"max\"") != NULL);
@@ -273,7 +273,7 @@ END_TEST
 
 START_TEST(test_body_omits_reasoning_effort_when_unset)
 {
-    char *body = openai_compatible_test_build_body(
+    char *body = openai_compatible_test_build_body_alloc(
         "qwen3", "[]", 0, 0.7, NULL, NULL, 0, NULL);
     ck_assert_ptr_nonnull(body);
     ck_assert_ptr_null(strstr(body, "reasoning_effort"));
@@ -283,25 +283,25 @@ END_TEST
 
 START_TEST(test_body_rejects_invalid_effort)
 {
-    ck_assert_ptr_null(openai_compatible_test_build_body(
+    ck_assert_ptr_null(openai_compatible_test_build_body_alloc(
         "qwen3", "[]", 0, 0.7, NULL, NULL, 0, "xhigh"));
-    ck_assert_ptr_null(openai_compatible_test_build_body(
+    ck_assert_ptr_null(openai_compatible_test_build_body_alloc(
         "qwen3", "[]", 0, 0.7, NULL, NULL, 0, "minimal"));
-    ck_assert_ptr_null(openai_compatible_test_build_body(
+    ck_assert_ptr_null(openai_compatible_test_build_body_alloc(
         "qwen3", "[]", 0, 0.7, NULL, NULL, 0, "extreme"));
 }
 END_TEST
 
 START_TEST(test_body_with_tools_and_schema_still_carries_effort)
 {
-    char *body = openai_compatible_test_build_body(
+    char *body = openai_compatible_test_build_body_alloc(
         "qwen3", "[]", 0, 0.7, "[{\"type\":\"function\"}]", NULL, 0, "high");
     ck_assert_ptr_nonnull(body);
     ck_assert(strstr(body, "\"reasoning_effort\":\"high\"") != NULL);
     ck_assert(strstr(body, "\"tools\":") != NULL);
     free(body);
 
-    body = openai_compatible_test_build_body(
+    body = openai_compatible_test_build_body_alloc(
         "qwen3", "[]", 0, 0.7, NULL, "{\"type\":\"object\"}", 1, "low");
     ck_assert_ptr_nonnull(body);
     ck_assert(strstr(body, "\"reasoning_effort\":\"low\"") != NULL);

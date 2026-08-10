@@ -5,7 +5,7 @@ This file governs how an AI coding agent writes, edits, and reviews C code in th
 Environment and toolchain
 
 - Linux (NixOS): all builds and Check test runs happen inside `nix develop`. Never assume system-installed toolchain versions — if `nix develop` isn't active, the agent should not run `gcc`/`make`/`cmake` directly; it should either enter the shell first or flag that it's missing.
-- macOS: use the project's Homebrew-based toolchain (document the exact formula list here once locked in — e.g. `llvm`, `check`, sanitizer runtimes bundled with Xcode's clang). Confirm clang version supports the same sanitizer flags as the Linux build before running anything.
+- macOS: use the project's Homebrew-based toolchain. The exact formula set is pinned in `Brewfile` at the repo root: `check`, `cjson`, `cmake`, `curl`, `libuv`, `openssl@3`, `pkgconf`, `sqlite` (install with `brew bundle --file=Brewfile`). Homebrew cannot version-pin unversioned formulae, so versions float; `brew list --versions` output is recorded in CI logs for traceability. Sanitizers are AppleClang's (bundled with Xcode), same ASan/UBSan flags as Linux; LeakSanitizer is unsupported on macOS, so CI sets `ASAN_OPTIONS=detect_leaks=0` — that is the one sanctioned deviation. Confirm clang version supports the same sanitizer flags as the Linux build before running anything.
 - Other/CI: any environment outside the two above must have its toolchain versions pinned and documented before an agent runs a build in it — no ad hoc "whatever's installed" builds.
 - An agent should never silently fall back to a system compiler when the expected dev shell isn't active — that's a "stop and ask" situation, not a "just try it" one.
 
@@ -50,7 +50,7 @@ No undefined behavior
 
 Structure and headers
 
-- One header per module, matching `.c`. No circular includes.
+- One header per module, matching `.c`. No circular includes. Documented exception: the tool modules under `src/tools/` share one subsystem contract via `tool.h` and `registry.h`; per-tool headers would only duplicate those factory declarations, so they are intentionally not generated. Everywhere else the one-header-per-module rule applies (`src/llm/factory.h` and `src/llm/ollama.h` were added in the 2026-08 compliance sweep).
 - Include guards on every header, consistent style repo-wide.
 - No function longer than ~60 lines without a strong reason.
 - Public functions carry doc comments stating ownership and failure modes — the exact requirements are in the Documentation standards section below.

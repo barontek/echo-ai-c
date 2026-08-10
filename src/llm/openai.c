@@ -1889,7 +1889,7 @@ LLMProvider *openai_provider_create(const char *base_url, const char *api_token,
 }
 
 #ifdef OPENAI_TEST
-char *openai_test_build_request_body(Message *messages, int count,
+char *openai_test_build_request_body_alloc(Message *messages, int count,
                                      const char *model, double temperature,
                                      int stream, const char *tools_json,
                                      const char *json_schema,
@@ -1899,12 +1899,12 @@ char *openai_test_build_request_body(Message *messages, int count,
                               tools_json, json_schema, effort);
 }
 
-LLMResponse *openai_test_parse_response(const char *raw)
+LLMResponse *openai_test_parse_response_alloc(const char *raw)
 {
     return parse_response(raw);
 }
 
-LLMResponse *openai_test_stream_fragments(
+LLMResponse *openai_test_stream_fragments_alloc(
     const char **fragments, const size_t *lengths, int count,
     void (*on_chunk)(const char *, void *), void *userdata)
 {

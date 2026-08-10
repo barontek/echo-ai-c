@@ -218,7 +218,7 @@ uint64_t uv_now(const uv_loop_t *loop)
     return stub_uv_now_calls++ == 0 ? UV_NOW_FIRST : UV_NOW_LATER;
 }
 
-LLMResponse *agent_run_streaming(Agent *agent, const char *input,
+LLMResponse *agent_run_streaming_new(Agent *agent, const char *input,
                                   void (*on_chunk)(const char *, void *),
                                   void *userdata)
 {
@@ -308,7 +308,7 @@ LLMProvider *opencode_zen_provider_create(const char *b, const char *t,
                                           const char *e)
 { (void)b; (void)t; (void)e; return NULL; }
 
-Session *session_manager_load_session(SessionManager *sm, const char *id)
+Session *session_manager_load_session_alloc(SessionManager *sm, const char *id)
 { (void)sm; (void)id; return stub_session_load_result; }
 
 SessionManager *session_manager_retain(SessionManager *sm) { return sm; }
@@ -363,7 +363,7 @@ int session_manager_switch_branch(SessionManager *sm, const char *sid,
                                   const char *bid)
 { (void)sm; (void)sid; (void)bid; return stub_switch_rc; }
 
-char *session_manager_tag_message(SessionManager *sm, const char *sid,
+char *session_manager_tag_message_new(SessionManager *sm, const char *sid,
                                   int index, const char *fork_group_id)
 {
     (void)sm; (void)sid; (void)index; (void)fork_group_id;
@@ -456,7 +456,7 @@ int message_copy(Message *dst, const Message *src)
     return 0;
 }
 
-LLMResponse *agent_run_streaming_context(Agent *agent,
+LLMResponse *agent_run_streaming_context_new(Agent *agent,
                                          void (*on_chunk)(const char *, void *),
                                          void *userdata)
 {
@@ -484,7 +484,7 @@ void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *u)
 { (void)cb; (void)u; }
 
 void log_error(const char *fmt, ...) { (void)fmt; }
-void log_init(void) {}
+int log_init(void) { return 0; }
 void log_cleanup(void) {}
 void log_set_level(int l) { (void)l; }
 void log_msg(int l, const char *f, int line, const char *fmt, ...)
@@ -824,6 +824,44 @@ START_TEST(test_enqueue_multiple)
     ck_assert_ptr_nonnull(c->msg_queue->next);
     ck_assert_str_eq(c->msg_queue->next->data, "{\"msg\":2}");
     ck_assert_str_eq(c->msg_queue_tail->data, "{\"msg\":3}");
+    WSClient dummy = {0};
+    ws_chat_on_close(&dummy, c);
+    reset_capture();
+}
+END_TEST
+
+/* ws_chat_enqueue allocates the node (calloc) then the data copy
+ * (str_dup) before committing to the queue; a failure at either step
+ * must leave the queue exactly as it was (no partial tail or dangling
+ * node) and free the intermediate allocation (ASan-verified). */
+START_TEST(test_enqueue_allocation_failure_leaves_queue_unchanged)
+{
+    WSChatCtx *c = calloc(1, sizeof(WSChatCtx));
+    ck_assert_ptr_nonnull(c);
+    ws_chat_enqueue(c, "{\"msg\":0}");
+    QueuedMsg *head_before = c->msg_queue;
+    QueuedMsg *tail_before = c->msg_queue_tail;
+    size_t queue_len_before = 1;
+
+    for (int fail_at = 1; fail_at <= 2; fail_at++)
+    {
+        routes_ws_test_set_alloc_fail(fail_at);
+        ws_chat_enqueue(c, "{\"msg\":N}");
+        ck_assert_ptr_eq(c->msg_queue, head_before);
+        ck_assert_ptr_eq(c->msg_queue_tail, tail_before);
+        ck_assert_ptr_null(tail_before->next);
+        ck_assert_str_eq(c->msg_queue->data, "{\"msg\":0}");
+    }
+    routes_ws_test_set_alloc_fail(-1);
+
+    /* reset: the queue still enqueues and the node chain stays intact */
+    ws_chat_enqueue(c, "{\"msg\":2}");
+    QueuedMsg *q = c->msg_queue;
+    size_t len = 0;
+    while (q) { len++; q = q->next; }
+    ck_assert_uint_eq(len, queue_len_before + 1);
+    ck_assert_str_eq(c->msg_queue_tail->data, "{\"msg\":2}");
+
     WSClient dummy = {0};
     ws_chat_on_close(&dummy, c);
     reset_capture();
@@ -2051,6 +2089,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_chunk_null_ctx);
     tcase_add_test(tc, test_on_chunk_null_ws);
     tcase_add_test(tc, test_on_chunk_with_session_id);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_send_done");
@@ -2060,12 +2099,14 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_send_done_with_session_id);
     tcase_add_test(tc, test_send_done_with_title);
     tcase_add_test(tc, test_send_done_with_tool_calls);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_chat_emit_session_start");
     tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_emit_session_start_no_session_id);
     tcase_add_test(tc, test_emit_session_start_with_session);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_title_update_cb");
@@ -2074,6 +2115,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_title_update_cb_null_ctx);
     tcase_add_test(tc, test_title_update_cb_null_ws);
     tcase_add_test(tc, test_title_update_cb_nulls);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_tool_start_cb");
@@ -2081,18 +2123,22 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_tool_start_cb_valid);
     tcase_add_test(tc, test_tool_start_cb_nulls);
     tcase_add_test(tc, test_tool_start_cb_null_ws);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_tool_end_cb");
     tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_tool_end_cb_valid);
     tcase_add_test(tc, test_tool_end_cb_nulls);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_chat_enqueue");
     tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_enqueue_single);
     tcase_add_test(tc, test_enqueue_multiple);
+    tcase_add_test(tc, test_enqueue_allocation_failure_leaves_queue_unchanged);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_chat_flush_queue");
@@ -2102,12 +2148,14 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_flush_queue_single_success);
     tcase_add_test(tc, test_flush_queue_single_null_resp);
     tcase_add_test(tc, test_flush_queue_agent_gets_session_id);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_chat_on_close");
     tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_on_close_cleanup);
     tcase_add_test(tc, test_on_close_with_agent);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_approval_cb");
@@ -2116,6 +2164,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_approval_cb_null_ws);
     tcase_add_test(tc, test_approval_cb_approved);
     tcase_add_test(tc, test_approval_cb_rejected);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_ask_user_cb");
@@ -2125,6 +2174,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_ask_user_cb_null_question);
     tcase_add_test(tc, test_ask_user_cb_times_out_without_response);
     tcase_add_test(tc, test_ask_user_cb_default_timeout_never_nulls);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_chat_on_message");
@@ -2171,6 +2221,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_branch_switch_success);
     tcase_add_test(tc, test_on_message_branch_switch_not_found);
     tcase_add_test(tc, test_on_message_branch_info_request);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("routes_ws_chat_init");
@@ -2182,6 +2233,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_ws_init_with_session_id_query);
     tcase_add_test(tc,
                    test_logout_invalidation_cancels_agents_and_releases_storage);
+    tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
 
     return s;

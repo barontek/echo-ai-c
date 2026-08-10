@@ -7,6 +7,7 @@
  * Run with:    ./fuzz_config -max_len=4096
  */
 
+#define _GNU_SOURCE
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>

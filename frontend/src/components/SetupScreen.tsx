@@ -5,6 +5,15 @@ interface Props {
   onComplete: () => void;
 }
 
+/**
+ * SetupScreen - first-run vault setup: creates the initial password.
+ *
+ * @param props.onComplete - Called after a successful setup.
+ *
+ * Validates locally (min 8 chars, password/confirm match) before calling
+ * api.setup(); the backend rejects a mismatch as a final guard. Owns no
+ * effects.
+ */
 export function SetupScreen({ onComplete }: Props) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');

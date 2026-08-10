@@ -16,7 +16,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     size_t second = (size - first) / 2;
     const char *fragments[] = {stream, stream + first, stream + first + second};
     size_t lengths[] = {first, second, size - first - second};
-    LLMResponse *response = openai_test_stream_fragments(
+    LLMResponse *response = openai_test_stream_fragments_alloc(
         fragments, lengths, 3, NULL, NULL);
     llm_response_free(response);
     free(stream);

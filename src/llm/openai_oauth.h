@@ -313,7 +313,7 @@ int openai_oauth_logout(OpenAIOAuth *auth);
 
 #ifdef OPENAI_OAUTH_TEST
 /**
- * openai_oauth_test_build_authorize_url - build the issuer authorize URL
+ * openai_oauth_test_build_authorize_url_alloc - build the issuer authorize URL
  * @state: OAuth state value embedded in the URL (borrowed).
  * @challenge: PKCE challenge value embedded in the URL (borrowed).
  *
@@ -323,11 +323,11 @@ int openai_oauth_logout(OpenAIOAuth *auth);
  * Return: caller-owned URL string, or NULL on allocation failure. Free
  * with free(). Thread-safe; no shared state.
  */
-char *openai_oauth_test_build_authorize_url(const char *state,
+char *openai_oauth_test_build_authorize_url_alloc(const char *state,
                                              const char *challenge);
 
 /**
- * openai_oauth_test_pkce_challenge - derive the S256 PKCE challenge
+ * openai_oauth_test_pkce_challenge_alloc - derive the S256 PKCE challenge
  * @verifier: code verifier string (borrowed).
  *
  * Test-only hook wrapping the challenge derivation; performs no network
@@ -336,7 +336,7 @@ char *openai_oauth_test_build_authorize_url(const char *state,
  * Return: caller-owned base64url challenge, or NULL on allocation
  * failure. Free with free(). Thread-safe; no shared state.
  */
-char *openai_oauth_test_pkce_challenge(const char *verifier);
+char *openai_oauth_test_pkce_challenge_alloc(const char *verifier);
 
 /**
  * openai_oauth_test_parse_callback - parse a raw callback HTTP request

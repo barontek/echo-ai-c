@@ -359,7 +359,7 @@ cleanup:
     return result;
 }
 
-char *session_manager_load_provider_oauth(SessionManager *sm,
+char *session_manager_load_provider_oauth_alloc(SessionManager *sm,
                                            const char *provider_name)
 {
     char *result = NULL;
@@ -742,7 +742,7 @@ static Session *load_session_locked(SessionManager *sm, const char *id)
     return s;
 }
 
-Session *session_manager_load_session(SessionManager *sm, const char *id)
+Session *session_manager_load_session_alloc(SessionManager *sm, const char *id)
 {
     if (!sm || !id || !sm->key_initialized || !sm->db) return NULL;
     if (!id[0]) return NULL;
@@ -770,7 +770,7 @@ void session_manager_unlock(SessionManager *sm)
  * hold sm->lock; do not call any non-_nolock session_manager_* API from
  * within — the non-recursive PTHREAD_MUTEX_NORMAL will deadlock on
  * re-entry. */
-Session *session_manager_load_session_nolock(SessionManager *sm, const char *id)
+Session *session_manager_load_session_nolock_alloc(SessionManager *sm, const char *id)
 {
     if (!sm || !id || !sm->key_initialized || !sm->db) return NULL;
     if (!id[0]) return NULL;
@@ -790,60 +790,28 @@ Session *session_manager_load_session_nolock(SessionManager *sm, const char *id)
 enum save_core_mode { SM_UPSERT, SM_INSERT_IF_ABSENT };
 
 /* C10: the shared serialize+encrypt+SQL body; caller MUST hold sm->lock. */
-static int save_session_core_locked(SessionManager *sm, Session *session,
-                                     enum save_core_mode mode)
+
+/* Encrypts the serialized title/messages/metadata/events JSON with the
+ * session key. Returns 0 on success (all four out-params hold caller-
+ * owned blobs), or -1 on any encryption failure with everything
+ * allocated so far freed. */
+static int session_encrypt_all_fields(SessionManager *sm,
+                                      const char *title,
+                                      const char *messages_json,
+                                      const char *metadata_json,
+                                      const char *events_json,
+                                      unsigned char **title_enc, int *title_enc_len,
+                                      unsigned char **msgs_enc, int *msgs_enc_len,
+                                      unsigned char **meta_enc, int *meta_enc_len,
+                                      unsigned char **events_enc, int *events_enc_len)
 {
-    char *messages_json = session_serialize_messages(session);
-    char *metadata_json = session_serialize_metadata(session);
-    char *events_json = session_serialize_events(session);
-
     int abort_save = 0;
-    if (!messages_json)
+    if (!abort_save && title && title[0])
     {
-        log_error("save_session: serialize messages failed (OOM)", NULL);
-        abort_save = 1;
-    }
-    if (session->metadata && !metadata_json)
-    {
-        log_error("save_session: serialize metadata failed (OOM)", NULL);
-        abort_save = 1;
-    }
-    if (session->events && !events_json)
-    {
-        log_error("save_session: serialize events failed (OOM)", NULL);
-        abort_save = 1;
-    }
-    if (!abort_save && messages_json && strlen(messages_json) > (size_t)INT_MAX)
-    {
-        log_error("save_session: messages JSON exceeds INT_MAX bytes", NULL);
-        abort_save = 1;
-    }
-    if (!abort_save && metadata_json && strlen(metadata_json) > (size_t)INT_MAX)
-    {
-        log_error("save_session: metadata JSON exceeds INT_MAX bytes", NULL);
-        abort_save = 1;
-    }
-    if (!abort_save && events_json && strlen(events_json) > (size_t)INT_MAX)
-    {
-        log_error("save_session: events JSON exceeds INT_MAX bytes", NULL);
-        abort_save = 1;
-    }
-
-    unsigned char *msgs_enc = NULL;
-    int msgs_enc_len = 0;
-    unsigned char *meta_enc = NULL;
-    int meta_enc_len = 0;
-    unsigned char *events_enc = NULL;
-    int events_enc_len = 0;
-    unsigned char *title_enc = NULL;
-    int title_enc_len = 0;
-
-    if (!abort_save && session->title && session->title[0])
-    {
-        title_enc = encryption_encrypt(&sm->enc_key,
-                                       (const unsigned char *)session->title,
-                                       (int)strlen(session->title), &title_enc_len);
-        if (!title_enc)
+        *title_enc = encryption_encrypt(&sm->enc_key,
+                                        (const unsigned char *)title,
+                                        (int)strlen(title), title_enc_len);
+        if (!*title_enc)
         {
             log_error("save_session: encryption_encrypt failed for title", NULL);
             abort_save = 1;
@@ -852,10 +820,10 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
 
     if (!abort_save && messages_json)
     {
-        msgs_enc = encryption_encrypt(&sm->enc_key,
-                                       (const unsigned char *)messages_json,
-                                       strlen(messages_json), &msgs_enc_len);
-        if (!msgs_enc)
+        *msgs_enc = encryption_encrypt(&sm->enc_key,
+                                        (const unsigned char *)messages_json,
+                                        strlen(messages_json), msgs_enc_len);
+        if (!*msgs_enc)
         {
             log_error("save_session: encryption_encrypt failed for messages", NULL);
             abort_save = 1;
@@ -864,10 +832,10 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
 
     if (!abort_save && metadata_json)
     {
-        meta_enc = encryption_encrypt(&sm->enc_key,
-                                       (const unsigned char *)metadata_json,
-                                       strlen(metadata_json), &meta_enc_len);
-        if (!meta_enc)
+        *meta_enc = encryption_encrypt(&sm->enc_key,
+                                        (const unsigned char *)metadata_json,
+                                        strlen(metadata_json), meta_enc_len);
+        if (!*meta_enc)
         {
             log_error("save_session: encryption_encrypt failed for metadata", NULL);
             abort_save = 1;
@@ -876,10 +844,10 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
 
     if (!abort_save && events_json)
     {
-        events_enc = encryption_encrypt(&sm->enc_key,
-                                         (const unsigned char *)events_json,
-                                         strlen(events_json), &events_enc_len);
-        if (!events_enc)
+        *events_enc = encryption_encrypt(&sm->enc_key,
+                                          (const unsigned char *)events_json,
+                                          strlen(events_json), events_enc_len);
+        if (!*events_enc)
         {
             log_error("save_session: encryption_encrypt failed for events", NULL);
             abort_save = 1;
@@ -888,11 +856,23 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
 
     if (abort_save)
     {
-        free(messages_json); free(metadata_json); free(events_json);
-        free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
+        free(*msgs_enc); free(*meta_enc); free(*events_enc); free(*title_enc);
+        *msgs_enc = NULL; *meta_enc = NULL; *events_enc = NULL; *title_enc = NULL;
         return -1;
     }
+    return 0;
+}
 
+/* Runs the upsert (or insert-if-absent) statement with the encrypted
+ * blobs bound, freeing the statement and all input buffers in every
+ * path. Returns 1 when a row was inserted, 0 when it was updated (or
+ * already present in insert-if-absent mode), -1 on failure. */
+static int session_save_stmt(SessionManager *sm, Session *session, int mode,
+                             unsigned char *title_enc, int title_enc_len,
+                             unsigned char *msgs_enc, int msgs_enc_len,
+                             unsigned char *meta_enc, int meta_enc_len,
+                             unsigned char *events_enc, int events_enc_len)
+{
     const char *sql_upsert =
         "INSERT INTO agent_sessions "
         "(id, title_encrypted, title_generation_attempted, created_at, "
@@ -919,7 +899,6 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
     {
         log_error("sqlite prepare save", "err", sqlite3_errmsg(sm->db), NULL);
-        free(messages_json); free(metadata_json); free(events_json);
         free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
         return -1;
     }
@@ -961,7 +940,6 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
     {
         log_error("sqlite bind save", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
-        free(messages_json); free(metadata_json); free(events_json);
         free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
         return -1;
     }
@@ -971,7 +949,6 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
     {
         log_error("sqlite step save", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
-        free(messages_json); free(metadata_json); free(events_json);
         free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
         return -1;
     }
@@ -979,7 +956,6 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
     int changes = sqlite3_changes(sm->db);
     sqlite3_finalize(stmt);
 
-    free(messages_json); free(metadata_json); free(events_json);
     free(msgs_enc); free(meta_enc); free(events_enc); free(title_enc);
 
     if (mode == SM_INSERT_IF_ABSENT)
@@ -987,6 +963,80 @@ static int save_session_core_locked(SessionManager *sm, Session *session,
     return 0;
 }
 
+static int save_session_core_locked(SessionManager *sm, Session *session,
+                                 int mode)
+{
+    char *messages_json = session_serialize_messages_new(session);
+    char *metadata_json = session_serialize_metadata_new(session);
+    char *events_json = session_serialize_events_new(session);
+
+    int abort_save = 0;
+    if (!messages_json)
+    {
+        log_error("save_session: serialize messages failed (OOM)", NULL);
+        abort_save = 1;
+    }
+    if (session->metadata && !metadata_json)
+    {
+        log_error("save_session: serialize metadata failed (OOM)", NULL);
+        abort_save = 1;
+    }
+    if (session->events && !events_json)
+    {
+        log_error("save_session: serialize events failed (OOM)", NULL);
+        abort_save = 1;
+    }
+    if (!abort_save && messages_json && strlen(messages_json) > (size_t)INT_MAX)
+    {
+        log_error("save_session: messages JSON exceeds INT_MAX bytes", NULL);
+        abort_save = 1;
+    }
+    if (!abort_save && metadata_json && strlen(metadata_json) > (size_t)INT_MAX)
+    {
+        log_error("save_session: metadata JSON exceeds INT_MAX bytes", NULL);
+        abort_save = 1;
+    }
+    if (!abort_save && events_json && strlen(events_json) > (size_t)INT_MAX)
+    {
+        log_error("save_session: events JSON exceeds INT_MAX bytes", NULL);
+        abort_save = 1;
+    }
+
+    if (abort_save)
+    {
+        free(messages_json); free(metadata_json); free(events_json);
+        return -1;
+    }
+
+    unsigned char *title_enc = NULL;
+    int title_enc_len = 0;
+    unsigned char *msgs_enc = NULL;
+    int msgs_enc_len = 0;
+    unsigned char *meta_enc = NULL;
+    int meta_enc_len = 0;
+    unsigned char *events_enc = NULL;
+    int events_enc_len = 0;
+
+    if (session_encrypt_all_fields(sm, session->title,
+                                   messages_json, metadata_json, events_json,
+                                   &title_enc, &title_enc_len,
+                                   &msgs_enc, &msgs_enc_len,
+                                   &meta_enc, &meta_enc_len,
+                                   &events_enc, &events_enc_len) != 0)
+    {
+        free(messages_json); free(metadata_json); free(events_json);
+        return -1;
+    }
+
+    int result = session_save_stmt(sm, session, mode,
+                                   title_enc, title_enc_len,
+                                   msgs_enc, msgs_enc_len,
+                                   meta_enc, meta_enc_len,
+                                   events_enc, events_enc_len);
+
+    free(messages_json); free(metadata_json); free(events_json);
+    return result;
+}
 int session_manager_save_session(SessionManager *sm, Session *session)
 {
     if (!sm || !session || !sm->key_initialized || !sm->db) return -1;
@@ -1050,6 +1100,78 @@ int session_manager_delete_session(SessionManager *sm, const char *id)
     return (changed > 0) ? 1 : 0;
 }
 
+/* Grows all four parallel arrays when the row count hits capacity.
+ * Returns 0 on success, -1 on realloc failure (nothing mutated). */
+static int session_list_grow(SessionList *list, int *capacity)
+{
+    int new_cap = *capacity * 2;
+    char **new_ids = realloc(list->ids, sizeof(char *) * (size_t)new_cap);
+    if (!new_ids) return -1;
+    list->ids = new_ids;
+
+    char **new_titles = realloc(list->titles, sizeof(char *) * (size_t)new_cap);
+    if (!new_titles) return -1;
+    list->titles = new_titles;
+
+    char **new_dates = realloc(list->created_ats, sizeof(char *) * (size_t)new_cap);
+    if (!new_dates) return -1;
+    list->created_ats = new_dates;
+
+    int *new_tgas = realloc(list->title_generation_attempteds,
+                            sizeof(int) * (size_t)new_cap);
+    if (!new_tgas) return -1;
+    list->title_generation_attempteds = new_tgas;
+
+    *capacity = new_cap;
+    return 0;
+}
+
+/* Parses one row: decrypts the title, duplicates the strings, and
+ * commits it to the list. Returns 0 on success, -1 on allocation
+ * failure (nothing committed, everything allocated freed). */
+static int session_list_append_row(SessionList *list, sqlite3_stmt *stmt,
+                                   const EncryptionKey *key)
+{
+    const char *id = (const char *)sqlite3_column_text(stmt, 0);
+    const void *title_blob = sqlite3_column_blob(stmt, 1);
+    int title_len = sqlite3_column_bytes(stmt, 1);
+    int tga = sqlite3_column_int(stmt, 2);
+    const char *created = (const char *)sqlite3_column_text(stmt, 3);
+
+    char *title_dup = NULL;
+    unsigned char *dec = NULL;
+    int dec_len = 0;
+    if (title_blob && title_len > 0)
+        dec = encryption_decrypt(key, title_blob, title_len, &dec_len);
+    if (dec)
+    {
+        title_dup = str_dup((const char *)dec);
+        free(dec);
+    }
+    else
+    {
+        title_dup = str_dup("");
+    }
+
+    char *id_dup = str_dup(id ? id : "");
+    char *created_dup = str_dup(created ? created : "");
+    if (!id_dup || !title_dup || !created_dup)
+    {
+        /* B6: str_dup failure must not silently truncate; free locals and
+         * return -1 so the caller knows it failed. */
+        free(id_dup);
+        free(title_dup);
+        free(created_dup);
+        return -1;
+    }
+    list->ids[list->count] = id_dup;
+    list->titles[list->count] = title_dup;
+    list->created_ats[list->count] = created_dup;
+    list->title_generation_attempteds[list->count] = tga;
+    list->count++;
+    return 0;
+}
+
 SessionList *session_manager_list_sessions(SessionManager *sm)
 {
     if (!sm || !sm->data_dir || !sm->db || !sm->key_initialized) return NULL;
@@ -1070,10 +1192,10 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
     if (!list) { sqlite3_finalize(stmt); pthread_mutex_unlock(&sm->lock); return NULL; }
 
     int capacity = 16;
-    list->ids = malloc(sizeof(char *) * capacity);
-    list->titles = malloc(sizeof(char *) * capacity);
-    list->created_ats = malloc(sizeof(char *) * capacity);
-    list->title_generation_attempteds = malloc(sizeof(int) * capacity);
+    list->ids = malloc(sizeof(char *) * (size_t)capacity);
+    list->titles = malloc(sizeof(char *) * (size_t)capacity);
+    list->created_ats = malloc(sizeof(char *) * (size_t)capacity);
+    list->title_generation_attempteds = malloc(sizeof(int) * (size_t)capacity);
     if (!list->ids || !list->titles || !list->created_ats || !list->title_generation_attempteds)
     {
         sqlite3_finalize(stmt);
@@ -1084,91 +1206,20 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
 
     while (sqlite3_step(stmt) == SQLITE_ROW)
     {
-        if (list->count >= capacity)
+        if (list->count >= capacity && session_list_grow(list, &capacity) != 0)
         {
-            capacity *= 2;
-            char **new_ids = realloc(list->ids, sizeof(char *) * capacity);
-            if (!new_ids)
-            {
-                sqlite3_finalize(stmt);
-                pthread_mutex_unlock(&sm->lock);
-                session_list_free(list);
-                return NULL;
-            }
-            list->ids = new_ids;
-
-            char **new_titles = realloc(list->titles, sizeof(char *) * capacity);
-            if (!new_titles)
-            {
-                sqlite3_finalize(stmt);
-                pthread_mutex_unlock(&sm->lock);
-                session_list_free(list);
-                return NULL;
-            }
-            list->titles = new_titles;
-
-            char **new_dates = realloc(list->created_ats, sizeof(char *) * capacity);
-            if (!new_dates)
-            {
-                sqlite3_finalize(stmt);
-                pthread_mutex_unlock(&sm->lock);
-                session_list_free(list);
-                return NULL;
-            }
-            list->created_ats = new_dates;
-
-            int *new_tgas = realloc(list->title_generation_attempteds,
-                                    sizeof(int) * capacity);
-            if (!new_tgas)
-            {
-                sqlite3_finalize(stmt);
-                pthread_mutex_unlock(&sm->lock);
-                session_list_free(list);
-                return NULL;
-            }
-            list->title_generation_attempteds = new_tgas;
-        }
-
-        const char *id = (const char *)sqlite3_column_text(stmt, 0);
-        const void *title_blob = sqlite3_column_blob(stmt, 1);
-        int title_len = sqlite3_column_bytes(stmt, 1);
-        int tga = sqlite3_column_int(stmt, 2);
-        const char *created = (const char *)sqlite3_column_text(stmt, 3);
-
-        char *title_dup = NULL;
-        unsigned char *dec = NULL;
-        int dec_len = 0;
-        if (title_blob && title_len > 0)
-            dec = encryption_decrypt(&sm->enc_key, title_blob, title_len, &dec_len);
-        if (dec)
-        {
-            title_dup = str_dup((const char *)dec);
-            free(dec);
-        }
-        else
-        {
-            title_dup = str_dup("");
-        }
-
-        char *id_dup = str_dup(id ? id : "");
-        char *created_dup = str_dup(created ? created : "");
-        if (!id_dup || !title_dup || !created_dup)
-        {
-            /* B6: str_dup failure must not silently truncate; free locals and
-             * return NULL via the cleanup path so the caller knows it failed. */
-            free(id_dup);
-            free(title_dup);
-            free(created_dup);
             sqlite3_finalize(stmt);
             pthread_mutex_unlock(&sm->lock);
             session_list_free(list);
             return NULL;
         }
-        list->ids[list->count] = id_dup;
-        list->titles[list->count] = title_dup;
-        list->created_ats[list->count] = created_dup;
-        list->title_generation_attempteds[list->count] = tga;
-        list->count++;
+        if (session_list_append_row(list, stmt, &sm->enc_key) != 0)
+        {
+            sqlite3_finalize(stmt);
+            pthread_mutex_unlock(&sm->lock);
+            session_list_free(list);
+            return NULL;
+        }
     }
 
     sqlite3_finalize(stmt);
@@ -1263,9 +1314,9 @@ int session_manager_truncate_history(SessionManager *sm, const char *session_id,
 }
 
 
-char *session_manager_export_session(SessionManager *sm, const char *session_id)
+char *session_manager_export_session_new(SessionManager *sm, const char *session_id)
 {
-    Session *s = session_manager_load_session(sm, session_id);
+    Session *s = session_manager_load_session_alloc(sm, session_id);
     if (!s) return NULL;
 
     cJSON *json = cJSON_CreateObject();
@@ -1299,9 +1350,12 @@ char *session_manager_export_session(SessionManager *sm, const char *session_id)
     return str;
 }
 
-Session *session_manager_import_session(SessionManager *sm, const char *json_str)
+/* Parses the import JSON and builds a fresh Session from it (dropping
+ * "system"-role messages so what gets persisted matches what
+ * agent_save_session would have written). Returns a caller-owned
+ * Session, or NULL on parse/allocation failure. */
+static Session *import_session_build(const char *json_str)
 {
-    if (!sm || !sm->key_initialized || !json_str) return NULL;
 
     cJSON *json = cJSON_Parse(json_str);
     if (!json) return NULL;
@@ -1350,10 +1404,10 @@ Session *session_manager_import_session(SessionManager *sm, const char *json_str
     {
         /* J1: `agent_save_session` filters out "system" messages before
          * persisting — the system prompt is regenerated by
-         * `inject_system_with_summary` on every `agent_run_streaming`
+         * `inject_system_with_summary` on every `agent_run_streaming_new`
          * cycle, so storing a stale copy would either (a) get
          * overwritten on the next run, leaking memory and confusing the
-         * agent's messages array, or (b) if a future `agent_run_streaming`
+         * agent's messages array, or (b) if a future `agent_run_streaming_new`
          * skipped `inject_system_with_summary`, it would send a stale
          * system prompt. The import path used to bypass this filter
          * (it called `session_deserialize_messages` directly on the
@@ -1408,6 +1462,15 @@ Session *session_manager_import_session(SessionManager *sm, const char *json_str
     }
 
     cJSON_Delete(json);
+    return s;
+}
+
+Session *session_manager_import_session_new(SessionManager *sm, const char *json_str)
+{
+    if (!sm || !sm->key_initialized || !json_str) return NULL;
+
+    Session *s = import_session_build(json_str);
+    if (!s) return NULL;
 
     /* C10: hold sm->lock across the insert so the import+check are atomic
      * at the mutex level too (the SQL-level DO NOTHING is already atomic

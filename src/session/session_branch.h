@@ -74,7 +74,7 @@ int session_manager_switch_branch(SessionManager *sm, const char *session_id,
                                   const char *branch_id);
 
 /**
- * session_manager_tag_message - mark a message as a chain fork point
+ * session_manager_tag_message_new - mark a message as a chain fork point
  * @sm: manager; must be non-NULL with key_initialized and db.
  * @session_id: session id; must be non-NULL; borrowed.
  * @index: position of the message to tag; must be in bounds.
@@ -90,7 +90,7 @@ int session_manager_switch_branch(SessionManager *sm, const char *session_id,
  * Return: caller-owned minted message id (free with free()), or NULL on
  * any failure. Thread-safe via sm->lock.
  */
-char *session_manager_tag_message(SessionManager *sm, const char *session_id,
+char *session_manager_tag_message_new(SessionManager *sm, const char *session_id,
                                   int index, const char *fork_group_id);
 
 /**

@@ -54,24 +54,26 @@ static void reset_stubs(void)
  * Stub server functions
  * --------------------------------------------------------------------------- */
 
-void server_response(Client *client, int status, const char *content_type,
+int server_response(Client *client, int status, const char *content_type,
                      const char *body)
 {
     (void)client; (void)content_type;
     captured_status = status;
     free(captured_body);
     captured_body = body ? str_dup(body) : NULL;
+    return 0;
 }
 
-void server_response_json(Client *client, int status, const char *json)
+int server_response_json(Client *client, int status, const char *json)
 {
     (void)client;
     captured_status = status;
     free(captured_body);
     captured_body = json ? str_dup(json) : NULL;
+    return 0;
 }
 
-void server_response_error(Client *client, int status, const char *msg)
+int server_response_error(Client *client, int status, const char *msg)
 {
     (void)client;
     captured_status = status;
@@ -80,11 +82,12 @@ void server_response_error(Client *client, int status, const char *msg)
     cJSON_AddStringToObject(j, "error", msg ? msg : "");
     captured_body = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
+    return 0;
 }
 
 void client_close(Client *client) { (void)client; }
-void server_sse_write(Client *client, const char *data)
-{ (void)client; (void)data; }
+int server_sse_write(Client *client, const char *data)
+{ (void)client; (void)data; return 0; }
 void routes_ws_invalidate_auth(ServerContext *ctx) { (void)ctx; }
 
 /* ---------------------------------------------------------------------------

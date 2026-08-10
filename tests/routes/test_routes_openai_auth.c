@@ -26,20 +26,22 @@ static char *copy_string(const char *value)
     return copy;
 }
 
-void server_response_json(Client *client, int status, const char *json)
+int server_response_json(Client *client, int status, const char *json)
 {
     (void)client;
     captured_status = status;
     free(captured_body);
     captured_body = copy_string(json ? json : "");
+    return 0;
 }
 
-void server_response_error(Client *client, int status, const char *message)
+int server_response_error(Client *client, int status, const char *message)
 {
     (void)client;
     captured_status = status;
     free(captured_body);
     captured_body = copy_string(message ? message : "");
+    return 0;
 }
 
 OpenAIOAuthState openai_oauth_status(OpenAIOAuth *auth, char **account_id,

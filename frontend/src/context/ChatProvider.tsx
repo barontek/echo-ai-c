@@ -135,6 +135,24 @@ function toBranchInfo(branches?: BranchEntry[]): BranchInfo[] {
     }));
 }
 
+/**
+ * ChatProvider - owns the entire chat session lifecycle for the app.
+ *
+ * Renders its children inside a ChatContext whose value changes whenever
+ * sessions, the active session, model/provider selection, streaming
+ * messages, or approval/ask-user prompts change. Owns the WebSocket to
+ * /ws/chat (created on mount or when model/provider/session change), the
+ * SSE-equivalent message stream, and the initial data load.
+ *
+ * Effect ownership (cleanup contract):
+ * - The initial-data effect aborts its AbortController and any in-flight
+ *   model request on unmount.
+ * - The websocket effect closes the socket AND removes the
+ *   'visibilitychange' listener on unmount; the listener reconnects a
+ *   dropped socket when the tab becomes visible again.
+ * - modelRequestControllerRef/wsRef are nulled on unmount so late
+ *   async callbacks no-op instead of touching dead state.
+ */
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<ChatContextValue['sessions']>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -1051,7 +1069,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const supportsEffort = effortSupportedProviders.includes(currentProvider);
-  const effortOptions = effortOptionsByProvider[currentProvider] || [];
+  /* `|| []` must be memoized: a bare `|| []` here would mint a fresh
+   * array each render when the provider isn't in the map, churning the
+   * context value's effortOptions reference and re-rendering consumers. */
+  const effortOptions = useMemo(
+    () => effortOptionsByProvider[currentProvider] || [],
+    [effortOptionsByProvider, currentProvider]
+  );
 
   const value = useMemo<ChatContextValue>(
     () => ({
