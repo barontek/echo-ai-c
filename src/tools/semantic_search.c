@@ -1,3 +1,9 @@
+/*
+ * semantic_search.c - Process-wide TF-IDF document index and the
+ * semantic_search tool that queries it. Depends on: tool.h (cJSON),
+ * string_utils, logging, libm.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +18,8 @@
 #ifdef SEMANTIC_SEARCH_TEST
 static int sem_alloc_counter = 0;
 static int sem_alloc_fail_at = -1;
+static int sem_realloc_counter = 0;
+static int sem_realloc_fail_at = -1;
 
 static char *sem_test_strdup(const char *s)
 {
@@ -20,7 +28,15 @@ static char *sem_test_strdup(const char *s)
     return str_dup(s);
 }
 
+static void *sem_test_realloc(void *ptr, size_t size)
+{
+    sem_realloc_counter++;
+    if (sem_realloc_counter == sem_realloc_fail_at) return NULL;
+    return realloc(ptr, size);
+}
+
 #define str_dup sem_test_strdup
+#define realloc sem_test_realloc
 #endif
 
 #define MAX_DOCS 256
@@ -45,8 +61,18 @@ void semantic_search_test_set_alloc_fail(int nth_allocation)
     sem_alloc_fail_at = nth_allocation;
 }
 
+void semantic_search_test_set_realloc_fail(int nth_realloc)
+{
+    sem_realloc_counter = 0;
+    sem_realloc_fail_at = nth_realloc;
+}
+
 void semantic_search_test_reset(void)
 {
+    sem_alloc_counter = 0;
+    sem_alloc_fail_at = -1;
+    sem_realloc_counter = 0;
+    sem_realloc_fail_at = -1;
     for (int i = 0; i < search_index.doc_count; i++) {
         free(search_index.documents[i]);
         free(search_index.term_freqs[i]);
@@ -85,6 +111,8 @@ static void tokenize(const char *text, char tokens[MAX_TOKENS][MAX_TOKEN_LEN], i
         else if (ci > 0)
         {
             tokens[t][ci] = '\0';
+            /* Drop tokens under 3 characters: they carry no TF-IDF
+             * signal and only dilute the scores. */
             if (strlen(tokens[t]) >= 3)
             {
                 t++;
@@ -118,19 +146,33 @@ static int add_term(const char *term)
     if (search_index.term_count >= MAX_TOKENS) return -1;
     char *dup = str_dup(term);
     if (!dup) return -1;
-    int t = search_index.term_count++;
-    search_index.all_terms[t] = dup;
+    int t = search_index.term_count;
 
     for (int i = 0; i < search_index.doc_count; i++)
     {
-        int *new_freqs = realloc(search_index.term_freqs[i], sizeof(int) * search_index.term_count);
-        if (new_freqs)
+        /* Resize every doc's frequency row to the live term count so the
+         * index stays proportional to actual terms, not MAX_TOKENS per
+         * document. Rows that fail to grow stay at their old size, which
+         * is exactly the previous term count — at least as large as the
+         * committed term count below, so no later index is out of
+         * bounds. */
+        int *new_freqs = realloc(search_index.term_freqs[i],
+                                 sizeof(int) * ((size_t)t + 1));
+        if (!new_freqs)
         {
-            search_index.term_freqs[i] = new_freqs;
-            search_index.term_freqs[i][t] = 0;
+            /* Commit the term only after every row has room for it; a
+             * failed realloc must not leave a row one int short while
+             * term_count has already grown, or compute_tfidf reads past
+             * the row end. */
+            free(dup);
+            return -1;
         }
+        search_index.term_freqs[i] = new_freqs;
+        search_index.term_freqs[i][t] = 0;
     }
 
+    search_index.all_terms[t] = dup;
+    search_index.term_count = t + 1;
     return t;
 }
 
@@ -138,6 +180,8 @@ void semantic_search_index_document(const char *content)
 {
     if (search_index.doc_count >= MAX_DOCS) return;
 
+    /* The large backing arrays are allocated on first use so an empty
+     * index costs nothing; a failure here leaves the index reusable. */
     if (!search_index.documents)
     {
         search_index.documents = calloc(MAX_DOCS, sizeof(char *));
@@ -207,6 +251,8 @@ static double compute_tfidf(const int *freqs, int doc_len, int term_idx, int tot
     return tf * idf;
 }
 
+/* Tool vtable entry: TF-IDF scoring over the shared global index; self
+ * is unused because the index is process-wide, not per-tool. */
 ToolResult *semantic_search_execute(Tool *self, const char *args_json)
 {
     (void)self;
@@ -254,6 +300,8 @@ ToolResult *semantic_search_execute(Tool *self, const char *args_json)
 
     for (int i = 0; i < search_index.doc_count; i++)
     {
+        /* term_freqs[i] is NULL for a document whose indexing hit an
+         * allocation failure; skip it rather than dereference. */
         if (!search_index.term_freqs[i]) continue;
         for (int t = 0; t < query_token_count; t++)
         {
@@ -319,6 +367,8 @@ ToolResult *semantic_search_execute(Tool *self, const char *args_json)
     return tr;
 }
 
+/* Tool vtable entry: also releases the process-wide index, so destroying
+ * one semantic_search tool empties it for every other user. */
 void semantic_search_destroy(Tool *self)
 {
     if (!self) return;
@@ -347,6 +397,8 @@ void semantic_search_destroy(Tool *self)
 
 Tool *tool_semantic_search_create(SafetyConfig *safety)
 {
+    /* A read-only local search needs no safety policy; the pointer is
+     * accepted only to match the other tool factories. */
     (void)safety;
     Tool *t = calloc(1, sizeof(Tool));
     if (!t) return NULL;

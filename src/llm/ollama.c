@@ -1,8 +1,15 @@
+/*
+ * ollama.c - Ollama provider: chat, streaming chat, and structured
+ * output against the local Ollama /api/chat endpoint.
+ * Depends on: libcurl, cJSON, logging, string_utils, provider types.
+ */
+
 #define _GNU_SOURCE
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 
@@ -17,7 +24,11 @@ typedef struct {
     char *effort; /* owned; NULL = model default ("low"/"medium"/"high"/"max"/"none") */
 } OllamaCtx;
 
-static int call_seq = 1;
+/* Process-global counter for synthetic tool-call ids (Ollama returns no
+ * call ids of its own). Atomic so concurrent requests on different
+ * threads never hand out the same id twice, which would break matching
+ * a tool output back to its call id on later turns. */
+static _Atomic unsigned int call_seq = 1;
 
 typedef struct {
     char *data;
@@ -183,6 +194,9 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
                                  int *out_tool_calls_count)
 {
     (void)timeout;
+    /* The timeout argument is deliberately ignored: CURLOPT_TIMEOUT 0
+     * lets reasoning models think for as long as they need, bounded
+     * only by the 60s no-progress cutoff below. */
     CURL *curl = curl_easy_init();
     if (!curl) return NULL;
 
@@ -230,6 +244,9 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
 
     if (stream && on_chunk)
     {
+        /* The stream usually ends without a trailing newline, so the
+         * final JSON line is still sitting in the buffer: parse it
+         * here to deliver the last chunk and tool calls. */
         if (buf.len > 0 && buf.data[0] != '\0')
         {
             cJSON *json = cJSON_Parse(buf.data);
@@ -320,7 +337,9 @@ static LLMResponse *ollama_parse_response(const char *raw)
                         ? cJSON_GetStringValue(name) : "");
                     {
                         char id_buf[32];
-                        snprintf(id_buf, sizeof(id_buf), "call_%d", call_seq++);
+                        snprintf(id_buf, sizeof(id_buf), "call_%u",
+                                 atomic_fetch_add_explicit(&call_seq, 1,
+                                                           memory_order_relaxed));
                         resp->tool_calls[i].id = str_dup(id_buf);
                     }
 

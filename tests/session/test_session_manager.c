@@ -10,6 +10,10 @@
 #include "session/memory.h"
 #include "utils/string_utils.h"
 
+/* Declared in migration.h under SESSION_MANAGER_TEST; the test binary
+ * compiles migration.c with that define but does not include the header. */
+extern void migration_test_set_rename_fail(int nth_rename);
+
 static size_t read_test_file(const char *path, unsigned char *buffer,
                              size_t capacity)
 {
@@ -330,6 +334,66 @@ START_TEST(test_password_change_migrates_oauth_and_recovers_post_commit)
     session_free(session);
     free(session_id);
     session_manager_free(sm);
+
+    char command[4096];
+    ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
+                     (int)sizeof(command));
+    ck_assert_int_eq(system(command), 0);
+}
+END_TEST
+
+START_TEST(test_password_change_retries_verifier_swap_in_process)
+{
+    char tmpdir[] = "/tmp/test_sm_retry_swap_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    SessionManager *sm = session_manager_create(tmpdir, "old_password");
+    ck_assert_ptr_nonnull(sm);
+    const char *credentials = "{\"refresh_token\":\"still-valid\"}";
+    ck_assert_int_eq(session_manager_save_provider_oauth(
+                         sm, "openai", credentials), 0);
+    Session *session = session_manager_create_session(sm, "swap session");
+    ck_assert_ptr_nonnull(session);
+    char *session_id = str_dup(session->id);
+    ck_assert_ptr_nonnull(session_id);
+    session_free(session);
+
+    /* Renames inside migration_change_password: #1 salt -> salt.old,
+     * #2 verifier.new -> verifier. Failing #2 simulates the post-commit
+     * activation failure; the in-process recovery retry must complete
+     * the swap and still return 0. */
+    migration_test_set_rename_fail(2);
+    ck_assert_int_eq(migration_change_password(sm, "new_password"), 0);
+    migration_test_set_rename_fail(-1);
+
+    char *loaded = NULL;
+    ck_assert_int_eq(session_manager_load_provider_oauth_ex(
+                         sm, "openai", &loaded), PROVIDER_OAUTH_LOAD_OK);
+    ck_assert_str_eq(loaded, credentials);
+    free(loaded);
+    session = session_manager_load_session(sm, session_id);
+    ck_assert_ptr_nonnull(session);
+    ck_assert_str_eq(session->title, "swap session");
+    session_free(session);
+    free(session_id);
+    session_manager_free(sm);
+
+    /* The swap must have fully landed: the new password unlocks, the old
+     * one is rejected, and no migration artifacts remain. */
+    sm = session_manager_create(tmpdir, "new_password");
+    ck_assert_ptr_nonnull(sm);
+    session_manager_free(sm);
+    ck_assert_ptr_null(session_manager_create(tmpdir, "old_password"));
+
+    char marker_path[4096];
+    char old_salt_path[4096];
+    ck_assert_int_lt(snprintf(marker_path, sizeof(marker_path),
+                              "%s/.changing_pwd", tmpdir),
+                     (int)sizeof(marker_path));
+    ck_assert_int_lt(snprintf(old_salt_path, sizeof(old_salt_path),
+                              "%s/salt.old", tmpdir),
+                     (int)sizeof(old_salt_path));
+    ck_assert_int_eq(access(marker_path, F_OK), -1);
+    ck_assert_int_eq(access(old_salt_path, F_OK), -1);
 
     char command[4096];
     ck_assert_int_lt(snprintf(command, sizeof(command), "rm -rf %s", tmpdir),
@@ -1831,6 +1895,8 @@ Suite *session_mgr_suite(void)
                    test_provider_oauth_typed_failures_preserve_credentials);
     tcase_add_test(tc_oauth,
                    test_password_change_migrates_oauth_and_recovers_post_commit);
+    tcase_add_test(tc_oauth,
+                   test_password_change_retries_verifier_swap_in_process);
     tcase_add_test(tc_oauth,
                    test_password_change_rolls_back_on_malformed_oauth_row);
     tcase_add_test(tc_oauth,

@@ -1,3 +1,10 @@
+/*
+ * migration.c - crash-safe password migration for the session store:
+ * re-encrypts all owned rows under a new password and recovers an
+ * interrupted migration on the next startup.
+ * Depends on: sqlite3, session_manager, encryption, logging.
+ */
+
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -16,6 +23,30 @@
 #define SALT_FILE "salt"
 #define VERIFIER_FILE ".verifier"
 #define VERIFIER_NEW_FILE ".verifier.new"
+
+#ifdef SESSION_MANAGER_TEST
+/* Fault-injection knob: lets a test force the Nth rename() call in this
+ * file to fail, so the -2 verifier-activation path can be exercised.
+ * Production builds never see this; only translation units compiled
+ * with -DSESSION_MANAGER_TEST=1 do. The body is defined before the
+ * #define so it calls the real rename(). */
+static int mig_rename_counter = 0;
+static int mig_rename_fail_at = -1;
+
+void migration_test_set_rename_fail(int nth_rename)
+{
+    mig_rename_counter = 0;
+    mig_rename_fail_at = nth_rename;
+}
+
+static int mig_test_rename(const char *old_path, const char *new_path)
+{
+    mig_rename_counter++;
+    if (mig_rename_counter == mig_rename_fail_at) return -1;
+    return rename(old_path, new_path);
+}
+#define rename mig_test_rename
+#endif
 
 static int restore_old_files(SessionManager *sm, const char *salt,
                              const char *old_salt, const char *marker,
@@ -608,7 +639,19 @@ int migration_change_password(SessionManager *sm, const char *new_password)
     if (rename(verifier_new, verifier) != 0 ||
         sync_directory(sm->data_dir) != 0)
     {
-        log_error("migration: verifier activation failed", NULL);
+        /* DB is committed under the new key but the verifier swap did
+         * not land. Try the same recovery a restart would run, right
+         * now: it renames verifier_new over the verifier (or, when the
+         * rename had already succeeded and only the dir sync failed,
+         * just drops the artifacts). Only if that retry also fails do
+         * we keep the marker and report -2 so the caller can ask for a
+         * restart. */
+        log_error("migration: verifier activation failed, retrying via recovery", NULL);
+        if (migration_check_and_recover(sm, new_password) == 0)
+        {
+            result = 0;
+            goto cleanup;
+        }
         result = -2;
         goto cleanup;
     }

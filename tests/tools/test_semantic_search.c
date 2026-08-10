@@ -4,6 +4,7 @@
 #include "tools/semantic_search.h"
 
 extern void semantic_search_test_set_alloc_fail(int nth_allocation);
+extern void semantic_search_test_set_realloc_fail(int nth_realloc);
 extern void semantic_search_test_reset(void);
 
 START_TEST(test_sem_index_doc_alloc_fail_content_dup)
@@ -19,6 +20,29 @@ START_TEST(test_sem_index_doc_alloc_fail_add_term_first)
     semantic_search_index_document("first doc primes the index");
     semantic_search_test_set_alloc_fail(2);
     semantic_search_index_document("second doc triggers alloc fail in add_term");
+    semantic_search_test_reset();
+}
+END_TEST
+
+START_TEST(test_sem_add_term_realloc_fail_keeps_rows_consistent)
+{
+    /* Old code: add_term bumped term_count before resizing every row, so
+     * a failed realloc left the row one int too small while term_count
+     * had already grown; compute_tfidf then read past the row end (ASan
+     * heap-buffer-overflow on the search below). New code: the term is
+     * only committed after every row has room for it. */
+    semantic_search_index_document("alpha beta gamma delta");
+    semantic_search_index_document("alpha beta gamma delta epsilon");
+    semantic_search_test_set_realloc_fail(1);
+    semantic_search_index_document("alpha beta gamma delta epsilon zeta");
+
+    Tool *t = tool_semantic_search_create(NULL);
+    ck_assert_ptr_nonnull(t);
+    ToolResult *r = t->execute(t, "{\"query\":\"zeta\"}");
+    ck_assert_ptr_nonnull(r);
+    ck_assert_ptr_null(r->error);
+    tool_result_free(r);
+    t->destroy(t);
     semantic_search_test_reset();
 }
 END_TEST
@@ -96,6 +120,7 @@ Suite *semantic_search_suite(void)
     TCase *tc_fault = tcase_create("FaultInjection");
     tcase_add_test(tc_fault, test_sem_index_doc_alloc_fail_content_dup);
     tcase_add_test(tc_fault, test_sem_index_doc_alloc_fail_add_term_first);
+    tcase_add_test(tc_fault, test_sem_add_term_realloc_fail_keeps_rows_consistent);
     suite_add_tcase(s, tc_fault);
 
     TCase *tc_integration = tcase_create("Integration");

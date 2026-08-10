@@ -1,4 +1,5 @@
 #include <check.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "utils/metrics.h"
@@ -53,7 +54,7 @@ START_TEST(test_metrics_counter_alloc_fail_mid)
 {
     Metrics *m = metrics_create();
     metrics_test_set_alloc_fail(2);
-    metrics_counter_inc(m, "test_total", "Test counter");
+    ck_assert_int_eq(metrics_counter_inc(m, "test_total", "Test counter"), -1);
     char *out = metrics_render(m);
     ck_assert_ptr_nonnull(out);
     ck_assert_str_eq(out, "");
@@ -64,6 +65,38 @@ START_TEST(test_metrics_counter_alloc_fail_mid)
     ck_assert_ptr_nonnull(out);
     ck_assert_ptr_ne(strstr(out, "other_total 1"), NULL);
     free(out);
+    metrics_destroy(m);
+}
+END_TEST
+
+START_TEST(test_metrics_counter_full_registry_drops_with_error)
+{
+    Metrics *m = metrics_create();
+    char name[64];
+    for (int i = 0; i < 64; i++)
+    {
+        snprintf(name, sizeof(name), "counter_%02d_total", i);
+        ck_assert_int_eq(metrics_counter_inc(m, name, NULL), 0);
+    }
+    ck_assert_int_eq(metrics_counter_inc(m, "overflow_total", NULL), -1);
+    /* Existing series still record after the drop. */
+    ck_assert_int_eq(metrics_counter_inc(m, "counter_00_total", NULL), 0);
+    metrics_destroy(m);
+}
+END_TEST
+
+START_TEST(test_metrics_histogram_full_registry_drops_with_error)
+{
+    Metrics *m = metrics_create();
+    double buckets[] = {1, 5, 10};
+    char name[64];
+    for (int i = 0; i < 64; i++)
+    {
+        snprintf(name, sizeof(name), "hist_%02d", i);
+        ck_assert_int_eq(metrics_histogram_observe(m, name, NULL, 2, buckets, 3), 0);
+    }
+    ck_assert_int_eq(metrics_histogram_observe(m, "overflow_hist", NULL, 2, buckets, 3), -1);
+    ck_assert_int_eq(metrics_histogram_observe(m, "hist_00", NULL, 2, buckets, 3), 0);
     metrics_destroy(m);
 }
 END_TEST
@@ -101,6 +134,8 @@ Suite *metrics_suite(void)
     TCase *tc_fault = tcase_create("FaultInjection");
     tcase_add_test(tc_fault, test_metrics_counter_alloc_fail_mid);
     tcase_add_test(tc_fault, test_metrics_histogram_alloc_fail_mid);
+    tcase_add_test(tc_fault, test_metrics_counter_full_registry_drops_with_error);
+    tcase_add_test(tc_fault, test_metrics_histogram_full_registry_drops_with_error);
     suite_add_tcase(s, tc_fault);
 
     return s;

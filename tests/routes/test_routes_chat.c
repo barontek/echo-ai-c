@@ -178,9 +178,10 @@ LLMResponse *agent_run_streaming(Agent *agent, const char *user_input,
 
 void llm_response_free(LLMResponse *resp) { (void)resp; }
 
-void metrics_counter_inc(Metrics *m, const char *name, const char *help)
+int metrics_counter_inc(Metrics *m, const char *name, const char *help)
 {
     (void)m; (void)name; (void)help;
+    return 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -564,6 +565,37 @@ START_TEST(test_sse_no_chunks)
 }
 END_TEST
 
+START_TEST(test_sse_headers_oom_responds_500)
+{
+    /* First allocation in handle_sse_stream is the SSE headers asprintf;
+     * on failure nothing has been written yet, so a 500 must be sent
+     * instead of returning with the connection left dangling. */
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.agent = (Agent *)&ctx;
+    routes_chat_test_set_alloc_fail(1);
+    handle_sse_stream(&req, (Client *)&ctx, &ctx);
+    routes_chat_test_set_alloc_fail(-1);
+    ck_assert_int_eq(captured_status, 500);
+}
+END_TEST
+
+START_TEST(test_sse_ctx_oom_writes_error_frame_and_closes)
+{
+    /* Second allocation is the SSECtx calloc, after the 200 SSE headers
+     * are already on the wire; a 500 would be invalid now, so an SSE
+     * error frame must be written and the client closed. */
+    HTTPRequest req = {0};
+    ServerContext ctx = {0};
+    ctx.agent = (Agent *)&ctx;
+    routes_chat_test_set_alloc_fail(2);
+    handle_sse_stream(&req, (Client *)&ctx, &ctx);
+    routes_chat_test_set_alloc_fail(-1);
+    ck_assert_int_eq(captured_close_count, 1);
+    ck_assert(strstr(captured_sse_buf, "\"type\":\"error\"") != NULL);
+}
+END_TEST
+
 Suite *routes_chat_suite(void)
 {
     Suite *s = suite_create("routes_chat");
@@ -597,6 +629,8 @@ Suite *routes_chat_suite(void)
     tcase_add_test(tc_sse, test_sse_chunk_null_callback_data);
     tcase_add_test(tc_sse, test_sse_chunk_userdata_null_still_runs);
     tcase_add_test(tc_sse, test_sse_no_chunks);
+    tcase_add_test(tc_sse, test_sse_headers_oom_responds_500);
+    tcase_add_test(tc_sse, test_sse_ctx_oom_writes_error_frame_and_closes);
     suite_add_tcase(s, tc_sse);
 
     return s;

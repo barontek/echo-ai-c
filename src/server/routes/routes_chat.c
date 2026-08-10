@@ -1,6 +1,13 @@
+/*
+ * routes_chat.c - HTTP chat endpoints: the blocking POST /api/chat turn
+ * runner and the EventSource GET /api/stream, which forwards agent
+ * chunks as SSE frames. Depends on: cJSON, middleware, agent, logging.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <cjson/cJSON.h>
 
 #include "routes.h"
@@ -8,6 +15,43 @@
 #include "../middleware.h"
 #include "../../agent/agent.h"
 #include "../../utils/logging.h"
+
+#ifdef ROUTES_CHAT_TEST
+/* Fault-injection knobs: let a test force the Nth asprintf()/calloc() in
+ * this file to fail, so the OOM paths in handle_sse_stream can be
+ * exercised. Production builds never see these; only translation units
+ * compiled with -DSESSION... -DROUTES_CHAT_TEST=1 do. The shim bodies are
+ * defined before the #defines so they call the real functions. */
+static int rc_alloc_counter = 0;
+static int rc_alloc_fail_at = -1;
+
+void routes_chat_test_set_alloc_fail(int nth_allocation)
+{
+    rc_alloc_counter = 0;
+    rc_alloc_fail_at = nth_allocation;
+}
+
+static int rc_test_asprintf(char **strp, const char *fmt, ...)
+{
+    rc_alloc_counter++;
+    if (rc_alloc_counter == rc_alloc_fail_at) { *strp = NULL; return -1; }
+    va_list ap;
+    va_start(ap, fmt);
+    int rc = vasprintf(strp, fmt, ap);
+    va_end(ap);
+    return rc;
+}
+
+static void *rc_test_calloc(size_t nmemb, size_t size)
+{
+    rc_alloc_counter++;
+    if (rc_alloc_counter == rc_alloc_fail_at) return NULL;
+    return calloc(nmemb, size);
+}
+
+#define asprintf rc_test_asprintf
+#define calloc rc_test_calloc
+#endif
 
 void handle_chat(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
@@ -131,13 +175,28 @@ void handle_sse_stream(HTTPRequest *req, Client *client, ServerContext *ctx)
         "Cache-Control: no-cache\r\n"
         "Connection: keep-alive\r\n"
         "Access-Control-Allow-Origin: *\r\n"
-        "\r\n") < 0) return;
+        "\r\n") < 0)
+    {
+        /* Nothing has been written yet, so a normal error response is
+         * still valid; write_done closes the client after the flush. */
+        server_response_error(client, 500, "internal error");
+        return;
+    }
 
     server_sse_write(client, headers);
     free(headers);
 
     SSECtx *c = calloc(1, sizeof(SSECtx));
-    if (!c) return;
+    if (!c)
+    {
+        /* The 200 SSE headers are already on the wire; a 500 would be
+         * invalid now, so signal the failure inside the stream and close
+         * instead of leaving the connection dangling. */
+        server_sse_write(client,
+                         "data: {\"type\":\"error\",\"message\":\"internal error\"}\n\n");
+        client_close(client);
+        return;
+    }
     c->agent = ctx->agent;
     c->client = client;
 

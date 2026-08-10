@@ -1,3 +1,9 @@
+/*
+ * metrics.c - Prometheus-text in-memory metrics registry (counters and
+ * histograms) with silent-drop semantics on full registry or OOM.
+ * Depends on: stdio (open_memstream), string_utils.h (str_dup).
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,40 +90,43 @@ void metrics_destroy(Metrics *m)
     free(m);
 }
 
-void metrics_counter_inc(Metrics *m, const char *name, const char *help)
+int metrics_counter_inc(Metrics *m, const char *name, const char *help)
 {
-    if (!m || !name) return;
+    if (!m || !name) return -1;
     for (int i = 0; i < m->counters_count; i++)
     {
         if (strcmp(m->counters[i].name, name) == 0)
         {
             m->counters[i].count++;
-            return;
+            return 0;
         }
     }
-    if (m->counters_count >= MAX_METRICS) return;
+    if (m->counters_count >= MAX_METRICS) return -1;
 
     char *n = str_dup(name);
     char *h = str_dup(help ? help : "");
     char *t = str_dup("counter");
     if (!n || !h || !t)
     {
+        /* All-or-nothing: a partially allocated series must not be
+         * committed to the registry (it would dangle on later frees). */
         free(n);
         free(h);
         free(t);
-        return;
+        return -1;
     }
     CounterMetric *cm = &m->counters[m->counters_count++];
     cm->name = n;
     cm->help = h;
     cm->type = t;
     cm->count = 1;
+    return 0;
 }
 
-void metrics_histogram_observe(Metrics *m, const char *name, const char *help,
-                               double value, const double *buckets, int bucket_count)
+int metrics_histogram_observe(Metrics *m, const char *name, const char *help,
+                              double value, const double *buckets, int bucket_count)
 {
-    if (!m || !name) return;
+    if (!m || !name) return -1;
     int idx = -1;
     for (int i = 0; i < m->histograms_count; i++)
     {
@@ -129,7 +138,7 @@ void metrics_histogram_observe(Metrics *m, const char *name, const char *help,
     }
     if (idx < 0)
     {
-        if (m->histograms_count >= MAX_METRICS) return;
+        if (m->histograms_count >= MAX_METRICS) return -1;
 
         char *n = str_dup(name);
         char *h = str_dup(help ? help : "");
@@ -137,11 +146,13 @@ void metrics_histogram_observe(Metrics *m, const char *name, const char *help,
         long long *bc = calloc((size_t)bucket_count, sizeof(long long));
         if (!n || !h || !b || !bc)
         {
+            /* All-or-nothing, same as the counter path: never commit a
+             * histogram missing any of its four allocations. */
             free(n);
             free(h);
             free(b);
             free(bc);
-            return;
+            return -1;
         }
         HistogramMetric *hm = &m->histograms[m->histograms_count++];
         hm->name = n;
@@ -165,6 +176,7 @@ void metrics_histogram_observe(Metrics *m, const char *name, const char *help,
             break;
         }
     }
+    return 0;
 }
 
 char *metrics_render(Metrics *m)

@@ -1,3 +1,9 @@
+/*
+ * safety.h - path, URL, command, and network-address safety checks, plus
+ * approval gating and audit logging for tools.
+ * Depends on: <stddef.h>, <sys/socket.h>, config (Conf).
+ */
+
 #ifndef ECHO_SAFETY_H
 #define ECHO_SAFETY_H
 
@@ -31,38 +37,203 @@ typedef struct {
     size_t web_fetch_max_chars;
 } SafetyConfig;
 
+/**
+ * safety_config_create - allocate a safety config with built-in defaults
+ *
+ * Defaults: max_file_size 10 MiB, max_execution_time 300 s, allow_network
+ * on, read_size_threshold 1 MiB, web_fetch_max_chars 25000; every string
+ * list starts empty. Populate it with safety_load_from_conf() before use.
+ *
+ * Return: caller-owned SafetyConfig (free with safety_config_free()), or
+ * NULL on allocation failure. Thread-safe; no shared state.
+ */
 SafetyConfig *safety_config_create(void);
+
+/**
+ * safety_config_free - release a safety config and every owned list
+ * @cfg: config to release, or NULL (no-op).
+ *
+ * Frees workspace, the command/extension/domain/path/approval string
+ * lists, audit_log_path, and cfg itself.
+ *
+ * Return: void. Thread-safe; no shared state.
+ */
 void safety_config_free(SafetyConfig *cfg);
+
+/**
+ * safety_load_from_conf - (re)load a safety config from the Conf
+ * @cfg: config to populate; must be non-NULL.
+ * @conf: config source, borrowed for the duration of the call; must be
+ *   non-NULL.
+ *
+ * Reads the safety.* keys (workspace, allow_network, max_file_size,
+ * max_execution_time, allowed/blocked_commands, allowed/blocked_extensions,
+ * blocked_paths, allowed_domains, require_approval_for, audit_log_path,
+ * read_requires_approval, read_size_threshold, web_fetch_max_chars) and
+ * replaces previously loaded values. Keys absent from conf keep their
+ * current values. When no require_approval_for list is configured, a
+ * default list (bash, write_file, replace_in_file, git, python_execute,
+ * delegate) is installed.
+ *
+ * Return: void. Parse/allocation failures are silent — the affected list
+ * stays empty. Not thread-safe with respect to concurrent use of the same
+ * cfg.
+ */
 void safety_load_from_conf(SafetyConfig *cfg, const Conf *conf);
 
-int safety_check_path(const SafetyConfig *cfg, const char *path);
-/*
- * Best-effort blocklist against obviously destructive commands.  Returns 0
- * (blocked) when the command matches a known dangerous pattern after
- * splitting on ';', '\n', '|', and '&'.  Returns 1 (allowed) for safe
- * commands.
+/**
+ * safety_check_path - reject unsafe paths before file access
+ * @cfg: safety config; must be non-NULL (dereferenced without a NULL
+ *   check).
+ * @path: path to check, borrowed; NULL is rejected.
  *
- * This is NOT a security boundary.  It cannot catch command substitution
+ * A syntactic, not filesystem, check: rejects absolute paths (leading '/'),
+ * any path containing "..", paths not ending in an allowed extension (when
+ * allowed_extensions is configured), paths ending in a blocked extension
+ * (defaults .key .pem .env .token .password .aws .netrc .htpasswd .crt
+ * .p12 plus cfg's list), and paths containing a blocked path (defaults
+ * /etc/passwd /etc/shadow /etc/sudoers .git/config plus cfg's list). Use
+ * safety_resolve_path()/safety_path_is_within_workspace() when
+ * realpath-resolved checks are needed.
+ *
+ * Return: 1 if allowed, 0 if blocked. Never fails; thread-safe.
+ */
+int safety_check_path(const SafetyConfig *cfg, const char *path);
+
+/**
+ * safety_check_command - best-effort blocklist check for destructive commands
+ * @cfg: ignored by the check; must be non-NULL to keep the signature
+ *   consistent with the rest of the safety API.
+ * @command: shell command string to check; NULL is treated as allowed.
+ *
+ * Returns 0 (blocked) when a segment — the command split on ';', '\n',
+ * '|', and '&' — matches a known dangerous pattern; 1 (allowed) otherwise.
+ *
+ * This is NOT a security boundary. It cannot catch command substitution
  * ($(...)), variable expansion, encoded payloads, or scripting-language
- * invocations.  The real safety boundary is safety_needs_approval(), which
+ * invocations. The real safety boundary is safety_needs_approval(), which
  * requires human approval for bash, write_file, replace_in_file, git,
- * python_execute, and delegate by default.  This function exists only to
+ * python_execute, and delegate by default. This function exists only to
  * catch the *obvious* destructive cases so the approver sees a prompt — it
  * offers no guarantee that every dangerous command is blocked.
  *
- * Caller must provide a non-NULL cfg (the command check ignores it, but
- * the signature is kept consistent with the rest of the safety API).
+ * Return: 1 if allowed, 0 if blocked. Never fails; thread-safe.
  */
 int safety_check_command(const SafetyConfig *cfg, const char *command);
+
+/**
+ * safety_check_destructive - detect destructive keywords in a command
+ * @command: text to scan, or NULL (treated as not destructive).
+ *
+ * Case-sensitive substring scan for "delete", "destroy", "format", "drop",
+ * "truncate", "shred", "wipe", "erase", "purge", "reset".
+ *
+ * Return: 1 if any keyword occurs, 0 otherwise. Never fails; thread-safe.
+ */
 int safety_check_destructive(const char *command);
+
+/**
+ * safety_check_url - allow or block an http(s) URL by host
+ * @cfg: safety config; NULL (or allow_network off) blocks everything.
+ * @url: URL to check, borrowed; NULL is blocked.
+ *
+ * Only http:// and https:// schemes are accepted. Rejects userinfo
+ * ("user@host"), empty hosts, localhost and *.localhost, IPv6 loopback,
+ * link-local (fe80:) and unique-local (fc/fd prefix) hosts, and private
+ * IPv4 ranges (10/8, 127/8, 0/8, 169.254/16, 192.168/16, 172.16/12) —
+ * the numeric range checks apply only when the whole host parses as a
+ * dotted quad. When allowed_domains is configured the host must match one
+ * entry exactly or as a subdomain; otherwise every remaining host is
+ * allowed.
+ *
+ * The host is matched literally; no DNS resolution is performed, so a
+ * hostname that resolves to a private address is not caught here. ULA
+ * detection is approximated by the literal fc/fd prefix, so hostnames
+ * starting with "fc" or "fd" are also rejected.
+ *
+ * Return: 1 if allowed, 0 if blocked. Never fails; thread-safe.
+ */
 int safety_check_url(const SafetyConfig *cfg, const char *url);
+
+/**
+ * safety_check_socket_address - reject non-public network addresses
+ * @address: sockaddr to inspect, borrowed; NULL returns 0. Only AF_INET
+ *   and AF_INET6 are handled.
+ *
+ * Returns 1 for globally routable addresses, 0 for private, loopback,
+ * link-local, unique-local, multicast, or unspecified addresses, and for
+ * any other family. IPv4-mapped IPv6 addresses are evaluated as IPv4.
+ *
+ * Return: 1 if public, 0 otherwise. Never fails; thread-safe.
+ */
 int safety_check_socket_address(const struct sockaddr *address);
+
+/**
+ * safety_check_file_size - compare a size against cfg->max_file_size
+ * @cfg: safety config; must be non-NULL (dereferenced without a NULL
+ *   check).
+ * @size: size in bytes to check.
+ *
+ * Return: 1 when size <= max_file_size, 0 otherwise. Never fails;
+ * thread-safe.
+ */
 int safety_check_file_size(const SafetyConfig *cfg, size_t size);
+
+/**
+ * safety_needs_approval - does a tool require human approval?
+ * @cfg: safety config; NULL returns 1 (fail closed).
+ * @tool_name: tool name to look up in require_approval_for; NULL returns 1.
+ *
+ * Return: 1 when the tool is in the approval list or when either argument
+ * is NULL, 0 otherwise. Never fails; thread-safe.
+ */
 int safety_needs_approval(const SafetyConfig *cfg, const char *tool_name);
 
+/**
+ * safety_audit_log - append a JSON line to the audit log file
+ * @cfg: safety config; must be non-NULL.
+ * @entry: JSON text embedded verbatim as the "entry" field — callers must
+ *   pre-escape it (the function does no JSON escaping). NULL returns -1.
+ *
+ * Appends {"timestamp":"<ISO-8601>","entry":<entry>} to cfg->audit_log_path
+ * (created if missing). Timestamps come from localtime(), which is
+ * non-reentrant — do not call this from multiple threads.
+ *
+ * Return: 0 on success, -1 when cfg or entry is NULL, audit_log_path is
+ * not set, or the file cannot be opened for appending. The failure is not
+ * logged.
+ */
 int safety_audit_log(const SafetyConfig *cfg, const char *entry);
 
+/**
+ * safety_resolve_path - canonicalize a path and pin it inside the workspace
+ * @cfg: safety config; must be non-NULL and have workspace set.
+ * @path: path to resolve (absolute, or relative to the workspace root),
+ *   borrowed; NULL, or containing "..", returns NULL.
+ *
+ * For existing files the canonical (symlink-resolved) path must lie inside
+ * the workspace. For not-yet-created files the parent directory is
+ * resolved instead and must be inside the workspace; the basename is then
+ * re-attached, so writes to new files still validate.
+ *
+ * Return: caller-owned null-terminated path (free with free()), or NULL on
+ * any failure: bad arguments, realpath failure, outside the workspace, or
+ * allocation failure. Thread-safe; no shared state.
+ */
 char *safety_resolve_path(const SafetyConfig *cfg, const char *path);
+
+/**
+ * safety_path_is_within_workspace - is the canonical path under the workspace?
+ * @cfg: safety config; must be non-NULL and have workspace set.
+ * @path: path to check, borrowed; NULL returns 0.
+ *
+ * Both the workspace and the path are canonicalized with realpath(), so
+ * symlinks resolve. The path counts as inside when it equals the workspace
+ * root or starts with root + '/'.
+ *
+ * Return: 1 when inside, 0 otherwise (including NULL args or realpath
+ * failure). Never fails; thread-safe.
+ */
 int safety_path_is_within_workspace(const SafetyConfig *cfg, const char *path);
 
 #endif

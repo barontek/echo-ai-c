@@ -1,3 +1,9 @@
+/*
+ * safety.c - path, URL, command, and network-address safety checks, plus
+ * approval gating and audit logging for tools.
+ * Depends on: config.h, string_utils, POSIX realpath and socket APIs.
+ */
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +83,9 @@ void safety_load_from_conf(SafetyConfig *cfg, const Conf *conf)
 
     v = conf_get(conf, "safety.blocked_extensions");
     if (v) { free(cfg->blocked_extensions); cfg->blocked_extensions = parse_csv(v, &cfg->blocked_extensions_count); }
+
+    v = conf_get(conf, "safety.blocked_paths");
+    if (v) { free(cfg->blocked_paths); cfg->blocked_paths = parse_csv(v, &cfg->blocked_paths_count); }
 
     v = conf_get(conf, "safety.allowed_domains");
     if (v) { free(cfg->allowed_domains); cfg->allowed_domains = parse_csv(v, &cfg->allowed_domains_count); }
@@ -353,6 +362,8 @@ int safety_check_url(const SafetyConfig *cfg, const char *url)
     if (strcasecmp(host, "localhost") == 0 ||
         (host_len > 10 && strcasecmp(host + host_len - 10, ".localhost") == 0) ||
         strcasecmp(host, "::1") == 0 || strcasecmp(host, "0:0:0:0:0:0:0:1") == 0 ||
+        /* ULA (fc00::/7) approximated by a literal fc/fd host prefix; hostnames
+         * starting with those bytes are also rejected. */
         strncasecmp(host, "fc", 2) == 0 || strncasecmp(host, "fd", 2) == 0 ||
         strncasecmp(host, "fe80:", 5) == 0)
         return 0;
@@ -391,6 +402,7 @@ static int ipv4_is_public(uint32_t network_address)
     uint32_t address = ntohl(network_address);
     unsigned int a = (address >> 24) & 0xFFU;
     unsigned int b = (address >> 16) & 0xFFU;
+    /* 100.64/10 (CGNAT) and 198.18/15 (benchmarking) count as non-public. */
     if (a == 0 || a == 10 || a == 127 || a >= 224 ||
         (a == 100 && b >= 64 && b <= 127) ||
         (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) ||
@@ -452,6 +464,7 @@ int safety_audit_log(const SafetyConfig *cfg, const char *entry)
     if (!f) return -1;
 
     time_t now = time(NULL);
+    /* localtime is non-reentrant; keep this function single-threaded. */
     struct tm *tm = localtime(&now);
     char ts[64];
     strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm);
@@ -481,6 +494,9 @@ char *safety_resolve_path(const SafetyConfig *cfg, const char *path)
                    ? str_dup(canonical) : NULL;
     if (errno != ENOENT) return NULL;
 
+    /* File doesn't exist yet: resolve and validate the parent directory,
+     * then re-attach the basename, so writes to not-yet-created files
+     * still get workspace validation. */
     char parent_buf[PATH_MAX];
     memcpy(parent_buf, candidate, (size_t)written + 1);
     char *slash = strrchr(parent_buf, '/');

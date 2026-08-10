@@ -646,6 +646,24 @@ START_TEST(test_safety_load_from_conf_allowed_commands)
 }
 END_TEST
 
+START_TEST(test_safety_load_from_conf_blocked_paths)
+{
+    write_conf_file("/tmp/test_safety_bp.conf",
+        "safety.blocked_paths = /secret, vault/x\n");
+    Conf *conf = conf_load("/tmp/test_safety_bp.conf");
+    SafetyConfig *cfg = safety_config_create();
+    safety_load_from_conf(cfg, conf);
+    ck_assert_int_eq(cfg->blocked_paths_count, 2);
+    ck_assert_str_eq(cfg->blocked_paths[0], "/secret");
+    ck_assert_str_eq(cfg->blocked_paths[1], "vault/x");
+    ck_assert_int_eq(safety_check_path(cfg, "vault/x/key.txt"), 0);
+    ck_assert_int_eq(safety_check_path(cfg, "tmp/file.txt"), 1);
+    safety_config_free(cfg);
+    conf_free(conf);
+    remove("/tmp/test_safety_bp.conf");
+}
+END_TEST
+
 START_TEST(test_safety_load_from_conf_require_approval)
 {
     write_conf_file("/tmp/test_safety_app.conf",
@@ -778,6 +796,7 @@ Suite *safety_suite(void)
     tcase_add_test(tc_load, test_safety_load_from_conf_allow_network);
     tcase_add_test(tc_load, test_safety_load_from_conf_file_size);
     tcase_add_test(tc_load, test_safety_load_from_conf_allowed_commands);
+    tcase_add_test(tc_load, test_safety_load_from_conf_blocked_paths);
     tcase_add_test(tc_load, test_safety_load_from_conf_require_approval);
     tcase_add_test(tc_load, test_safety_load_from_conf_null_args);
     tcase_add_test(tc_load, test_safety_load_from_conf_read_threshold);

@@ -112,9 +112,9 @@ Message *apply_context_window(Message *msgs, int *count, int max_msgs, int max_c
 
 char *split_thinking_content(const char *raw) { return str_dup(raw); }
 
-void metrics_counter_inc(Metrics *m, const char *n, const char *h) { (void)m; (void)n; (void)h; }
-void metrics_histogram_observe(Metrics *m, const char *n, const char *h, double v,
-                                const double *b, int bn) { (void)m; (void)n; (void)h; (void)v; (void)b; (void)bn; }
+int metrics_counter_inc(Metrics *m, const char *n, const char *h) { (void)m; (void)n; (void)h; return 0; }
+int metrics_histogram_observe(Metrics *m, const char *n, const char *h, double v,
+                                const double *b, int bn) { (void)m; (void)n; (void)h; (void)v; (void)b; (void)bn; return 0; }
 
 /* safety.c is NOT in the build target for this test; provide the one symbol
  * agent.c references. Always returns 0 — agent_save_session never reaches the
