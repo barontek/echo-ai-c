@@ -12,6 +12,18 @@
 #include "server/routes/routes_ws.h"
 #include "utils/logging.h"
 
+int websocket_test_uv_write(uv_write_t *req, uv_stream_t *handle,
+                            const uv_buf_t bufs[], unsigned int nbufs,
+                            uv_write_cb cb)
+{
+    (void)req;
+    (void)handle;
+    (void)bufs;
+    (void)nbufs;
+    (void)cb;
+    return 0;
+}
+
 void routes_ws_chat_init(WSClient *ws, ServerContext *ctx, const char *query)
 {
     (void)ws;

@@ -441,10 +441,10 @@ static void setup_workspace(void)
 
 static void teardown_workspace(void)
 {
-    remove("/tmp/echo_test_ws/subdir/existing.txt");
-    remove("/tmp/echo_test_ws/existing.txt");
-    remove("/tmp/echo_test_ws/subdir");
-    remove("/tmp/echo_test_ws");
+    ck_assert_int_eq(remove("/tmp/echo_test_ws/subdir/existing.txt"), 0);
+    ck_assert_int_eq(remove("/tmp/echo_test_ws/existing.txt"), 0);
+    ck_assert_int_eq(remove("/tmp/echo_test_ws/subdir"), 0);
+    ck_assert_int_eq(remove("/tmp/echo_test_ws"), 0);
     unlink("/tmp/echo_test_sym");
 }
 
@@ -596,7 +596,7 @@ START_TEST(test_safety_load_from_conf_workspace)
     ck_assert_str_eq(cfg->workspace, "/test/workspace");
     safety_config_free(cfg);
     conf_free(conf);
-    remove("/tmp/test_safety_ws.conf");
+    ck_assert_int_eq(remove("/tmp/test_safety_ws.conf"), 0);
 }
 END_TEST
 
@@ -610,7 +610,7 @@ START_TEST(test_safety_load_from_conf_allow_network)
     ck_assert_int_eq(cfg->allow_network, 0);
     safety_config_free(cfg);
     conf_free(conf);
-    remove("/tmp/test_safety_net.conf");
+    ck_assert_int_eq(remove("/tmp/test_safety_net.conf"), 0);
 }
 END_TEST
 
@@ -626,7 +626,7 @@ START_TEST(test_safety_load_from_conf_file_size)
     ck_assert_int_eq(cfg->max_execution_time, 120);
     safety_config_free(cfg);
     conf_free(conf);
-    remove("/tmp/test_safety_fs.conf");
+    ck_assert_int_eq(remove("/tmp/test_safety_fs.conf"), 0);
 }
 END_TEST
 
@@ -643,7 +643,7 @@ START_TEST(test_safety_load_from_conf_allowed_commands)
     ck_assert_str_eq(cfg->allowed_commands[2], "echo");
     safety_config_free(cfg);
     conf_free(conf);
-    remove("/tmp/test_safety_cmds.conf");
+    ck_assert_int_eq(remove("/tmp/test_safety_cmds.conf"), 0);
 }
 END_TEST
 
@@ -661,7 +661,7 @@ START_TEST(test_safety_load_from_conf_blocked_paths)
     ck_assert_int_eq(safety_check_path(cfg, "tmp/file.txt"), 1);
     safety_config_free(cfg);
     conf_free(conf);
-    remove("/tmp/test_safety_bp.conf");
+    ck_assert_int_eq(remove("/tmp/test_safety_bp.conf"), 0);
 }
 END_TEST
 
@@ -677,7 +677,7 @@ START_TEST(test_safety_load_from_conf_require_approval)
     ck_assert_str_eq(cfg->require_approval_for[1], "write_file");
     safety_config_free(cfg);
     conf_free(conf);
-    remove("/tmp/test_safety_app.conf");
+    ck_assert_int_eq(remove("/tmp/test_safety_app.conf"), 0);
 }
 END_TEST
 
@@ -704,7 +704,7 @@ START_TEST(test_safety_load_from_conf_read_threshold)
     ck_assert(cfg->read_size_threshold == 2048);
     safety_config_free(cfg);
     conf_free(conf);
-    remove("/tmp/test_safety_read.conf");
+    ck_assert_int_eq(remove("/tmp/test_safety_read.conf"), 0);
 }
 END_TEST
 

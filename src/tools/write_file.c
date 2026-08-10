@@ -82,8 +82,14 @@ static ToolResult *write_file_execute(Tool *self, const char *args_json)
         return tool_result_error("cannot write to path", "permission_denied");
     }
 
-    fwrite(content, 1, strlen(content), fp);
-    fclose(fp);
+    if (fwrite(content, 1, strlen(content), fp) != strlen(content) ||
+        fclose(fp) != 0)
+    {
+        free(resolved);
+        free(path);
+        free(content);
+        return tool_result_error("cannot write to file", "execution_error");
+    }
     free(resolved);
 
     char *result = NULL;

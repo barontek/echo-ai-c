@@ -1469,7 +1469,7 @@ START_TEST(test_on_message_provider_config_resolves_token_from_conf)
     ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
     reset_capture();
     conf_free(sctx.conf);
-    remove("/tmp/ws_test_prov.conf");
+    ck_assert_int_eq(remove("/tmp/ws_test_prov.conf"), 0);
 }
 END_TEST
 
@@ -1527,7 +1527,7 @@ START_TEST(test_on_message_provider_switch_uses_conf_base_url_override)
     ck_assert(strstr(captured_ws_json, "\"type\":\"ready\""));
     reset_capture();
     conf_free(sctx.conf);
-    remove("/tmp/ws_test_zen.conf");
+    ck_assert_int_eq(remove("/tmp/ws_test_zen.conf"), 0);
 }
 END_TEST
 

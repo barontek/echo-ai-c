@@ -60,7 +60,7 @@ START_TEST(test_ct_undo_restores_original_content_and_redo_reapplies_changes)
     fclose(f);
     ck_assert_str_eq(buf, "modified");
 
-    remove("/tmp/ct_test.txt");
+    ck_assert_int_eq(remove("/tmp/ct_test.txt"), 0);
     ct_destroy(ct);
 }
 END_TEST
@@ -82,7 +82,7 @@ START_TEST(test_ct_snapshot_alloc_fail_mid)
     ck_assert_int_eq(ct_snapshot(ct, "/tmp/ct_fail.txt"), 0);
     ck_assert_int_eq(ct->undo_count, 1);
 
-    remove("/tmp/ct_fail.txt");
+    ck_assert_int_eq(remove("/tmp/ct_fail.txt"), 0);
     ct_destroy(ct);
 }
 END_TEST
@@ -113,7 +113,7 @@ START_TEST(test_ct_undo_alloc_fail_mid)
     ck_assert_int_eq(ct->undo_count, 0);
     ck_assert_int_eq(ct->redo_count, 1);
 
-    remove("/tmp/ct_undo_fail.txt");
+    ck_assert_int_eq(remove("/tmp/ct_undo_fail.txt"), 0);
     ct_destroy(ct);
 }
 END_TEST

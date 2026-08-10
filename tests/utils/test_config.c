@@ -39,7 +39,7 @@ START_TEST(test_conf_load_parses_sections_keys_and_comments)
     ck_assert_int_eq(iv, 42);
 
     conf_free(conf);
-    remove("/tmp/test_config.conf");
+    ck_assert_int_eq(remove("/tmp/test_config.conf"), 0);
 }
 END_TEST
 
@@ -68,7 +68,7 @@ START_TEST(test_conf_alloc_fail_mid)
     ck_assert_str_eq(v, "second");
 
     conf_free(conf);
-    remove("/tmp/test_config_fail.conf");
+    ck_assert_int_eq(remove("/tmp/test_config_fail.conf"), 0);
 }
 END_TEST
 
@@ -83,7 +83,7 @@ START_TEST(test_conf_load_continuation_line)
     ck_assert_ptr_nonnull(v);
     ck_assert_str_eq(v, "first line\ncontinuation");
     conf_free(conf);
-    remove("/tmp/test_ctl.conf");
+    ck_assert_int_eq(remove("/tmp/test_ctl.conf"), 0);
 }
 END_TEST
 
@@ -95,7 +95,7 @@ START_TEST(test_conf_get_int_invalid)
     ck_assert_ptr_nonnull(conf);
     ck_assert_int_eq(conf_get_int(conf, "key", 99), 99);
     conf_free(conf);
-    remove("/tmp/test_ival.conf");
+    ck_assert_int_eq(remove("/tmp/test_ival.conf"), 0);
 }
 END_TEST
 
@@ -130,7 +130,7 @@ START_TEST(test_conf_provider_tokens_all)
 
     conf_token_list_free(tokens, count);
     conf_free(conf);
-    remove("/tmp/test_prov.conf");
+    ck_assert_int_eq(remove("/tmp/test_prov.conf"), 0);
 }
 END_TEST
 
@@ -151,7 +151,7 @@ START_TEST(test_conf_provider_tokens_empty)
 
     conf_token_list_free(tokens, count);
     conf_free(conf);
-    remove("/tmp/test_prov_empty.conf");
+    ck_assert_int_eq(remove("/tmp/test_prov_empty.conf"), 0);
 }
 END_TEST
 
@@ -175,7 +175,7 @@ START_TEST(test_conf_provider_tokens_alloc_fail)
     ck_assert_int_eq(count, 0);
 
     conf_free(conf);
-    remove("/tmp/test_prov_fail.conf");
+    ck_assert_int_eq(remove("/tmp/test_prov_fail.conf"), 0);
 }
 END_TEST
 
@@ -202,7 +202,7 @@ START_TEST(test_conf_provider_token_opencode_zen_aliases_opencode)
     ck_assert_ptr_null(conf_provider_token(conf, "ollama"));
 
     conf_free(conf);
-    remove("/tmp/test_prov_token.conf");
+    ck_assert_int_eq(remove("/tmp/test_prov_token.conf"), 0);
 }
 END_TEST
 

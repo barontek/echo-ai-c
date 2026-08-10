@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "llm/openai_oauth.h"
 
 OpenAIOAuthState openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_OUT;
