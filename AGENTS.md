@@ -79,7 +79,7 @@ Naming
 
 Comments
 
-- Comment WHY the code does something, not WHAT it does. The code itself should make the "what" clear. Every non-obvious line gets a short comment explaining *why*, not *what*.
+- Comment WHY the code does something, not WHAT it does. The code itself should make the "what" clear. Every non-obvious line gets a short comment explaining why, not what.
 - Avoid comments inside a function body. If a function is complex enough to need inline explanation, that's usually a sign it should be split up.
 - Put explanatory comments at the top of a function: what it does, and why, if that's not obvious from the name and signature.
 - Don't write comments that just restate the function signature.
