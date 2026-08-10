@@ -177,6 +177,14 @@ char *str_truncate_ellipsis_dup(const char *text, size_t max_chars)
         keep = max_chars; /* no room for the marker; hard cut */
         mlen = 0;
     }
+    /* Back off the cut point while the byte at the cut is a UTF-8
+     * continuation byte: splitting a multi-byte sequence here would leave
+     * invalid UTF-8 behind, and the results of this function go into
+     * WebSocket text frames (which must be valid UTF-8) and LLM messages.
+     * text[keep] is the first dropped byte; text is NUL-terminated so the
+     * read is in-bounds even when keep == len. */
+    while (keep > 0 && ((unsigned char)text[keep] & 0xC0) == 0x80)
+        keep--;
 
     char *out = malloc(keep + mlen + 1);
     if (!out) return NULL;

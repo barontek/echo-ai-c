@@ -378,9 +378,98 @@ static long entity_lookup(const char *name, size_t n)
     return -1;
 }
 
-/* Decode the entity starting at s[0] ('&' expected). Returns the number
- * of bytes consumed (0 = not an entity; caller emits '&' literally). */
-static size_t decode_entity(const char *s, size_t avail, unsigned char *out)
+/* Encode the Unicode scalar cp as UTF-8 into out[0..3]. Returns the byte
+ * count (1-4), or 0 for a non-scalar value (surrogate, > U+10FFFF). */
+static size_t utf8_encode_cp(unsigned int cp, char out[4])
+{
+    if (cp <= 0x7F)
+    {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp <= 0x7FF)
+    {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp >= 0xD800 && cp <= 0xDFFF) return 0; /* surrogate */
+    if (cp <= 0xFFFF)
+    {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    if (cp <= 0x10FFFF)
+    {
+        out[0] = (char)(0xF0 | (cp >> 18));
+        out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[3] = (char)(0x80 | (cp & 0x3F));
+        return 4;
+    }
+    return 0;
+}
+
+/* Windows-1252 byte to Unicode code point. The 0x80-0x9F range differs
+ * from latin-1 (curly quotes, dashes, euro sign...); undefined slots pass
+ * through as their byte value. Web pages that are not UTF-8 are almost
+ * always CP1252, so this is what the transcode below assumes. */
+static unsigned int cp1252_cp(unsigned char b)
+{
+    static const unsigned short map[32] = {
+        0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+        0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+        0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+        0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178
+    };
+    if (b < 0x80) return b;
+    if (b < 0xA0) return map[b - 0x80];
+    return b; /* latin-1 range */
+}
+
+/* Strict UTF-8 validation of s[0..n): rejects overlong encodings,
+ * surrogates, values above U+10FFFF, and truncated sequences. */
+static int utf8_valid(const char *s, size_t n)
+{
+    size_t i = 0;
+    while (i < n)
+    {
+        unsigned char c = (unsigned char)s[i];
+        size_t need;
+        unsigned char first_lo, first_hi;
+        if (c < 0x80) { i++; continue; }
+        if (c >= 0xC2 && c <= 0xDF) { need = 1; first_lo = 0x80; first_hi = 0xBF; }
+        else if (c == 0xE0)         { need = 2; first_lo = 0xA0; first_hi = 0xBF; }
+        else if (c >= 0xE1 && c <= 0xEC) { need = 2; first_lo = 0x80; first_hi = 0xBF; }
+        else if (c == 0xED)         { need = 2; first_lo = 0x80; first_hi = 0x9F; }
+        else if (c >= 0xEE && c <= 0xEF) { need = 2; first_lo = 0x80; first_hi = 0xBF; }
+        else if (c == 0xF0)         { need = 3; first_lo = 0x90; first_hi = 0xBF; }
+        else if (c >= 0xF1 && c <= 0xF3) { need = 3; first_lo = 0x80; first_hi = 0xBF; }
+        else if (c == 0xF4)         { need = 3; first_lo = 0x80; first_hi = 0x8F; }
+        else return 0; /* 0x80-0xC1, 0xF5-0xFF: never a lead byte */
+        if (i + need >= n) return 0; /* sequence truncated */
+        for (size_t k = 1; k <= need; k++)
+        {
+            unsigned char cc = (unsigned char)s[i + k];
+            if (cc < 0x80 || cc > 0xBF) return 0;
+        }
+        unsigned char fc = (unsigned char)s[i + 1];
+        if (fc < first_lo || fc > first_hi) return 0; /* overlong/surrogate */
+        i += need + 1;
+    }
+    return 1;
+}
+
+/* Decode the entity starting at s[0] ('&' expected). On success writes
+ * its UTF-8 bytes into out[0..3], sets *out_len (1-4) and *consumed (input
+ * bytes advanced), and returns 1. Returns 0 when s[0] is not the start of
+ * a recognized entity (caller emits '&' literally). Named-entity table
+ * values are CP1252 bytes, so they map through cp1252_cp; numeric entities
+ * keep their full code point (no 8-bit truncation). */
+static int decode_entity(const char *s, size_t avail, char out[4],
+                         size_t *out_len, size_t *consumed)
 {
     if (avail < 2 || s[0] != '&') return 0;
 
@@ -411,8 +500,11 @@ static size_t decode_entity(const char *s, size_t avail, unsigned char *out)
         }
         if (digits == 0) return 0;
         if (j < avail && s[j] == ';') j++;
-        *out = (unsigned char)v;
-        return j;
+        size_t elen = utf8_encode_cp((unsigned)v, out);
+        if (elen == 0) return 0; /* surrogate or out of range: not an entity */
+        *out_len = elen;
+        *consumed = j;
+        return 1;
     }
 
     size_t j = 1;
@@ -421,8 +513,9 @@ static size_t decode_entity(const char *s, size_t avail, unsigned char *out)
     long ch = entity_lookup(s + 1, j - 1);
     if (ch < 0) return 0;
     if (j < avail && s[j] == ';') j++;
-    *out = (unsigned char)ch;
-    return j;
+    *out_len = utf8_encode_cp(cp1252_cp((unsigned char)ch), out);
+    *consumed = j;
+    return 1;
 }
 
 static size_t count_words(const char *s, size_t n)
@@ -517,33 +610,149 @@ typedef struct {
     int link_count;
 } Extract;
 
+/* Append one decoded byte to the title with whitespace collapsing. */
+static int title_append_byte(OutBuf *b, unsigned char c, int *ws_pending)
+{
+    if (isspace(c))
+    {
+        *ws_pending = 1;
+        return 0;
+    }
+    if (*ws_pending && b->len > 0)
+    {
+        if (outbuf_append_chr(b, ' ') != 0) return -1;
+    }
+    *ws_pending = 0;
+    return outbuf_append_chr(b, (char)c);
+}
+
+/* Render a title text run: decode entities and transcode non-UTF-8 bytes
+ * (see emit_text_run for why), collapsing whitespace. */
 static int append_title_text(OutBuf *b, const char *s, size_t n)
 {
     size_t i = 0;
     int ws_pending = 0;
     while (i < n)
     {
-        unsigned char ch;
-        size_t consumed = decode_entity(s + i, n - i, &ch);
-        if (consumed == 0)
+        size_t run_start = i;
+        while (i < n && s[i] != '&') i++;
+        size_t run_len = i - run_start;
+        if (run_len > 0)
         {
-            ch = (unsigned char)s[i];
-            consumed = 1;
+            const char *run = s + run_start;
+            if (utf8_valid(run, run_len))
+            {
+                for (size_t j = 0; j < run_len; j++)
+                {
+                    if (title_append_byte(b, (unsigned char)run[j],
+                                          &ws_pending) != 0)
+                        return -1;
+                }
+            }
+            else
+            {
+                char buf[4];
+                for (size_t j = 0; j < run_len; j++)
+                {
+                    unsigned char c = (unsigned char)run[j];
+                    if (c < 0x80)
+                    {
+                        if (title_append_byte(b, c, &ws_pending) != 0)
+                            return -1;
+                    }
+                    else
+                    {
+                        size_t blen = utf8_encode_cp(cp1252_cp(c), buf);
+                        if (blen == 0)
+                        {
+                            buf[0] = (char)0xEF; buf[1] = (char)0xBF;
+                            buf[2] = (char)0xBD; blen = 3; /* U+FFFD */
+                        }
+                        for (size_t k = 0; k < blen; k++)
+                        {
+                            if (title_append_byte(b, (unsigned char)buf[k],
+                                                  &ws_pending) != 0)
+                                return -1;
+                        }
+                    }
+                }
+            }
         }
-        if (isspace(ch))
+        if (i >= n) break;
+        char ebuf[4];
+        size_t elen = 0, consumed = 0;
+        if (decode_entity(s + i, n - i, ebuf, &elen, &consumed))
         {
-            ws_pending = 1;
+            for (size_t k = 0; k < elen; k++)
+            {
+                if (title_append_byte(b, (unsigned char)ebuf[k],
+                                      &ws_pending) != 0)
+                    return -1;
+            }
+            i += consumed;
+            continue;
+        }
+        /* not an entity: emit the '&' literally */
+        if (title_append_byte(b, (unsigned char)'&', &ws_pending) != 0)
+            return -1;
+        i++;
+    }
+    return 0;
+}
+
+/* Appends a text run, sanitizing bytes that are not valid UTF-8: runs
+ * that validate pass through unchanged; otherwise each byte is transcoded
+ * Windows-1252 -> UTF-8 (the dominant legacy web encoding). Raw latin-1
+ * high bytes in a tool result used to reach the frontend WebSocket
+ * verbatim, and browsers drop a connection on the first text frame that
+ * is not decodable as UTF-8 ("Could not decode a text frame as UTF-8");
+ * strict LLM providers reject the same bytes in tool messages. */
+static int emit_text_run(Writer *w, const char *s, size_t n, int is_pre)
+{
+    if (n == 0) return 0;
+    if (utf8_valid(s, n))
+    {
+        if (is_pre)
+        {
+            if (outbuf_append(&w->out, s, n) != 0) return -1;
+            w->has_last = 1;
+            w->last = s[n - 1];
         }
         else
         {
-            if (ws_pending && b->len > 0)
-            {
-                if (outbuf_append_chr(b, ' ') != 0) return -1;
-            }
-            ws_pending = 0;
-            if (outbuf_append_chr(b, (char)ch) != 0) return -1;
+            if (writer_text(w, s, n) != 0) return -1;
         }
-        i += consumed;
+        return 0;
+    }
+    char buf[4];
+    for (size_t i = 0; i < n; i++)
+    {
+        unsigned char c = (unsigned char)s[i];
+        size_t blen;
+        if (c < 0x80)
+        {
+            buf[0] = (char)c;
+            blen = 1;
+        }
+        else
+        {
+            blen = utf8_encode_cp(cp1252_cp(c), buf);
+        }
+        if (blen == 0)
+        {
+            buf[0] = (char)0xEF; buf[1] = (char)0xBF;
+            buf[2] = (char)0xBD; blen = 3; /* U+FFFD: undecodable byte */
+        }
+        if (is_pre)
+        {
+            if (outbuf_append(&w->out, buf, blen) != 0) return -1;
+            w->has_last = 1;
+            w->last = buf[blen - 1];
+        }
+        else
+        {
+            if (writer_text(w, buf, blen) != 0) return -1;
+        }
     }
     return 0;
 }
@@ -570,17 +779,8 @@ static int emit_text(Extract *x, const char *s, size_t n)
         size_t run_len = i - run_start;
         if (run_len > 0)
         {
-            if (is_pre)
-            {
-                if (outbuf_append(&x->w.out, s + run_start, run_len) != 0)
-                    return -1;
-                x->w.has_last = 1;
-                x->w.last = s[i - 1];
-            }
-            else
-            {
-                if (writer_text(&x->w, s + run_start, run_len) != 0) return -1;
-            }
+            if (emit_text_run(&x->w, s + run_start, run_len, is_pre) != 0)
+                return -1;
             top->text_len += run_len;
             if (x->link_active)
             {
@@ -591,41 +791,27 @@ static int emit_text(Extract *x, const char *s, size_t n)
         if (i >= n) break;
         if (s[i] == '&')
         {
-            unsigned char ch;
-            size_t consumed = decode_entity(s + i, n - i, &ch);
-            if (consumed > 0)
+            char ebuf[4];
+            size_t elen = 0, consumed = 0;
+            if (decode_entity(s + i, n - i, ebuf, &elen, &consumed))
             {
-                char tmp = (char)ch;
-                if (is_pre)
-                {
-                    if (outbuf_append_chr(&x->w.out, tmp) != 0) return -1;
-                    x->w.has_last = 1;
-                    x->w.last = tmp;
-                }
-                else
-                {
-                    if (writer_text(&x->w, &tmp, 1) != 0) return -1;
-                }
+                if (emit_text_run(&x->w, ebuf, elen, is_pre) != 0) return -1;
                 top->text_len += 1;
                 if (x->link_active)
                 {
                     top->link_text_len += 1;
-                    if (!isspace(ch)) x->link_has_text = 1;
+                    int all_ws = 1;
+                    for (size_t k = 0; k < elen; k++)
+                    {
+                        if (!isspace((unsigned char)ebuf[k])) { all_ws = 0; break; }
+                    }
+                    if (!all_ws) x->link_has_text = 1;
                 }
                 i += consumed;
                 continue;
             }
             /* not an entity: emit the '&' literally */
-            if (is_pre)
-            {
-                if (outbuf_append_chr(&x->w.out, '&') != 0) return -1;
-                x->w.has_last = 1;
-                x->w.last = '&';
-            }
-            else
-            {
-                if (writer_text(&x->w, "&", 1) != 0) return -1;
-            }
+            if (emit_text_run(&x->w, "&", 1, is_pre) != 0) return -1;
             top->text_len += 1;
             if (x->link_active)
             {
@@ -1074,6 +1260,16 @@ static size_t assemble_copy_parts(char *dst, const char *title, size_t tlen,
     return w;
 }
 
+/* Backs the cut point off so the byte at data[cut] is not a UTF-8
+ * continuation byte: cutting there would split a multi-byte character and
+ * leave the output invalid UTF-8 (which corrupts WebSocket text frames). */
+static size_t utf8_cut_boundary(const char *data, size_t cut)
+{
+    while (cut > 0 && ((unsigned char)data[cut] & 0xC0) == 0x80)
+        cut--;
+    return cut;
+}
+
 /* Computes how much of the body fits the truncated budget: prefer a
  * paragraph boundary, then a word boundary, over a mid-word cut. Sets
  * *omitted to the dropped byte count. */
@@ -1101,6 +1297,7 @@ static size_t assemble_cut(const OutBuf *out, size_t budget, size_t *omitted)
         while (k > 0 && out->data[k - 1] != ' ') k--;
         if (k > 0) cut = k; /* word boundary fallback */
     }
+    cut = utf8_cut_boundary(out->data, cut);
     *omitted = body_len - cut;
     return cut;
 }
@@ -1237,6 +1434,47 @@ static char *text_for_llm(const char *data, size_t len, size_t max_chars)
     if (!nul) return NULL;
     memcpy(nul, data, len);
     nul[len] = '\0';
+    if (!utf8_valid(nul, len))
+    {
+        /* Plain-text responses need not be UTF-8 (latin-1/CP1252 is
+         * common); transcode so the result is always decodable — invalid
+         * bytes in a tool result break the frontend WebSocket and strict
+         * LLM providers. Transcoded output is at most 2x, so allocate for
+         * the worst case and copy back. */
+        char *fixed = NULL;
+        if (len <= SIZE_MAX / 2)
+            fixed = malloc(len * 2 + 1);
+        if (fixed)
+        {
+            size_t w = 0;
+            char buf[4];
+            for (size_t i = 0; i < len; i++)
+            {
+                unsigned char c = (unsigned char)nul[i];
+                size_t blen;
+                if (c < 0x80)
+                {
+                    buf[0] = (char)c;
+                    blen = 1;
+                }
+                else
+                {
+                    blen = utf8_encode_cp(cp1252_cp(c), buf);
+                }
+                if (blen == 0)
+                {
+                    buf[0] = (char)0xEF; buf[1] = (char)0xBF;
+                    buf[2] = (char)0xBD; blen = 3; /* U+FFFD */
+                }
+                memcpy(fixed + w, buf, blen);
+                w += blen;
+            }
+            fixed[w] = '\0';
+            free(nul);
+            nul = fixed;
+            len = w;
+        }
+    }
     char *res = str_truncate_ellipsis_dup(nul, max_chars);
     free(nul);
     return res;

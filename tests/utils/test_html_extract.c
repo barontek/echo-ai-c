@@ -315,6 +315,162 @@ START_TEST(test_ellipsis_keeps_marker_when_room)
 }
 END_TEST
 
+/* ---- UTF-8 output validity ----
+ * Regression for the "Could not decode a text frame as UTF-8" WebSocket
+ * deaths: entity decoding used to emit raw latin-1 bytes (0x80-0xFF) and
+ * numeric entities truncated to 8 bits, so tool results carried invalid
+ * UTF-8 into the tool_end/done frames and browsers killed the connection.
+ * Every extraction result must be decodable as UTF-8. */
+
+static int is_valid_utf8(const char *s)
+{
+    size_t n = strlen(s);
+    size_t i = 0;
+    while (i < n)
+    {
+        unsigned char c = (unsigned char)s[i];
+        size_t need;
+        unsigned char first_lo, first_hi;
+        if (c < 0x80) { i++; continue; }
+        if (c >= 0xC2 && c <= 0xDF) { need = 1; first_lo = 0x80; first_hi = 0xBF; }
+        else if (c == 0xE0)         { need = 2; first_lo = 0xA0; first_hi = 0xBF; }
+        else if (c >= 0xE1 && c <= 0xEC) { need = 2; first_lo = 0x80; first_hi = 0xBF; }
+        else if (c == 0xED)         { need = 2; first_lo = 0x80; first_hi = 0x9F; }
+        else if (c >= 0xEE && c <= 0xEF) { need = 2; first_lo = 0x80; first_hi = 0xBF; }
+        else if (c == 0xF0)         { need = 3; first_lo = 0x90; first_hi = 0xBF; }
+        else if (c >= 0xF1 && c <= 0xF3) { need = 3; first_lo = 0x80; first_hi = 0xBF; }
+        else if (c == 0xF4)         { need = 3; first_lo = 0x80; first_hi = 0x8F; }
+        else return 0;
+        if (i + need >= n) return 0;
+        for (size_t k = 1; k <= need; k++)
+        {
+            if (((unsigned char)s[i + k] & 0xC0) != 0x80) return 0;
+        }
+        unsigned char fc = (unsigned char)s[i + 1];
+        if (fc < first_lo || fc > first_hi) return 0;
+        i += need + 1;
+    }
+    return 1;
+}
+
+START_TEST(test_entities_decode_to_valid_utf8)
+{
+    const char *html = "<html><body><p>Caf&eacute; au lait &mdash; "
+                       "r&eacute;sum&eacute; fini</p></body></html>";
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_int_eq(is_valid_utf8(out), 1);
+    ck_assert_str_eq(out,
+                     "Caf\xC3\xA9 au lait \xE2\x80\x94 r\xC3\xA9sum\xC3\xA9 fini");
+    free(out);
+}
+END_TEST
+
+START_TEST(test_numeric_entities_keep_full_codepoint)
+{
+    /* &#8212; (U+2014) was truncated to an 8-bit control byte before. */
+    const char *html = "<html><body><p>Dash &#8212; here &amp; there now ok</p></body></html>";
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_int_eq(is_valid_utf8(out), 1);
+    ck_assert_str_eq(out, "Dash \xE2\x80\x94 here & there now ok");
+    free(out);
+}
+END_TEST
+
+START_TEST(test_latin1_body_transcoded)
+{
+    const char *html = "<html><body><p>caf\xE9 au lait chaud ici</p></body></html>";
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_int_eq(is_valid_utf8(out), 1);
+    ck_assert_str_eq(out, "caf\xC3\xA9 au lait chaud ici");
+    free(out);
+}
+END_TEST
+
+START_TEST(test_utf8_body_passthrough_unchanged)
+{
+    /* Valid UTF-8 input must not be touched by the transcode. */
+    const char *html = "<html><body><p>caf\xC3\xA9 au lait chaud ici</p></body></html>";
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_int_eq(is_valid_utf8(out), 1);
+    ck_assert_str_eq(out, "caf\xC3\xA9 au lait chaud ici");
+    free(out);
+}
+END_TEST
+
+START_TEST(test_title_entities_valid_utf8)
+{
+    const char *html = "<html><head><title>Caf&eacute; menu</title></head>"
+                       "<body><p>real body text now</p></body></html>";
+    char *out = html_extract_text_alloc(html, strlen(html), 1000);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_int_eq(is_valid_utf8(out), 1);
+    ck_assert_str_eq(out,
+                     "Title: Caf\xC3\xA9 menu\n\nreal body text now");
+    free(out);
+}
+END_TEST
+
+START_TEST(test_plain_text_latin1_sanitized)
+{
+    const char *txt = "caf\xE9 au lait chaud ici";
+    char *out = content_extract_for_llm_alloc("text/plain", txt, strlen(txt), 1000);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_int_eq(is_valid_utf8(out), 1);
+    ck_assert_str_eq(out, "caf\xC3\xA9 au lait chaud ici");
+    free(out);
+}
+END_TEST
+
+START_TEST(test_truncation_does_not_split_utf8)
+{
+    /* A long run of multi-byte chars with no spaces: the byte budget lands
+     * mid-sequence; the cut must back off to a character boundary. */
+    char body[256];
+    size_t n = 0;
+    body[n++] = '<'; body[n++] = 'p'; body[n++] = '>';
+    for (int i = 0; i < 40; i++)
+    {
+        body[n++] = (char)0xC3;
+        body[n++] = (char)0xA9; /* e-acute as UTF-8 */
+    }
+    body[n++] = '<'; body[n++] = '/'; body[n++] = 'p'; body[n++] = '>';
+    char *out = html_extract_text_alloc(body, n, 10);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_uint_le(strlen(out), 10);
+    ck_assert_int_eq(is_valid_utf8(out), 1);
+    free(out);
+}
+END_TEST
+
+START_TEST(test_ellipsis_utf8_boundary)
+{
+    /* str_truncate_ellipsis_dup must not cut inside a multi-byte sequence:
+     * the result feeds WebSocket frames. max 5 on "ab" + 10 x e-acute
+     * (22 bytes) leaves no marker room; keep=5 lands between the third
+     * e-acute's lead and continuation bytes, so it backs off to 4
+     * ("ab" + one e-acute) instead of emitting a dangling lead byte. */
+    char input[64];
+    size_t n = 0;
+    input[n++] = 'a'; input[n++] = 'b';
+    for (int i = 0; i < 10; i++)
+    {
+        input[n++] = (char)0xC3;
+        input[n++] = (char)0xA9;
+    }
+    input[n] = '\0';
+    char *out = str_truncate_ellipsis_dup(input, 5);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_uint_le(strlen(out), 5);
+    ck_assert_int_eq(is_valid_utf8(out), 1);
+    ck_assert_str_eq(out, "ab\xC3\xA9");
+    free(out);
+}
+END_TEST
+
 static Suite *html_extract_suite(void)
 {
     TCase *tc = tcase_create("html_extract");
@@ -341,6 +497,14 @@ static Suite *html_extract_suite(void)
     tcase_add_test(tc, test_ellipsis_short_passthrough);
     tcase_add_test(tc, test_ellipsis_truncates);
     tcase_add_test(tc, test_ellipsis_keeps_marker_when_room);
+    tcase_add_test(tc, test_entities_decode_to_valid_utf8);
+    tcase_add_test(tc, test_numeric_entities_keep_full_codepoint);
+    tcase_add_test(tc, test_latin1_body_transcoded);
+    tcase_add_test(tc, test_utf8_body_passthrough_unchanged);
+    tcase_add_test(tc, test_title_entities_valid_utf8);
+    tcase_add_test(tc, test_plain_text_latin1_sanitized);
+    tcase_add_test(tc, test_truncation_does_not_split_utf8);
+    tcase_add_test(tc, test_ellipsis_utf8_boundary);
 
     Suite *s = suite_create("html_extract");
     suite_add_tcase(s, tc);
