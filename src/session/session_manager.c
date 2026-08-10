@@ -1363,6 +1363,37 @@ static char *branch_active_created_at(Session *s)
     return str_dup(s->created_at ? s->created_at : "");
 }
 
+/* Chain-birth timestamp for a freshly born chain: the real time, bumped
+ * past the previous live chain's birth when they'd share a millisecond.
+ * A re-fork within the same ms as the previous fork otherwise yields a
+ * tied birth, and branch_info's strict < ordering then drops the
+ * re-forked chain from the active count (refork test: active=2 instead
+ * of 3). The collision window is one millisecond, so waiting until the
+ * real clock is strictly past the previous birth settles it — bounded
+ * wait, since prev is at most a couple of ms ahead of the clock that
+ * produced it. */
+static char *branch_next_created_at(Session *s)
+{
+    char *now = branch_now_iso();
+    if (!now) return NULL;
+    char *prev = branch_active_created_at(s);
+    if (!prev) { free(now); return NULL; }
+
+    if (strcmp(now, prev) <= 0)
+    {
+        struct timespec pause = {0, 2000000L};
+        for (int i = 0; i < 16 && strcmp(now, prev) <= 0; i++)
+        {
+            if (nanosleep(&pause, NULL) != 0) break;
+            free(now);
+            now = branch_now_iso();
+            if (!now) { free(prev); return NULL; }
+        }
+    }
+    free(prev);
+    return now;
+}
+
 /* Sets branches.active_created_at to `value`, replacing an existing value.
  * A chain is re-born on every fork/switch, so the key must be updated in
  * place — cJSON_AddStringToObject on an existing key APPENDS a duplicate,
@@ -1576,8 +1607,9 @@ int session_manager_fork_branch(SessionManager *sm, const char *session_id,
     s->messages[fi] = fork_copy;
     memset(&fork_copy, 0, sizeof(fork_copy));
 
-    /* The new live chain is born now. */
-    char *now = branch_now_iso();
+    /* The new live chain is born now — strictly past the previous birth
+     * so same-ms re-forks keep a deterministic branch_info ordering. */
+    char *now = branch_next_created_at(s);
     if (!now) goto cleanup;
     cJSON *branches = cJSON_GetObjectItem(s->metadata, "branches");
     if (!branches) { free(now); goto cleanup; }
@@ -1667,17 +1699,27 @@ int session_manager_switch_branch(SessionManager *sm, const char *session_id,
     free(snap_str);
     if (drc != 0) goto cleanup;
 
-    /* The newly live chain's creation time is its record's. */
+    /* The newly live chain's creation time is its record's; legacy
+     * records without one get a fresh birth strictly past the previous
+     * live chain's (same-ms collision would misorder branch_info). */
     cJSON *rec_created = cJSON_GetObjectItem(rec, "created_at");
-    char *now = branch_now_iso();
-    if (!now) goto cleanup;
-    cJSON *branches = cJSON_GetObjectItem(s->metadata, "branches");
-    if (!branches) { free(now); goto cleanup; }
-    if (branch_set_active_created_at(s,
-            rec_created && rec_created->valuestring
-                ? rec_created->valuestring : now) != 0)
-    { free(now); goto cleanup; }
-    free(now);
+    if (rec_created && rec_created->valuestring)
+    {
+        cJSON *branches = cJSON_GetObjectItem(s->metadata, "branches");
+        if (!branches) goto cleanup;
+        if (branch_set_active_created_at(s, rec_created->valuestring) != 0)
+            goto cleanup;
+    }
+    else
+    {
+        char *now = branch_next_created_at(s);
+        if (!now) goto cleanup;
+        cJSON *branches = cJSON_GetObjectItem(s->metadata, "branches");
+        if (!branches) { free(now); goto cleanup; }
+        if (branch_set_active_created_at(s, now) != 0)
+        { free(now); goto cleanup; }
+        free(now);
+    }
 
     /* Pop the target record — only non-live chains are stored. */
     int n = cJSON_GetArraySize(list);
