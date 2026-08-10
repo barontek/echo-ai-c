@@ -5,6 +5,7 @@
  * modules (omitted under ROUTES_TEST so the test binary links only this).
  */
 
+#define _GNU_SOURCE
 #include <string.h>
 #include <cjson/cJSON.h>
 

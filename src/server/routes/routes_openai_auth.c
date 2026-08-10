@@ -4,6 +4,7 @@
  * Depends on: cJSON, openai_oauth, routes.h.
  */
 
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 

@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /* Minimal link stubs for fuzz targets that compile src/server/websocket.c
  * under WEBSOCKET_TEST (same symbols test_websocket.c provides). The
  * frame-walking hook under test never calls these at runtime; they exist

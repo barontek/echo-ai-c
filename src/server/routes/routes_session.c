@@ -6,6 +6,7 @@
  * links only the path/id helpers).
  */
 
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 #ifndef ROUTES_SESSION_TEST
