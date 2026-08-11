@@ -51,6 +51,7 @@ add_executable(echo-ai
     src/llm/oauth_callback.c
     src/llm/oauth_device.c
     src/llm/openai_compatible.c
+    src/llm/openai_compatible_stream.c
     src/llm/opencode_zen.c
     src/llm/factory.c
     src/tools/tool.c

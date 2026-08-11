@@ -31,6 +31,7 @@ add_executable(test_factory
     ../../src/llm/openai_response.c
     ../../src/utils/http_client.c
     ../../src/llm/openai_compatible.c
+    ../../src/llm/openai_compatible_stream.c
     ../../src/llm/opencode_zen.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
@@ -44,6 +45,7 @@ add_test(NAME test_factory COMMAND test_factory)
 
 add_executable(test_openai_compatible
     ../../src/llm/openai_compatible.c
+    ../../src/llm/openai_compatible_stream.c
     ../../src/utils/http_client.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
