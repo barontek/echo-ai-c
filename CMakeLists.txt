@@ -29,6 +29,9 @@ add_executable(echo-ai
     src/agent/context.c
     src/llm/ollama.c
     src/llm/openai.c
+    src/llm/openai_request.c
+    src/llm/openai_stream.c
+    src/llm/openai_response.c
     src/llm/openai_oauth.c
     src/llm/oauth_codec.c
     src/llm/oauth_jwt.c

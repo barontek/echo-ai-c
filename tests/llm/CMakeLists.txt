@@ -26,6 +26,9 @@ add_executable(test_factory
     ../../src/llm/factory.c
     ../../src/llm/ollama.c
     ../../src/llm/openai.c
+    ../../src/llm/openai_request.c
+    ../../src/llm/openai_stream.c
+    ../../src/llm/openai_response.c
     ../../src/utils/http_client.c
     ../../src/llm/openai_compatible.c
     ../../src/llm/opencode_zen.c
@@ -54,6 +57,9 @@ add_test(NAME test_openai_compatible COMMAND test_openai_compatible)
 
 add_executable(test_openai
     ../../src/llm/openai.c
+    ../../src/llm/openai_request.c
+    ../../src/llm/openai_stream.c
+    ../../src/llm/openai_response.c
     ../../src/utils/http_client.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
