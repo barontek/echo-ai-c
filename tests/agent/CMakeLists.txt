@@ -36,6 +36,10 @@ add_executable(test_agent_save
     ../../src/agent/agent.c
     ../../src/agent/message.c
     ../../src/session/session_manager.c
+    ../../src/session/session_db.c
+    ../../src/session/session_serialize.c
+    ../../src/session/session_list.c
+    ../../src/session/session_purge.c
     ../../src/session/session.c
     ../../src/session/encryption.c
     ../../src/session/migration.c
@@ -55,6 +59,10 @@ add_executable(test_agent_provider
     ../../src/agent/agent.c
     ../../src/agent/message.c
     ../../src/session/session_manager.c
+    ../../src/session/session_db.c
+    ../../src/session/session_serialize.c
+    ../../src/session/session_list.c
+    ../../src/session/session_purge.c
     ../../src/session/session.c
     ../../src/session/encryption.c
     ../../src/session/migration.c

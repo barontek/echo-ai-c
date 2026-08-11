@@ -74,6 +74,10 @@ add_executable(echo-ai
     src/session/session.c
     src/session/encryption.c
     src/session/session_manager.c
+    src/session/session_db.c
+    src/session/session_serialize.c
+    src/session/session_list.c
+    src/session/session_purge.c
     src/session/session_branch.c
     src/session/memory.c
     src/session/migration.c
