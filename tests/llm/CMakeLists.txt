@@ -17,12 +17,27 @@ add_executable(test_ollama
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
+    test_ollama_fixture.c
     test_ollama.c
 )
 target_compile_definitions(test_ollama PRIVATE OLLAMA_TEST=1)
 target_include_directories(test_ollama PRIVATE ../../src)
 target_link_libraries(test_ollama PRIVATE echo_ai_test_deps)
 add_test(NAME test_ollama COMMAND test_ollama)
+
+add_executable(test_ollama_stream
+    ../../src/llm/ollama.c
+    curl_stub.c
+    ../../src/agent/message.c
+    ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
+    test_ollama_fixture.c
+    test_ollama_stream.c
+)
+target_compile_definitions(test_ollama_stream PRIVATE OLLAMA_TEST=1)
+target_include_directories(test_ollama_stream PRIVATE ../../src)
+target_link_libraries(test_ollama_stream PRIVATE echo_ai_test_deps)
+add_test(NAME test_ollama_stream COMMAND test_ollama_stream)
 
 add_executable(test_factory
     ../../src/llm/factory.c
