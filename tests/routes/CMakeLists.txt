@@ -44,15 +44,18 @@ foreach(gen_unit general models)
     add_test(NAME test_routes_general_${gen_unit} COMMAND test_routes_general_${gen_unit})
 endforeach()
 
-add_executable(test_routes_auth
-    ../../src/server/routes/routes_auth.c
-    ../../src/utils/string_utils.c
-    openai_oauth_stub.c
-    test_routes_auth.c
-)
-target_include_directories(test_routes_auth PRIVATE ../../src)
-target_link_libraries(test_routes_auth PRIVATE echo_ai_test_deps)
-add_test(NAME test_routes_auth COMMAND test_routes_auth)
+foreach(auth_unit auth auth_password)
+    add_executable(test_routes_auth_${auth_unit}
+        ../../src/server/routes/routes_auth.c
+        ../../src/utils/string_utils.c
+        openai_oauth_stub.c
+        test_routes_auth_fixture.c
+        test_routes_${auth_unit}.c
+    )
+    target_include_directories(test_routes_auth_${auth_unit} PRIVATE ../../src)
+    target_link_libraries(test_routes_auth_${auth_unit} PRIVATE echo_ai_test_deps)
+    add_test(NAME test_routes_auth_${auth_unit} COMMAND test_routes_auth_${auth_unit})
+endforeach()
 
 add_executable(test_routes_openai_auth
     ../../src/server/routes/routes_openai_auth.c
