@@ -1,17 +1,24 @@
 import { createContext, type Context } from 'react';
 import type { ApprovalRequest, BranchInfo, ToolCall } from '../types';
 
+/** ConnectionStatus - lifecycle of the chat websocket; 'reconnecting' is
+ * entered after an unexpected drop, 'connected' after the handshake. */
 export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
 
 /* Fallback per-provider effort option lists, used only until /api/providers
  * resolves (the backend's effort_options map is authoritative). OpenAI gets
  * xhigh; openai_compatible, ollama and opencode_zen share the smaller set. */
+/** EFFORT_OPTIONS_BY_PROVIDER - fallback per-provider effort option
+ * lists, used only until /api/providers resolves (the backend's
+ * effort_options map is authoritative). */
 export const EFFORT_OPTIONS_BY_PROVIDER: Record<string, string[]> = {
   openai: ['low', 'medium', 'high', 'xhigh', 'max', 'none'],
   openai_compatible: ['low', 'medium', 'high', 'max', 'none'],
   ollama: ['low', 'medium', 'high', 'max', 'none'],
   opencode_zen: ['low', 'medium', 'high', 'max', 'none'],
 };
+/** EffortOption - one reasoning-effort level name; the authoritative list
+ * comes from the backend's /api/providers effort_options map. */
 export type EffortOption = string;
 
 /** ChatContextValue - the full chat contract exposed by ChatProvider.
@@ -77,6 +84,9 @@ export interface ChatContextValue {
   resolveAskUser: (answer: string) => void;
 }
 
+/** ChatContext - React context carrying ChatContextValue, or null before
+ * ChatProvider mounts. Consumers must handle the null case (or use the
+ * provider's hook). */
 export const ChatContext: Context<ChatContextValue | null> = createContext<ChatContextValue | null>(
   null
 );

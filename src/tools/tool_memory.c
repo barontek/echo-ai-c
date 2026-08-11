@@ -106,8 +106,11 @@ static ToolResult *memory_execute(Tool *self, const char *args_json)
             cJSON_Delete(args);
             return tool_result_error("missing 'key' for get", "validation_error");
         }
-        char *val = memory_get_dup(sm->db, cJSON_GetStringValue(key));
+        int mem_error = 0;
+        char *val = memory_get_dup(sm->db, cJSON_GetStringValue(key), &mem_error);
         cJSON_Delete(args);
+        if (mem_error)
+            return tool_result_error("memory store error", "execution_error");
         ToolResult *tr = tool_result_create(val ? val : "(not found)");
         free(val);
         return tr;
@@ -148,7 +151,10 @@ static ToolResult *memory_execute(Tool *self, const char *args_json)
     {
         cJSON_Delete(args);
         int count = 0;
-        MemoryFact *facts = memory_list_all(sm->db, &count);
+        int mem_error = 0;
+        MemoryFact *facts = memory_list_all(sm->db, &count, &mem_error);
+        if (!facts && mem_error)
+            return tool_result_error("memory store error", "execution_error");
         if (!facts) return tool_result_create("(no memory stored)");
 
         char *result = NULL;
@@ -159,7 +165,10 @@ static ToolResult *memory_execute(Tool *self, const char *args_json)
             if (asprintf(&line, "%s: %s\n", facts[i].key, facts[i].value) < 0) continue;
             size_t llen = strlen(line);
             char *newr = realloc(result, len + llen + 1);
-            if (!newr) { free(line); continue; }
+            if (!newr) {
+                free(line);
+                continue;
+            }
             result = newr;
             memcpy(result + len, line, llen + 1);
             len += llen;
@@ -201,7 +210,10 @@ Tool *tool_memory_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     MemoryToolCtx *ctx = calloc(1, sizeof(MemoryToolCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("memory");

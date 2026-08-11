@@ -3,6 +3,7 @@
 #include <string.h>
 #include "utils/callbacks.h"
 
+/* test_callbacks - unit tests for callbacks. Depends on: check, the module under test. */
 typedef struct {
     int run_start_calls;
     int run_end_calls;
@@ -102,7 +103,7 @@ static CallbackHooks make_spy_hooks(SpyData *spy)
     return h;
 }
 
-START_TEST(test_cb_create_destroy)
+START_TEST(test_cb_create_destroy_roundtrip)
 {
     CallbackManager *mgr = cb_manager_create();
     ck_assert_ptr_nonnull(mgr);
@@ -111,7 +112,7 @@ START_TEST(test_cb_create_destroy)
 }
 END_TEST
 
-START_TEST(test_cb_register_and_count)
+START_TEST(test_cb_register_and_count_hooks)
 {
     CallbackManager *mgr = cb_manager_create();
     SpyData spy = {0};
@@ -125,7 +126,8 @@ END_TEST
 START_TEST(test_cb_register_multiple)
 {
     CallbackManager *mgr = cb_manager_create();
-    SpyData spy1 = {0}, spy2 = {0};
+    SpyData spy1 = {0};
+    SpyData spy2 = {0};
     ck_assert_int_eq(cb_manager_register(mgr, make_spy_hooks(&spy1)), 0);
     ck_assert_int_eq(cb_manager_register(mgr, make_spy_hooks(&spy2)), 0);
     ck_assert_int_eq(mgr->count, 2);
@@ -248,7 +250,8 @@ END_TEST
 START_TEST(test_cb_dispatch_multiple_hooks)
 {
     CallbackManager *mgr = cb_manager_create();
-    SpyData spy1 = {0}, spy2 = {0};
+    SpyData spy1 = {0};
+    SpyData spy2 = {0};
     cb_manager_register(mgr, make_spy_hooks(&spy1));
     cb_manager_register(mgr, make_spy_hooks(&spy2));
     cb_manager_run_start(mgr, "runX", "prompt");
@@ -305,8 +308,8 @@ Suite *callbacks_suite(void)
     Suite *s = suite_create("Callbacks");
     TCase *tc = tcase_create("Lifecycle");
     tcase_set_timeout(tc, 10);
-    tcase_add_test(tc, test_cb_create_destroy);
-    tcase_add_test(tc, test_cb_register_and_count);
+    tcase_add_test(tc, test_cb_create_destroy_roundtrip);
+    tcase_add_test(tc, test_cb_register_and_count_hooks);
     tcase_add_test(tc, test_cb_register_multiple);
     tcase_add_test(tc, test_cb_register_up_to_max);
     suite_add_tcase(s, tc);

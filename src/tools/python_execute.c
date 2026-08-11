@@ -177,7 +177,10 @@ Tool *tool_python_execute_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     PythonCtx *ctx = calloc(1, sizeof(PythonCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->timeout = 30;
 
     t->name = str_dup("python_execute");

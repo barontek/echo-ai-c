@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <curl/curl.h>
 
+/* test_web_fetch - web_fetch tool unit tests. Depends on: check, the module under test. */
 /* Exported by web_fetch.c when built with WEB_FETCH_TEST=1. */
 extern int web_fetch_test_looks_like_challenge(const char *data, size_t len);
 extern int web_fetch_test_binary_on_path(const char *name);
@@ -178,7 +179,7 @@ START_TEST(test_retry_replaces_challenge_body)
     ck_assert_int_gt(len, 0);
     ck_assert(strstr(body, "real content text here") != NULL);
     ck_assert(strstr(body, "Just a moment") == NULL);
-    ck_assert(strcmp(ctype, "text/html") == 0);
+    ck_assert_str_eq(ctype, "text/html");
     free(body);
     free(ctype);
 }

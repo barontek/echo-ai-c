@@ -39,6 +39,15 @@ static ToolResult *stub_fetch_execute(Tool *self, const char *args_json)
     return tool_result_create("page body text");
 }
 
+/* L2 regression source: a provider may return a JSON object (any valid
+ * JSON) where the tool expects an array of results. */
+static ToolResult *stub_search_object_execute(Tool *self, const char *args_json)
+{
+    (void)self;
+    (void)args_json;
+    return tool_result_create("{\"error\":\"provider returned object\"}");
+}
+
 static void stub_destroy(Tool *self)
 {
     if (!self) return;
@@ -188,6 +197,34 @@ START_TEST(test_deep_search_allocation_failure_returns_error)
 }
 END_TEST
 
+/* L2 regression: a search provider returning a JSON object (not an array)
+ * used to be freed twice — once by cJSON_Delete(output) after the transfer
+ * and again by the inverted guard — an ASan double-free/use-after-free.
+ * The object must be consumed exactly once and surfaced as the "none"
+ * marker instead. */
+START_TEST(test_deep_search_non_array_search_result_is_handled)
+{
+    registry_register(make_stub("web_search", stub_search_object_execute));
+    registry_register(make_stub("web_fetch", stub_fetch_execute));
+    registry_set_enabled("web_search, web_fetch");
+    Tool *tool = tool_deep_search_create(NULL);
+    ck_assert_ptr_nonnull(tool);
+    ToolResult *result = tool->execute(tool, "{\"query\":\"object shape\"}");
+    ck_assert_ptr_nonnull(result);
+    ck_assert_ptr_null(result->error);
+    cJSON *out = cJSON_Parse(result->content);
+    ck_assert_ptr_nonnull(out);
+    cJSON *search_results = cJSON_GetObjectItem(out, "search_results");
+    ck_assert_ptr_nonnull(search_results);
+    ck_assert(cJSON_IsString(search_results));
+    ck_assert_str_eq(search_results->valuestring, "none");
+    cJSON_Delete(out);
+    tool_result_free(result);
+    tool->destroy(tool);
+    registry_destroy();
+}
+END_TEST
+
 int main(void)
 {
     Suite *suite = suite_create("DeepSearch");
@@ -199,6 +236,7 @@ int main(void)
     tcase_add_test(tc, test_deep_search_search_error_propagates);
     tcase_add_test(tc, test_deep_search_create_allocation_failure_returns_null);
     tcase_add_test(tc, test_deep_search_allocation_failure_returns_error);
+    tcase_add_test(tc, test_deep_search_non_array_search_result_is_handled);
     suite_add_tcase(suite, tc);
 
     SRunner *runner = srunner_create(suite);

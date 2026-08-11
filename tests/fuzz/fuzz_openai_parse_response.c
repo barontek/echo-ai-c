@@ -1,3 +1,4 @@
+/* fuzz_openai_parse_response - libFuzzer target for openai parse response parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for parse_response — the non-streaming Codex
  * response parser in src/llm/openai.c. Compiles the REAL openai.c under
  * OPENAI_TEST and drives the existing openai_test_parse_response_alloc hook.

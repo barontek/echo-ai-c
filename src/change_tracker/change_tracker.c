@@ -63,10 +63,16 @@ int ct_snapshot(ChangeTracker *ct, const char *file_path)
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     rewind(f);
-    if (len < 0) { fclose(f); return -1; }
+    if (len < 0) {
+        fclose(f);
+        return -1;
+    }
 
     char *content = malloc((size_t)len + 1);
-    if (!content) { fclose(f); return -1; }
+    if (!content) {
+        fclose(f);
+        return -1;
+    }
 
     size_t read = fread(content, 1, (size_t)len, f);
     fclose(f);
@@ -82,7 +88,10 @@ int ct_snapshot(ChangeTracker *ct, const char *file_path)
     }
 
     char *fp = str_dup(file_path);
-    if (!fp) { free(content); return -1; }
+    if (!fp) {
+        free(content);
+        return -1;
+    }
 
     int idx = ct->undo_count++;
     ct->undo_stack[idx].file_path = fp;
@@ -137,7 +146,15 @@ int ct_undo(ChangeTracker *ct)
     size_t written = 0;
     if (entry->content_len > 0)
         written = fwrite(entry->previous_content, 1, entry->content_len, f);
-    fclose(f);
+    if (written != entry->content_len || fclose(f) != 0)
+    {
+        /* C7: a failed restore must not consume the undo entry — it is
+         * the only copy of the previous content. Keep the entry (the
+         * file may be truncated; a retry can restore it) and report
+         * failure. */
+        free(current);
+        return -1;
+    }
 
     if (ct->redo_count >= CT_MAX_STACK)
     {
@@ -149,7 +166,10 @@ int ct_undo(ChangeTracker *ct)
     }
 
     char *fp = str_dup(entry->file_path);
-    if (!fp) { free(current); return -1; }
+    if (!fp) {
+        free(current);
+        return -1;
+    }
 
     int rdx = ct->redo_count++;
     ct->redo_stack[rdx].file_path = fp;
@@ -174,7 +194,11 @@ int ct_redo(ChangeTracker *ct)
     size_t written = 0;
     if (entry->content_len > 0)
         written = fwrite(entry->previous_content, 1, entry->content_len, f);
-    fclose(f);
+    if (written != entry->content_len || fclose(f) != 0)
+    {
+        /* C7 mirror: a failed redo must keep the redo entry intact. */
+        return -1;
+    }
 
     if (ct->undo_count >= CT_MAX_STACK)
     {

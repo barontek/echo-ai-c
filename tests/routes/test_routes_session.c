@@ -5,6 +5,7 @@
 
 #include "../src/server/routes/routes_session.h"
 
+/* test_routes_session - unit tests for routes session. Depends on: check, the module under test. */
 extern const char *session_id_from_path(const char *path);
 extern int is_export_path(const char *sid);
 extern size_t export_suffix_len(const char *sid);

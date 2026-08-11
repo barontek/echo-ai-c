@@ -67,7 +67,10 @@ void handle_sessions(HTTPRequest *req, Client *client, ServerContext *ctx)
     SessionList *list = session_manager_list_sessions(ctx->sm);
     if (!list)
     {
-        server_response_json(client, 200, "{\"sessions\":[]}");
+        /* C8: a DB error must not be indistinguishable from "no
+         * sessions" — the client needs to know the store failed. */
+        log_error("handle_sessions: list_sessions failed", NULL);
+        server_response_error(client, 500, "session store error");
         return;
     }
 
@@ -236,7 +239,10 @@ void handle_session_get(HTTPRequest *req, Client *client, ServerContext *ctx)
     if (is_export_path(sid))
     {
         char *id_copy = str_dup(sid);
-        if (!id_copy) { server_response_error(client, 500, "oom"); return; }
+        if (!id_copy) {
+            server_response_error(client, 500, "oom");
+            return;
+        }
         size_t slen = export_suffix_len(sid);
         id_copy[strlen(id_copy) - slen] = '\0';
         char *exported = session_manager_export_session_new(ctx->sm, id_copy);

@@ -4,6 +4,7 @@
 #include <string.h>
 #include "agent/message.h"
 
+/* fuzz_openai_compatible_stream - libFuzzer target for openai compatible stream parsing. Depends on: check, the module under test. */
 LLMResponse *openai_compatible_test_parse_stream_alloc(
     const char *input, void (*on_chunk)(const char *, void *), void *userdata);
 

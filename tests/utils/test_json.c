@@ -4,6 +4,7 @@
 #include "utils/json.h"
 #include "utils/string_utils.h"
 
+/* test_json - unit tests for json. Depends on: check, the module under test. */
 START_TEST(test_json_string_escape_quotes)
 {
     char *esc = json_string_escape_dup("hello \"world\"");
@@ -85,7 +86,7 @@ START_TEST(test_json_add_string_nonnull_val)
 }
 END_TEST
 
-START_TEST(test_json_add_int)
+START_TEST(test_json_add_int_serializes_integer)
 {
     cJSON *obj = cJSON_CreateObject();
     json_add_int(obj, "count", 42);
@@ -94,7 +95,7 @@ START_TEST(test_json_add_int)
 }
 END_TEST
 
-START_TEST(test_json_add_double)
+START_TEST(test_json_add_double_serializes_number)
 {
     cJSON *obj = cJSON_CreateObject();
     json_add_double(obj, "pi", 3.14);
@@ -104,7 +105,7 @@ START_TEST(test_json_add_double)
 }
 END_TEST
 
-START_TEST(test_json_serialize_object)
+START_TEST(test_json_serialize_object_emits_object)
 {
     cJSON *obj = cJSON_CreateObject();
     json_add_string(obj, "name", "test");
@@ -149,13 +150,13 @@ Suite *json_suite(void)
     tcase_set_timeout(tc2, 10);
     tcase_add_test(tc2, test_json_add_string_null_val);
     tcase_add_test(tc2, test_json_add_string_nonnull_val);
-    tcase_add_test(tc2, test_json_add_int);
-    tcase_add_test(tc2, test_json_add_double);
+    tcase_add_test(tc2, test_json_add_int_serializes_integer);
+    tcase_add_test(tc2, test_json_add_double_serializes_number);
     suite_add_tcase(s, tc2);
 
     TCase *tc3 = tcase_create("Serialize");
     tcase_set_timeout(tc3, 10);
-    tcase_add_test(tc3, test_json_serialize_object);
+    tcase_add_test(tc3, test_json_serialize_object_emits_object);
     tcase_add_test(tc3, test_json_serialize_nested);
     suite_add_tcase(s, tc3);
 

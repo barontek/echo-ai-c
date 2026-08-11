@@ -10,6 +10,7 @@
 #include "../src/agent/message.h"
 #include "../src/utils/string_utils.h"
 
+/* test_routes_chat - unit tests for routes chat. Depends on: check, the module under test. */
 static int stub_unlock = 1;
 static const char *stub_query_token_match = NULL;
 static LLMResponse *stub_agent_run_resp = NULL;
@@ -290,7 +291,7 @@ START_TEST(test_chat_agent_returns_null)
 }
 END_TEST
 
-START_TEST(test_chat_success_basic)
+START_TEST(test_chat_returns_200_with_assistant_response)
 {
     HTTPRequest req = {0};
     ServerContext ctx = {0};
@@ -613,7 +614,7 @@ Suite *routes_chat_suite(void)
     tcase_add_test(tc, test_chat_message_null);
     tcase_add_test(tc, test_chat_no_agent);
     tcase_add_test(tc, test_chat_agent_returns_null);
-    tcase_add_test(tc, test_chat_success_basic);
+    tcase_add_test(tc, test_chat_returns_200_with_assistant_response);
     tcase_add_test(tc, test_chat_success_with_thinking);
     tcase_add_test(tc, test_chat_success_with_tool_calls);
     tcase_add_test(tc, test_chat_success_null_content);

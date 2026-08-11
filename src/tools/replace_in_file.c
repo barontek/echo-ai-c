@@ -8,11 +8,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h>
 
 #include "tool.h"
 #include "../safety/safety.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
+
+#ifdef REPLACE_IN_FILE_TEST
+/* Test-only fwrite seam: lets tests simulate a short write (disk full)
+ * deterministically. Defined before the #define so its own body calls the
+ * real fwrite. Only the test target defines REPLACE_IN_FILE_TEST. */
+static int rif_test_fwrite_fail = 0;
+void replace_in_file_test_set_fwrite_fail(int fail)
+{
+    rif_test_fwrite_fail = fail;
+}
+static size_t rif_test_fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
+{
+    if (rif_test_fwrite_fail)
+    {
+        /* Simulate a short write: report one element fewer than asked */
+        return nmemb > 0 ? nmemb - 1 : 0;
+    }
+    return fwrite(ptr, size, nmemb, stream);
+}
+#define fwrite rif_test_fwrite
+#endif
 
 typedef struct {
     SafetyConfig *safety;
@@ -87,6 +110,18 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
 
     size_t read = fread(content, 1, (size_t)fsize, f);
     fclose(f);
+    if (read != (size_t)fsize)
+    {
+        /* C5: a short read means the file changed under us; rewriting it
+         * would silently truncate. */
+        free(content);
+        free(resolved);
+        free(path);
+        free(old_str);
+        free(new_str);
+        return tool_result_error("read failed: file incomplete",
+                                 "execution_error");
+    }
     content[read] = '\0';
 
     char *pos = strstr(content, old_str);
@@ -113,12 +148,63 @@ static ToolResult *replace_in_file_execute(Tool *self, const char *args_json)
 
     free(content);
 
-    f = fopen(resolved, "wb");
-    if (!f) { free(new_content); free(resolved); free(path); free(old_str); free(new_str);
-        return tool_result_error("cannot write file", "execution_error"); }
+    /* Write to a temp file next to the target and rename into place: an
+     * interrupted/short write then cannot destroy the only copy of the
+     * original content (rename is atomic on POSIX). */
+    char *tmp_path = NULL;
+    if (asprintf(&tmp_path, "%s.tmp.%ld", resolved, (long)getpid()) < 0)
+    {
+        free(new_content);
+        free(resolved);
+        free(path);
+        free(old_str);
+        free(new_str);
+        return tool_result_error("oom", "execution_error");
+    }
 
-    size_t written = fwrite(new_content, 1, prefix_len + new_len + suffix_len, f);
-    fclose(f);
+    f = fopen(tmp_path, "wb");
+    if (!f)
+    {
+        free(tmp_path);
+        free(new_content);
+        free(resolved);
+        free(path);
+        free(old_str);
+        free(new_str);
+        return tool_result_error("cannot write file", "execution_error");
+    }
+
+    size_t size_to_write = prefix_len + new_len + suffix_len;
+    size_t written = fwrite(new_content, 1, size_to_write, f);
+    if (written != size_to_write || fclose(f) != 0)
+    {
+        /* C2: a short write (disk full) silently truncated the file and
+         * the tool reported success. Report the failure; the original
+         * file is untouched. */
+        unlink(tmp_path);
+        free(tmp_path);
+        free(new_content);
+        free(resolved);
+        free(path);
+        free(old_str);
+        free(new_str);
+        return tool_result_error("write failed: file may be incomplete",
+                                 "execution_error");
+    }
+    if (rename(tmp_path, resolved) != 0)
+    {
+        log_error("replace_in_file: rename failed", "err", strerror(errno), NULL);
+        unlink(tmp_path);
+        free(tmp_path);
+        free(new_content);
+        free(resolved);
+        free(path);
+        free(old_str);
+        free(new_str);
+        return tool_result_error("write failed: file may be incomplete",
+                                 "execution_error");
+    }
+    free(tmp_path);
 
     free(new_content);
     free(resolved);
@@ -159,7 +245,10 @@ Tool *tool_replace_in_file_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     ReplaceCtx *ctx = calloc(1, sizeof(ReplaceCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("replace_in_file");

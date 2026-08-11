@@ -5,6 +5,7 @@
 
 #include "llm/openai_oauth.h"
 
+/* fuzz_openai_oauth_token - libFuzzer target for openai oauth token parsing. Depends on: check, the module under test. */
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     if (size > 1024U * 1024U || memchr(data, '\0', size)) return 0;

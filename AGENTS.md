@@ -50,7 +50,7 @@ No undefined behavior
 
 Structure and headers
 
-- One header per module, matching `.c`. No circular includes. Documented exception: the tool modules under `src/tools/` share one subsystem contract via `tool.h` and `registry.h`; per-tool headers would only duplicate those factory declarations, so they are intentionally not generated. Everywhere else the one-header-per-module rule applies (`src/llm/factory.h` and `src/llm/ollama.h` were added in the 2026-08 compliance sweep).
+- One header per module, matching `.c`. No circular includes. Documented exceptions: (1) the tool modules under `src/tools/` share one subsystem contract via `tool.h` and `registry.h`; per-tool headers would only duplicate those factory declarations, so they are intentionally not generated. (2) `src/llm/provider.h` is a shared LLM-provider vtable contract with no `provider.c` — same shape as the tools exception, applied to the provider family. Everywhere else the one-header-per-module rule applies (`src/llm/factory.h` and `src/llm/ollama.h` were added in the 2026-08 compliance sweep).
 - Include guards on every header, consistent style repo-wide.
 - No function longer than ~60 lines without a strong reason.
 - Public functions carry doc comments stating ownership and failure modes — the exact requirements are in the Documentation standards section below.
@@ -268,8 +268,11 @@ The goal in both cases is the same: isolate the allocation logic from the I/O/pr
 When to reach for this:
 Any function that allocates more than one thing and then commits a count, index, or struct pointer based on those allocations succeeding. If you're writing or reviewing such a function and it doesn't have a fault-injection test, that's the same gap that caused the `metrics.c`, `semantic_search.c`, and `tool_delegate.c` bugs — write the test before considering the function done, not after something breaks.
 
-Known gaps as of this sweep:
-All allocation-safety paths in `metrics.c`, `config.c`, `memory.c`, `session_manager.c`, `change_tracker.c`, `semantic_search.c`, `tool_delegate.c`, and `registry.c` are covered. Any new module with multi-allocation commit logic should get this same treatment before merge, not discovered later via a production crash.
+Known gaps as of the 2026-08-11 compliance review (AGENTS_COMPLIANCE_REVIEW.md):
+All allocation-safety paths in `metrics.c`, `change_tracker.c`, and `registry.c` are covered. The following have partial coverage — treat these as gap areas until fault tests exist for every multi-allocation commit site: `memory.c` (memory_get_dup has no fault coverage), `tool_delegate.c` (loop-phase commit sites untested), `session_manager.c` (add_message realloc+rollback, load_session_locked str_dups), `config.c` (mid-list token cleanup), `semantic_search.c` (add_term rollback — fixed 2026-08-11 with tests; index teardown now exposed as semantic_search_free_index). `routes_session.c` gained its alloc-fail hook tests in the same sweep; `migration.c`'s asprintf multi-alloc path is covered by the 2026-08-11 fork-mint hooks (session_manager_test_set_asprintf_fail). Any new module with multi-allocation commit logic should get this same treatment before merge, not discovered later via a production crash.
+
+Verification discipline:
+Every bug fix ships with a regression test that fails on the old code and passes on the new; the fail→pass evidence (test name, sanitizer output, Valgrind run for memory bugs) is archived in `docs/verification/` and tracked in `docs/plans/AGENTS_COMPLIANCE_FIX_PLAN.md`. Single-suite debugging uses `scripts/debug-check.sh` (CK_FORK=no + CK_RUN_* isolation; `make check-debug BIN=... MODE=gdb|valgrind`).
 
 When to stop and ask
 

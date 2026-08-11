@@ -33,7 +33,7 @@ int token_equals(const char *a, size_t a_len, const char *b);
  *
  * Return: 1 when the header value equals token (constant-time), 0 when
  * the header is absent, args are NULL, or the values differ. Never
- * fails; thread-safe.
+ * fails; thread-safe (no shared state).
  */
 int middleware_has_valid_token(const char *headers, const char *token);
 
@@ -48,7 +48,7 @@ int middleware_has_valid_token(const char *headers, const char *token);
  * cannot set custom headers.
  *
  * Return: 1 if a matching item exists, 0 otherwise. Never fails;
- * thread-safe.
+ * thread-safe (no shared state).
  */
 int middleware_has_valid_ws_token(const char *headers, const char *token);
 
@@ -62,7 +62,9 @@ int middleware_has_valid_ws_token(const char *headers, const char *token);
  * the token is compared against the X-Unlock-Token header.
  *
  * Return: 1 if the request may pass, 0 if the caller should reject it
- * with 401. Never fails; thread-safe.
+ * with 401. Never fails; safe only on the libuv loop thread (reads
+ * unsynchronized ServerContext state and a rate limiter that requires
+ * caller serialization).
  */
 int middleware_check_unlock(HTTPRequest *req, ServerContext *ctx);
 
@@ -76,8 +78,9 @@ int middleware_check_unlock(HTTPRequest *req, ServerContext *ctx);
  * because EventSource cannot set headers. The value is compared raw and
  * is NOT URL-decoded, so clients must send it unescaped.
  *
- * Return: 1 if the request may pass, 0 otherwise. Never fails;
- * thread-safe.
+ * Return: 1 if the request may pass, 0 otherwise. Never fails; safe
+ * only on the libuv loop thread (same ServerContext reads as
+ * middleware_check_unlock).
  */
 int middleware_check_unlock_query(HTTPRequest *req, ServerContext *ctx);
 
@@ -89,7 +92,8 @@ int middleware_check_unlock_query(HTTPRequest *req, ServerContext *ctx);
  *
  * Return: 1 when the request is allowed (or no limiter is configured),
  * 0 when it exceeds the limit and the caller should reply 429. Never
- * fails; thread-safe.
+ * fails; safe only on the libuv loop thread (the RateLimiter requires
+ * caller serialization per rate_limiter.h).
  */
 int middleware_check_rate_limit(HTTPRequest *req, ServerContext *ctx);
 

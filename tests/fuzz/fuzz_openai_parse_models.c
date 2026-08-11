@@ -1,3 +1,4 @@
+/* fuzz_openai_parse_models - libFuzzer target for openai parse models parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for parse_models_response — the Codex models-catalog
  * parser in src/llm/openai.c. Compiles the REAL openai.c under
  * OPENAI_TEST and drives the existing openai_test_parse_models hook.

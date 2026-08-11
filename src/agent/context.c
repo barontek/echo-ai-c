@@ -174,7 +174,10 @@ Message *smart_select_alloc(Message *msgs, int count, int keep_count)
     qsort(scores, count, sizeof(MsgScore), score_cmp);
 
     int *selected_flags = calloc(count, sizeof(int));
-    if (!selected_flags) { free(scores); return NULL; }
+    if (!selected_flags) {
+        free(scores);
+        return NULL;
+    }
 
     int selected_count = 0;
     int result_count = 0;
@@ -231,10 +234,18 @@ Message *smart_select_alloc(Message *msgs, int count, int keep_count)
         }
     }
 
-    if (result_count <= 0) { free(selected_flags); free(scores); return NULL; }
+    if (result_count <= 0) {
+        free(selected_flags);
+        free(scores);
+        return NULL;
+    }
 
     Message *selected = calloc(result_count, sizeof(Message));
-    if (!selected) { free(selected_flags); free(scores); return NULL; }
+    if (!selected) {
+        free(selected_flags);
+        free(scores);
+        return NULL;
+    }
 
     int out = 0;
     for (int i = 0; i < count && out < result_count; i++)
@@ -327,7 +338,10 @@ Message *trim_messages_by_tokens_new(Message *msgs, int *count, int max_tokens)
         if (keep[i]) new_count++;
 
     Message *trimmed = calloc(new_count, sizeof(Message));
-    if (!trimmed) { free(keep); return msgs; }
+    if (!trimmed) {
+        free(keep);
+        return msgs;
+    }
 
     int out = 0;
     for (int i = 0; i < *count; i++)
@@ -350,13 +364,25 @@ Message *apply_context_window(Message *msgs, int *count,
 {
     if (*count <= max_messages)
     {
-        int total_chars = 0;
+        /* C13: size_t accumulator with an overflow flag — the old int
+         * total_chars overflowed (UB) past ~2 GB of content and could
+         * wrongly decide the window fit. */
+        int over = 0;
+        size_t total_chars = 0;
         for (int i = 0; i < *count; i++)
         {
             if (msgs[i].content)
-                total_chars += strlen(msgs[i].content);
+            {
+                size_t clen = strlen(msgs[i].content);
+                if (total_chars > (size_t)max_chars - clen)
+                {
+                    over = 1;
+                    break;
+                }
+                total_chars += clen;
+            }
         }
-        if (total_chars <= max_chars) return msgs;
+        if (!over && total_chars <= (size_t)max_chars) return msgs;
     }
 
     /* trim by messages first using smart_select_alloc */

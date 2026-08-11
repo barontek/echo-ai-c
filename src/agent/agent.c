@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdatomic.h>
 #include <unistd.h>
 
 #if defined(__linux__)
@@ -28,6 +29,30 @@
 #include "../tools/tool.h"
 #include "../utils/logging.h"
 #include "../utils/string_utils.h"
+
+#ifdef AGENT_TEST
+/* Test-only seams for tests/agent/test_agent_save.c: expose the tool-call
+ * executor and inject realloc failures into the message-array growth so
+ * the OOM paths (message_create NULL, append failure) are exercisable.
+ * Only the test target defines AGENT_TEST; production builds never see
+ * the shim. The shim is defined before the #define so its own body calls
+ * the real realloc. */
+static int agent_test_realloc_counter = 0;
+static int agent_test_realloc_fail_at = -1;
+void *agent_test_realloc(void *ptr, size_t size)
+{
+    agent_test_realloc_counter++;
+    if (agent_test_realloc_counter == agent_test_realloc_fail_at) return NULL;
+    return realloc(ptr, size);
+}
+#define realloc agent_test_realloc
+void agent_test_set_realloc_fail(int nth)
+{
+    agent_test_realloc_counter = 0;
+    agent_test_realloc_fail_at = nth;
+}
+int agent_test_execute_tool_calls(Agent *agent, ToolCall *calls, int count);
+#endif
 #include "../session/session_manager.h"
 #include "../session/memory.h"
 
@@ -88,7 +113,7 @@ Agent *agent_create(const AgentConfig *cfg)
     agent->max_context_chars = cfg->max_context_chars;
     agent->max_tool_result_chars = cfg->max_tool_result_chars;
     agent->parallel_tool_exec = cfg->parallel_tool_exec;
-    agent->cancel_requested = 0;
+    atomic_store(&agent->cancel_requested, 0);
     agent->cb = cb_create(5, 30000);
 
     if (!agent->model)
@@ -143,8 +168,8 @@ static int agent_append_message(Agent *agent, Message *msg)
 /* Declared here, not in agent.h: non-static only so the save test can
  * link against it (tests/agent/test_agent_save.c). Not part of the API. */
 void agent_save_session(Agent *agent);
-static void agent_generate_title(Agent *agent);
-static void agent_perform_summarization(Agent *agent, int original_count);
+static int agent_generate_title(Agent *agent);
+static int agent_perform_summarization(Agent *agent, int original_count);
 
 static double time_sec(void)
 {
@@ -172,10 +197,25 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
                 metrics_counter_inc(agent->metrics, "echo_tool_errors_total",
                                     "Total tool execution errors by name");
             Message *err_msg = message_create("tool", "tool not found");
+            if (!err_msg)
+            {
+                log_error("execute_tool_calls: OOM building tool-not-found "
+                          "message", "tool", tname, NULL);
+                cb_manager_tool_error(agent->cb_mgr, NULL, tname,
+                                      "tool not found");
+                continue;
+            }
             err_msg->tool_call_id = str_dup(calls[i].id ? calls[i].id : "");
             err_msg->tool_name = str_dup(tname);
             err_msg->error_category = str_dup("tool_not_found");
-            agent_append_message(agent, err_msg);
+            if (agent_append_message(agent, err_msg) == 0)
+                free(err_msg); /* struct only: fields moved into the array */
+            else
+            {
+                log_error("execute_tool_calls: OOM appending tool-not-found "
+                          "message", "tool", tname, NULL);
+                message_free(err_msg);
+            }
             cb_manager_tool_error(agent->cb_mgr, NULL, tname, "tool not found");
             continue;
         }
@@ -189,10 +229,25 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
             if (!ok)
             {
                 Message *err_msg = message_create("tool", "tool call denied");
+                if (!err_msg)
+                {
+                    log_error("execute_tool_calls: OOM building denial "
+                              "message", "tool", tname, NULL);
+                    cb_manager_tool_error(agent->cb_mgr, NULL, tname,
+                                          "denied");
+                    continue;
+                }
                 err_msg->tool_call_id = str_dup(calls[i].id ? calls[i].id : "");
                 err_msg->tool_name = str_dup(tname);
                 err_msg->error_category = str_dup("denied");
-                agent_append_message(agent, err_msg);
+                if (agent_append_message(agent, err_msg) == 0)
+                    free(err_msg); /* struct only: fields moved into array */
+                else
+                {
+                    log_error("execute_tool_calls: OOM appending denial "
+                              "message", "tool", tname, NULL);
+                    message_free(err_msg);
+                }
                 cb_manager_tool_error(agent->cb_mgr, NULL, tname, "denied");
                 continue;
             }
@@ -246,6 +301,14 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
         }
 
         Message *tool_msg = message_create("tool", display);
+        if (!tool_msg)
+        {
+            log_error("execute_tool_calls: OOM building tool message",
+                      "tool", tname, NULL);
+            free(capped);
+            tool_result_free(result);
+            continue;
+        }
         tool_msg->tool_call_id = str_dup(calls[i].id ? calls[i].id : "");
         tool_msg->tool_name = str_dup(calls[i].name);
         if (result->error)
@@ -258,7 +321,14 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
             tool_msg->content = err_content;
         }
 
-        agent_append_message(agent, tool_msg);
+        if (agent_append_message(agent, tool_msg) == 0)
+            free(tool_msg); /* struct only: fields moved into the array */
+        else
+        {
+            log_error("execute_tool_calls: OOM appending tool message",
+                      "tool", tname, NULL);
+            message_free(tool_msg);
+        }
         free(capped);
         if (result->error)
             cb_manager_tool_error(agent->cb_mgr, NULL, tname, result->error);
@@ -269,6 +339,13 @@ static int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
 
     return 0;
 }
+
+#ifdef AGENT_TEST
+int agent_test_execute_tool_calls(Agent *agent, ToolCall *calls, int count)
+{
+    return execute_tool_calls(agent, calls, count);
+}
+#endif
 
 static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
 {
@@ -293,7 +370,7 @@ static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
     if (agent->sm && agent->sm->db)
     {
         int mem_count = 0;
-        MemoryFact *memories = memory_list_all(agent->sm->db, &mem_count);
+        MemoryFact *memories = memory_list_all(agent->sm->db, &mem_count, NULL);
         if (memories && mem_count > 0)
         {
             size_t mbsz = 512;
@@ -312,7 +389,11 @@ static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
                     {
                         mbsz = needed + 256;
                         char *newbuf = realloc(mem_buf, mbsz);
-                        if (!newbuf) { free(mem_buf); mem_buf = NULL; break; }
+                        if (!newbuf) {
+                            free(mem_buf);
+                            mem_buf = NULL;
+                            break;
+                        }
                         mem_buf = newbuf;
                     }
                     w = snprintf(mem_buf + pos, mbsz - pos,
@@ -330,13 +411,19 @@ static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
         if (asprintf(out, "%s%s%s\n\nPrevious conversation summary: %s",
                      base, context_buf, mem_buf ? mem_buf : "",
                      agent->context_summary) < 0)
-            { free(mem_buf); return -1; }
+             {
+                free(mem_buf);
+                return -1;
+            }
     }
     else
     {
         if (asprintf(out, "%s%s%s",
                      base, context_buf, mem_buf ? mem_buf : "") < 0)
-            { free(mem_buf); return -1; }
+             {
+                free(mem_buf);
+                return -1;
+            }
     }
     free(mem_buf);
     if (out_len && *out) *out_len = strlen(*out);
@@ -345,11 +432,16 @@ static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
 
 /* Rebuilds the system prompt (cwd, time, persistent memory, summary) and
  * replaces the existing system message on every LLM call, so the dynamic
- * context never goes stale across a long tool-using conversation. */
-static void inject_system_with_summary(Agent *agent)
+ * context never goes stale across a long tool-using conversation.
+ * Returns 0 on success, -1 on failure (prompt build or insert OOM). */
+static int inject_system_with_summary(Agent *agent)
 {
     char *sys = NULL;
-    if (build_system_prompt(agent, &sys, NULL) != 0) return;
+    if (build_system_prompt(agent, &sys, NULL) != 0)
+    {
+        log_error("inject_system_with_summary: prompt build failed", NULL);
+        return -1;
+    }
 
     int found = 0;
     for (int i = 0; i < agent->messages_count; i++)
@@ -368,19 +460,26 @@ static void inject_system_with_summary(Agent *agent)
         Message sys_msg = {0};
         sys_msg.role = str_dup("system");
         sys_msg.content = sys;
-        Message *new_msgs = realloc(agent->messages, sizeof(Message) * (agent->messages_count + 1));
-        if (new_msgs)
+        if (!sys_msg.role)
         {
-            memmove(new_msgs + 1, new_msgs, sizeof(Message) * agent->messages_count);
-            new_msgs[0] = sys_msg;
-            agent->messages = new_msgs;
-            agent->messages_count++;
-        }
-        else
-        {
+            log_error("inject_system_with_summary: OOM duplicating role", NULL);
             free(sys);
+            return -1;
         }
+        Message *new_msgs = realloc(agent->messages, sizeof(Message) * (agent->messages_count + 1));
+        if (!new_msgs)
+        {
+            log_error("inject_system_with_summary: OOM growing message array", NULL);
+            free(sys_msg.role);
+            free(sys);
+            return -1;
+        }
+        memmove(new_msgs + 1, new_msgs, sizeof(Message) * agent->messages_count);
+        new_msgs[0] = sys_msg;
+        agent->messages = new_msgs;
+        agent->messages_count++;
     }
+    return 0;
 }
 
 static LLMResponse *agent_llm_call(Agent *agent)
@@ -606,37 +705,69 @@ static char *agent_title_from_model(LLMProvider *provider, const char *model,
 }
 
 /* Persists a generated title on the session and notifies the title
- * callback. No-op when the session cannot be reloaded. */
-static void agent_apply_title(Agent *agent, const char *title)
+ * callback. Returns 0 on success; -1 when the session cannot be reloaded
+ * or persisted (the failure is logged, the callback is not fired). */
+static int agent_apply_title(Agent *agent, const char *title)
 {
     Session *s2 = session_manager_load_session_alloc(agent->sm, agent->session_id);
-    if (s2)
+    if (!s2)
     {
-        free(s2->title);
-        s2->title = str_dup(title);
-        session_manager_save_session(agent->sm, s2);
-        session_free(s2);
-
-        if (agent->on_title_update)
-            agent->on_title_update(agent->session_id, title, agent->title_userdata);
+        log_error("agent_apply_title: session reload failed",
+                  "session_id", agent->session_id, NULL);
+        return -1;
     }
+    char *title_dup = str_dup(title);
+    if (!title_dup)
+    {
+        log_error("agent_apply_title: OOM duplicating title", NULL);
+        session_free(s2);
+        return -1;
+    }
+    free(s2->title);
+    s2->title = title_dup;
+    if (session_manager_save_session(agent->sm, s2) != 0)
+    {
+        log_error("agent_apply_title: save failed",
+                  "session_id", agent->session_id, NULL);
+        session_free(s2);
+        return -1;
+    }
+    session_free(s2);
 
+    if (agent->on_title_update)
+        agent->on_title_update(agent->session_id, title, agent->title_userdata);
+    return 0;
 }
 
-static void agent_generate_title(Agent *agent)
+static int agent_generate_title(Agent *agent)
 {
-    if (!agent || !agent->provider) return;
-    if (!agent->sm || !agent->session_id) return;
-    if (agent->messages_count == 0) return;
+    if (!agent || !agent->provider) return -1;
+    if (!agent->sm || !agent->session_id) return -1;
+    if (agent->messages_count == 0) return -1;
 
     Session *s = session_manager_load_session_alloc(agent->sm, agent->session_id);
-    if (!s || s->title_generation_attempted) { if (s) session_free(s); return; }
+    if (!s || s->title_generation_attempted)
+    {
+        if (s) session_free(s);
+        return -1;
+    }
     session_free(s);
 
     s = session_manager_load_session_alloc(agent->sm, agent->session_id);
-    if (!s) return;
+    if (!s)
+    {
+        log_error("agent_generate_title: session reload failed",
+                  "session_id", agent->session_id, NULL);
+        return -1;
+    }
     s->title_generation_attempted = 1;
-    session_manager_save_session(agent->sm, s);
+    if (session_manager_save_session(agent->sm, s) != 0)
+    {
+        log_error("agent_generate_title: save failed",
+                  "session_id", agent->session_id, NULL);
+        session_free(s);
+        return -1;
+    }
     session_free(s);
 
     /* find first user message — matching Python version's approach:
@@ -653,44 +784,79 @@ static void agent_generate_title(Agent *agent)
             break;
         }
     }
-    if (!first_user_msg) return;
+    if (!first_user_msg) return -1;
 
     /* fallback: first 30 chars of user message, with "..." if truncated */
     char *fallback = NULL;
     size_t fblen = strlen(first_user_msg);
-    if (fblen <= 30) {
+    if (fblen <= 30)
+    {
         fallback = str_dup(first_user_msg);
-    } else {
+    }
+    else
+    {
         if (asprintf(&fallback, "%.30s...", first_user_msg) < 0)
             fallback = NULL;
     }
-    if (!fallback) return;
+    if (!fallback)
+    {
+        log_error("agent_generate_title: OOM building fallback title", NULL);
+        return -1;
+    }
 
     char *final_title = agent_title_from_model(agent->provider, agent->model,
                                                first_user_msg, fallback);
+    int rc = 0;
     if (final_title)
-        agent_apply_title(agent, final_title);
+    {
+        rc = agent_apply_title(agent, final_title);
+    }
+    else
+    {
+        /* The model produced no title; the LLM failure is already logged
+         * inside agent_title_from_model. */
+        rc = -1;
+    }
 
     free(final_title);
     free(fallback);
+    return rc;
 }
 
-static void agent_perform_summarization(Agent *agent, int original_count)
+static int agent_perform_summarization(Agent *agent, int original_count)
 {
     (void)original_count;
-    if (!agent || !agent->provider) return;
+    if (!agent || !agent->provider) return -1;
 
-    int text_len = 0;
+    /* C13: accumulate in size_t with an overflow flag — the old int
+     * accumulator was UB past ~2 GB of message content and fed
+     * malloc(text_len + 1). The skip semantics are preserved: a
+     * transcript larger than 2x the context budget is not summarized. */
+    int text_over = 0;
+    size_t text_len = 0;
+    size_t summary_cap = (size_t)agent->max_context_chars * 2;
     for (int i = 0; i < agent->messages_count; i++)
     {
         if (agent->messages[i].content)
-            text_len += strlen(agent->messages[i].content);
+        {
+            size_t clen = strlen(agent->messages[i].content);
+            if (text_len > summary_cap - clen)
+            {
+                text_over = 1;
+                break;
+            }
+            text_len += clen;
+        }
     }
 
-    if (text_len > agent->max_context_chars * 2) return;
+    if (text_over || text_len > summary_cap) return -1;
 
     char *text = malloc(text_len + 1);
-    if (!text) return;
+    if (!text)
+    {
+        log_error("agent_perform_summarization: OOM allocating transcript", NULL);
+        return -1;
+    }
     text[0] = '\0';
     for (int i = 0; i < agent->messages_count; i++)
     {
@@ -701,7 +867,7 @@ static void agent_perform_summarization(Agent *agent, int original_count)
             strlcat(text, agent->messages[i].content, (size_t)text_len + 1U) >= (size_t)text_len + 1U)
         {
             free(text);
-            return;
+            return -1;
         }
     }
 
@@ -711,8 +877,10 @@ static void agent_perform_summarization(Agent *agent, int original_count)
     sum_msgs[0].content = str_dup("Summarize this conversation concisely in 2-3 sentences.");
 
     char *truncated = text;
-    if (text_len > 4000) { truncated[4000] = '\0'; }
-    sum_msgs[1].role = str_dup("user");
+    if (text_len > 4000)
+    {
+        truncated[4000] = '\0';
+    }    sum_msgs[1].role = str_dup("user");
     sum_msgs[1].content = str_dup(truncated);
 
     LLMResponse *resp = agent->provider->chat(
@@ -727,10 +895,19 @@ static void agent_perform_summarization(Agent *agent, int original_count)
 
     if (resp && resp->content)
     {
-        free(agent->context_summary);
-        agent->context_summary = str_trim(str_dup(resp->content));
+        char *trimmed = str_trim(str_dup(resp->content));
         llm_response_free(resp);
+        if (!trimmed)
+        {
+            log_error("agent_perform_summarization: OOM trimming summary", NULL);
+            return -1;
+        }
+        free(agent->context_summary);
+        agent->context_summary = trimmed;
+        return 0;
     }
+    if (resp) llm_response_free(resp);
+    return -1;
 }
 
 /* D4: process-wide run id counter. Increments non-atomically. The single
@@ -756,19 +933,22 @@ static char *gen_run_id(void)
 
 LLMResponse *agent_run_new(Agent *agent, const char *user_input)
 {
-    agent->cancel_requested = 0;
+    atomic_store(&agent->cancel_requested, 0);
 
     char *run_id = gen_run_id();
     cb_manager_run_start(agent->cb_mgr, run_id, user_input);
 
     Message *user_msg = message_create("user", user_input);
-    if (!user_msg) { free(run_id); return NULL; }
+    if (!user_msg) {
+        free(run_id);
+        return NULL;
+    }
     agent_append_message(agent, user_msg);
     agent_save_session(agent);
 
     for (int iter = 0; iter < agent->max_iterations; iter++)
     {
-        if (agent->cancel_requested)
+        if (atomic_load(&agent->cancel_requested))
         {
             log_info("agent: cancel requested before LLM call", NULL);
             cb_manager_run_error(agent->cb_mgr, run_id, "cancelled");
@@ -864,7 +1044,7 @@ static LLMResponse *agent_run_loop(Agent *agent,
 
     for (int iter = 0; iter < agent->max_iterations; iter++)
     {
-        if (agent->cancel_requested)
+        if (atomic_load(&agent->cancel_requested))
         {
             log_info("agent: cancel requested before LLM call", NULL);
             return NULL;
@@ -947,7 +1127,7 @@ LLMResponse *agent_run_streaming_new(Agent *agent, const char *user_input,
                                  void (*on_chunk)(const char *, void *),
                                  void *userdata)
 {
-    agent->cancel_requested = 0;
+    atomic_store(&agent->cancel_requested, 0);
 
     Message *user_msg = message_create("user", user_input);
     if (!user_msg) return NULL;
@@ -961,7 +1141,7 @@ LLMResponse *agent_run_streaming_context_new(Agent *agent,
                                          void (*on_chunk)(const char *, void *),
                                          void *userdata)
 {
-    agent->cancel_requested = 0;
+    atomic_store(&agent->cancel_requested, 0);
     return agent_run_loop(agent, on_chunk, userdata);
 }
 
@@ -993,7 +1173,10 @@ void agent_save_session(Agent *agent)
             log_warn("agent_save_session: existing session not found, minting new id",
                      "old_id", agent->session_id, NULL);
         s = session_create("Echo AI Session");
-        if (!s) { session_manager_unlock(agent->sm); return; }
+        if (!s) {
+            session_manager_unlock(agent->sm);
+            return;
+        }
         free(agent->session_id);
         agent->session_id = str_dup(s->id);
     }
@@ -1010,7 +1193,11 @@ void agent_save_session(Agent *agent)
                 save_count++;
 
         s->messages = calloc((size_t)save_count, sizeof(Message));
-        if (s->messages)
+        if (!s->messages)
+        {
+            log_error("agent_save_session: OOM allocating messages", NULL);
+        }
+        else
         {
             int si = 0;
             for (int i = 0; i < agent->messages_count && si < save_count; i++)
@@ -1018,7 +1205,12 @@ void agent_save_session(Agent *agent)
                 if (strcmp(agent->messages[i].role, "system") == 0)
                     continue;
                 if (message_copy(&s->messages[si], &agent->messages[i]) != 0)
+                {
+                    /* C11: mid-save failure used to persist silently
+                     * truncated history. */
+                    log_error("agent_save_session: message copy failed", NULL);
                     break;
+                }
                 si++;
             }
             s->messages_count = si;
@@ -1042,7 +1234,10 @@ void agent_set_approval_callback(Agent *agent,
 
 void agent_cancel(Agent *agent)
 {
-    agent->cancel_requested = 1;
+    /* _Atomic per agent.h's cross-thread contract: a plain volatile write
+     * from another thread would be data-race UB (benign in practice, but
+     * the header promises "safe to call from another thread"). */
+    atomic_store(&agent->cancel_requested, 1);
 }
 
 void agent_set_metrics(Agent *agent, Metrics *metrics)
@@ -1085,11 +1280,20 @@ void agent_set_callback_manager(Agent *agent, CallbackManager *mgr)
     agent->cb_mgr = mgr;
 }
 
-void agent_set_model(Agent *agent, const char *model)
+int agent_set_model(Agent *agent, const char *model)
 {
-    if (!agent || !model) return;
+    if (!agent || !model) return -1;
+    char *model_dup = str_dup(model);
+    if (!model_dup)
+    {
+        log_error("agent_set_model: OOM duplicating model name", NULL);
+        return -1;
+    }
+    /* Only swap after the copy succeeded, so an OOM leaves the previous
+     * model installed instead of silently clearing it. */
     free(agent->model);
-    agent->model = str_dup(model);
+    agent->model = model_dup;
+    return 0;
 }
 
 int agent_set_provider(Agent *agent, const char *provider, const char *base_url,

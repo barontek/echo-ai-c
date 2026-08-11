@@ -10,6 +10,7 @@
 #include "../../src/llm/provider.h"
 #include "../../src/utils/string_utils.h"
 
+/* test_ollama - unit tests for ollama. Depends on: check, the module under test. */
 /* ---- Mirror structs from ollama.c (must stay in sync) ---- */
 typedef struct {
     char *data;

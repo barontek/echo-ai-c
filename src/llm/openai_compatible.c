@@ -227,6 +227,18 @@ static int stream_parser_finish(StreamParser *p)
  * buffered parse path used by the non-streaming tests */
 static LLMResponse *openai_compatible_parse_response(const char *raw);
 
+/**
+ * openai_compatible_test_parse_response - parse a provider response body
+ * @raw: JSON text exactly as the provider would send it; must be non-NULL.
+ *
+ * Test-only hook (OPENAI_COMPATIBLE_TEST): runs the same buffered parse
+ * path as the production non-streaming call. The returned response is a
+ * fresh allocation; on malformed input it carries error state rather
+ * than NULL (see openai_compatible_parse_response).
+ *
+ * Return: caller-owned LLMResponse (free with llm_response_free()); the
+ * caller owns every field, including tool_calls.
+ */
 LLMResponse *openai_compatible_test_parse_response(const char *raw)
 {
     return openai_compatible_parse_response(raw);
@@ -253,7 +265,10 @@ LLMResponse *openai_compatible_test_parse_stream_alloc(
     if (!resp->content)
     {
         resp->content = str_dup("");
-        if (!resp->content) { llm_response_free(resp); return NULL; }
+        if (!resp->content) {
+            llm_response_free(resp);
+            return NULL;
+        }
     }
     return resp;
 }
@@ -289,7 +304,10 @@ LLMResponse *openai_compatible_test_stream_fragments_alloc(
     if (!resp->content)
     {
         resp->content = str_dup("");
-        if (!resp->content) { llm_response_free(resp); return NULL; }
+        if (!resp->content) {
+            llm_response_free(resp);
+            return NULL;
+        }
     }
     return resp;
 }
@@ -413,7 +431,11 @@ static LLMResponse *openai_compatible_parse_response(const char *raw)
         if (delta) message = delta;
     }
 
-    if (!message) { cJSON_Delete(json); free(resp); return NULL; }
+    if (!message) {
+        cJSON_Delete(json);
+        free(resp);
+        return NULL;
+    }
 
     cJSON *content = cJSON_GetObjectItem(message, "content");
     cJSON *reasoning = cJSON_GetObjectItem(message, "reasoning_content");
@@ -494,7 +516,10 @@ static int chat_request_setup(CURL *curl, const char *base_url,
 
     struct curl_slist *headers =
         curl_slist_append(NULL, "Content-Type: application/json");
-    if (!headers) { free(url); return -1; }
+    if (!headers) {
+        free(url);
+        return -1;
+    }
 
     if (api_token && api_token[0])
     {
@@ -509,7 +534,10 @@ static int chat_request_setup(CURL *curl, const char *base_url,
         }
         headers = curl_slist_append(headers, auth);
         free(auth);
-        if (!headers) { free(url); return -1; }
+        if (!headers) {
+            free(url);
+            return -1;
+        }
     }
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -693,7 +721,10 @@ static LLMResponse *openai_compatible_chat_stream_request(
     if (!resp->content)
     {
         resp->content = str_dup("");
-        if (!resp->content) { llm_response_free(resp); return NULL; }
+        if (!resp->content) {
+            llm_response_free(resp);
+            return NULL;
+        }
     }
     return resp;
 }
@@ -878,21 +909,39 @@ LLMProvider *openai_compatible_provider_create(const char *base_url,
     if (!p) return NULL;
 
     OpenAICompatCtx *ctx = calloc(1, sizeof(OpenAICompatCtx));
-    if (!ctx) { free(p); return NULL; }
+    if (!ctx) {
+        free(p);
+        return NULL;
+    }
 
     ctx->base_url = str_dup(base_url ? base_url : "https://api.openai.com");
-    if (!ctx->base_url) { free(ctx); free(p); return NULL; }
+    if (!ctx->base_url) {
+        free(ctx);
+        free(p);
+        return NULL;
+    }
 
     if (api_token && api_token[0])
     {
         ctx->api_token = str_dup(api_token);
-        if (!ctx->api_token) { free(ctx->base_url); free(ctx); free(p); return NULL; }
+        if (!ctx->api_token) {
+            free(ctx->base_url);
+            free(ctx);
+            free(p);
+            return NULL;
+        }
     }
 
     if (effort && effort[0])
     {
         ctx->effort = str_dup(effort);
-        if (!ctx->effort) { free(ctx->base_url); free(ctx->api_token); free(ctx); free(p); return NULL; }
+        if (!ctx->effort) {
+            free(ctx->base_url);
+            free(ctx->api_token);
+            free(ctx);
+            free(p);
+            return NULL;
+        }
     }
 
     p->chat = openai_compatible_chat;

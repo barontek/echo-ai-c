@@ -4,6 +4,7 @@
 #include "llm/openai_oauth.h"
 #include "utils/logging.h"
 
+/* openai_oauth_stubs - unit tests for openai oauth stubs. Depends on: check, the module under test. */
 int session_manager_save_provider_oauth(SessionManager *session,
                                         const char *provider, const char *data)
 {

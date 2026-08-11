@@ -27,6 +27,28 @@
 #include "../utils/string_utils.h"
 #include "../utils/rate_limiter.h"
 
+#ifdef SERVER_TEST
+/* Test seams for tests/server/test_server.c: uv_write is captured by the
+ * test instead of hitting a real loop, uv_is_closing is stubbed (the test
+ * client is not a real uv handle), and every free in this TU is counted so
+ * the tests can assert response buffers are actually released. The shim
+ * functions must be defined before these #defines so their own bodies call
+ * the real functions. */
+static int server_test_free_count = 0;
+static void server_test_free(void *p)
+{
+    server_test_free_count++;
+    free(p);
+}
+int server_test_uv_write(uv_write_t *req, uv_stream_t *stream,
+                         const uv_buf_t bufs[], unsigned int nbufs,
+                         uv_write_cb cb);
+int server_test_uv_is_closing(const uv_handle_t *handle);
+#define uv_write server_test_uv_write
+#define uv_is_closing server_test_uv_is_closing
+#define free server_test_free
+#endif
+
 struct Client {
     uv_tcp_t handle;
     char *buf;
@@ -155,10 +177,23 @@ static void alloc_cb(uv_handle_t *handle, size_t size, uv_buf_t *buf)
     buf->len = size;
 }
 
+/* Ownership packet for async HTTP writes: the response buffer and the
+ * uv_write request must both outlive the write, and the completion
+ * callback still needs the client (to close HTTP connections). Grouping
+ * them keeps the write path to a single allocation failure point and lets
+ * write_done release everything in one place. */
+typedef struct {
+    Client *client;
+    char *buf;
+} WriteCtx;
+
 static void write_done(uv_write_t *req, int status)
 {
     (void)status;
-    Client *client = (Client *)req->data;
+    WriteCtx *wctx = (WriteCtx *)req->data;
+    Client *client = wctx->client;
+    free(wctx->buf);
+    free(wctx);
     free(req);
     if (client && !client->is_ws)
         client_close(client);
@@ -167,7 +202,9 @@ static void write_done(uv_write_t *req, int status)
 static void sse_write_done(uv_write_t *req, int status)
 {
     (void)status;
-    free(req->data);
+    WriteCtx *wctx = (WriteCtx *)req->data;
+    free(wctx->buf);
+    free(wctx);
     free(req);
 }
 
@@ -187,14 +224,28 @@ int server_sse_write(Client *client, const char *data)
     }
     uv_buf_t buf = {.base = copy, .len = strlen(copy)};
     uv_write_t *req = malloc(sizeof(uv_write_t));
-    if (!req)
+    WriteCtx *wctx = malloc(sizeof(WriteCtx));
+    if (!req || !wctx)
     {
         log_error("server_sse_write: OOM allocating write request", NULL);
+        free(wctx);
+        free(req);
         free(copy);
         return -1;
     }
-    req->data = copy;
-    uv_write(req, (uv_stream_t *)&client->handle, &buf, 1, sse_write_done);
+    wctx->client = client;
+    wctx->buf = copy;
+    req->data = wctx;
+    if (uv_write(req, (uv_stream_t *)&client->handle, &buf, 1, sse_write_done) != 0)
+    {
+        /* The request was never queued, so no completion callback will
+         * ever run — release the whole packet here instead of leaking. */
+        log_error("server_sse_write: uv_write failed", NULL);
+        free(wctx->buf);
+        free(wctx);
+        free(req);
+        return -1;
+    }
     return 0;
 }
 
@@ -257,15 +308,32 @@ int server_response(Client *client, int status, const char *content_type, const 
     size_t resp_len = strlen(resp);
     uv_buf_t buf = {.base = resp, .len = resp_len};
     uv_write_t *req = malloc(sizeof(uv_write_t));
-    if (!req)
+    WriteCtx *wctx = malloc(sizeof(WriteCtx));
+    if (!req || !wctx)
     {
         log_error("server_response: OOM allocating write request",
                   "status", status_buf, "req_id", client->req_id, NULL);
+        free(wctx);
+        free(req);
         free(resp);
         return -1;
     }
-    req->data = client;
-    uv_write(req, (uv_stream_t *)&client->handle, &buf, 1, write_done);
+    wctx->client = client;
+    wctx->buf = resp;
+    req->data = wctx;
+    if (uv_write(req, (uv_stream_t *)&client->handle, &buf, 1, write_done) != 0)
+    {
+        /* The request was never queued, so write_done will never run —
+         * free the packet now and tear the connection down (no response
+         * can reach a broken stream). */
+        log_error("server_response: uv_write failed",
+                  "status", status_buf, "req_id", client->req_id, NULL);
+        free(wctx->buf);
+        free(wctx);
+        free(req);
+        client_close(client);
+        return -1;
+    }
     return 0;
 }
 
@@ -353,10 +421,18 @@ static void serve_static(Client *client, const char *path, ServerContext *ctx)
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     rewind(f);
-    if (fsize <= 0 || fsize > 10485760) { fclose(f); server_response_error(client, 500, "file too large"); return; }
+    if (fsize <= 0 || fsize > 10485760) {
+        fclose(f);
+        server_response_error(client, 500, "file too large");
+        return;
+    }
 
     char *content = malloc((size_t)fsize + 1);
-    if (!content) { fclose(f); server_response_error(client, 500, "oom"); return; }
+    if (!content) {
+        fclose(f);
+        server_response_error(client, 500, "oom");
+        return;
+    }
 
     size_t read = fread(content, 1, (size_t)fsize, f);
     fclose(f);
@@ -367,6 +443,9 @@ static void serve_static(Client *client, const char *path, ServerContext *ctx)
     free(content);
 }
 
+/* Loop-thread only: increments non-atomically, so it must never be
+ * read or written off the libuv loop thread (ids are only used for
+ * request tracing on the same thread). */
 static unsigned long req_counter = 0;
 
 static void gen_req_id(char *buf, size_t len)
@@ -622,6 +701,35 @@ static int client_append(Client *client, const char *data, size_t len)
 }
 
 #ifdef SERVER_TEST
+void server_test_free_reset(void) { server_test_free_count = 0; }
+int server_test_free_tally(void) { return server_test_free_count; }
+
+/* Stack-free test client: calloc'd so every field is safe to free; freed
+ * by client_close_cb when the tests trigger the close path. handle.data is
+ * wired like the real on_connection path so client_close_cb finds the
+ * client. */
+Client *server_test_client_new(void)
+{
+    Client *c = calloc(1, sizeof(Client));
+    if (!c) return NULL;
+    snprintf(c->req_id, sizeof(c->req_id), "test");
+    /* handle.data is wired like the real on_connection path so
+     * client_close_cb finds the client (data is uv_tcp_t's first member). */
+    c->handle.data = c;
+    return c;
+}
+
+/* Releases a client without going through uv_close — for tests whose code
+ * path (SSE) deliberately keeps the client open. */
+void server_test_client_free(Client *client)
+{
+    if (!client) return;
+    free(client->buf);
+    free(client->body);
+    free(client->ws_private);
+    free(client);
+}
+
 int server_test_parse_chunks(const char **chunks, const size_t *lengths, int count,
                              char *method, size_t method_size,
                              char *path, size_t path_size,
@@ -665,7 +773,10 @@ int server_test_open_static_file_beneath(const char *root, const char *path)
 static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 {
     Client *client = (Client *)stream->data;
-    if (!client) { free(buf->base); return; }
+    if (!client) {
+        free(buf->base);
+        return;
+    }
 
     if (nread < 0)
     {
@@ -678,7 +789,10 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
         return;
     }
 
-    if (nread == 0) { free(buf->base); return; }
+    if (nread == 0) {
+        free(buf->base);
+        return;
+    }
 
     if (client->is_ws)
     {
@@ -714,16 +828,32 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 
 static void on_connection(uv_stream_t *server, int status)
 {
-    if (status < 0) return;
+    if (status < 0)
+    {
+        log_error("on_connection: accept callback error", "err", uv_strerror(status), NULL);
+        return;
+    }
 
     Client *client = calloc(1, sizeof(Client));
-    if (!client) return;
+    if (!client)
+    {
+        log_error("on_connection: OOM allocating client", NULL);
+        return;
+    }
 
-    uv_tcp_init(server->loop, &client->handle);
+    /* C11: init failures were dropped with no trace; on a failure the
+     * connection cannot be served, so the client is released. */
+    if (uv_tcp_init(server->loop, &client->handle) != 0)
+    {
+        log_error("on_connection: uv_tcp_init failed", NULL);
+        free(client);
+        return;
+    }
     client->handle.data = client;
 
     if (uv_accept(server, (uv_stream_t *)&client->handle) != 0)
     {
+        log_error("on_connection: uv_accept failed", NULL);
         free(client);
         return;
     }
@@ -732,7 +862,11 @@ static void on_connection(uv_stream_t *server, int status)
     client->ctx = ctx;
 
     int namelen = sizeof(client->addr);
-    uv_tcp_getpeername(&client->handle, (struct sockaddr *)&client->addr, &namelen);
+    if (uv_tcp_getpeername(&client->handle, (struct sockaddr *)&client->addr,
+                           &namelen) != 0)
+    {
+        log_error("on_connection: getpeername failed", NULL);
+    }
     if (client->addr.ss_family == AF_INET)
     {
         struct sockaddr_in *sin = (struct sockaddr_in *)&client->addr;
@@ -778,5 +912,6 @@ int server_start(ServerContext *ctx)
 
 void server_stop(ServerContext *ctx)
 {
-    if (ctx->loop) uv_stop(ctx->loop);
+    /* Doc contract (server.h): NULL is a no-op. */
+    if (ctx && ctx->loop) uv_stop(ctx->loop);
 }

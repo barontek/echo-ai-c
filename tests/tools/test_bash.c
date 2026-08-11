@@ -9,6 +9,7 @@
 #include "tools/tool.h"
 #include "safety/safety.h"
 
+/* test_bash - shell tool unit tests. Depends on: check, the module under test. */
 Tool *tool_bash_create(SafetyConfig *safety);
 
 static int process_is_running(pid_t pid)

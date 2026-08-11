@@ -21,12 +21,9 @@
  *
  * Called before any key use (session_manager_create_ex -> init_encryption).
  * With no marker file (.changing_pwd absent) this is a no-op. With a
- * marker, the code compares the DB's committed salt and verifier files
- * against both the current and the .old salt, then finalizes the migration
- * in whichever direction it had progressed: promotes the new salt/verifier
- * and drops the old, or restores the old salt. Does NOT take sm->lock —
- * the caller must not run it concurrently with other operations on the
- * same manager (by construction it runs during manager creation).
+ * marker, the migration is finalized in whichever direction it had
+ * progressed so the on-disk salt/verifier pair always ends up consistent
+ * with the DB's committed salt.
  *
  * Return: 0 on success or no-op, -1 on I/O, SQL, or allocation failure
  * (log lines carry context; not all paths log). Thread-safe only against
@@ -40,13 +37,10 @@ int migration_check_and_recover(SessionManager *sm, const char *password);
  * @new_password: replacement password, NUL-terminated; must be non-NULL,
  *   borrowed for the call duration.
  *
- * Takes sm->lock for the whole operation. Sequence: write the marker file,
- * stash the old salt as salt.old, mint a fresh salt + derived key, write
- * verifier.new, then inside one SQLite transaction (BEGIN IMMEDIATE)
- * re-encrypt every agent_session row and provider_oauth row and record the
- * committed salt; only after COMMIT is sm->enc_key swapped, verifier.new
- * renamed over the verifier, and salt.old plus the marker removed. Any
- * failure before COMMIT restores the old files and sm->enc_key.
+ * Takes sm->lock for the whole operation. The migration is crash-safe and
+ * all-or-nothing: either every owned row is re-encrypted under the new
+ * password and the on-disk salt/verifier files match it, or the old state
+ * is fully restored (the DB is never left half-migrated).
  *
  * Return: 0 on success; -1 on failure (old state restored, enc_key stays
  * the old key); -2 when the DB commit succeeded but activating the new

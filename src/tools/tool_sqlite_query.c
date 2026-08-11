@@ -76,7 +76,11 @@ static ToolResult *sqlite_query_execute(Tool *self, const char *args_json)
     }
 
     cJSON *rows = cJSON_CreateArray();
-    if (!rows) { sqlite3_finalize(stmt); cJSON_Delete(args); return tool_result_error("oom", "execution_error"); }
+    if (!rows) {
+        sqlite3_finalize(stmt);
+        cJSON_Delete(args);
+        return tool_result_error("oom", "execution_error");
+    }
 
     int col_count = sqlite3_column_count(stmt);
 
@@ -156,7 +160,10 @@ Tool *tool_sqlite_query_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     SQLiteQueryCtx *ctx = calloc(1, sizeof(SQLiteQueryCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("sqlite_query");

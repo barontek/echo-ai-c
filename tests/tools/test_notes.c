@@ -8,6 +8,7 @@
 #include "tools/tool.h"
 #include "safety/safety.h"
 
+/* test_notes - notes tool unit tests. Depends on: check, the module under test. */
 Tool *tool_notes_create(SafetyConfig *safety);
 void notes_test_set_alloc_fail(int nth_allocation);
 
@@ -34,6 +35,15 @@ static void setup(void)
 
 static void teardown(void)
 {
+    /* E11: the fault-injection tests leak their mkdtemp trees and leave
+     * HOME pointing at a deleted directory — remove the tree and restore
+     * the environment so serial-mode runs are order-independent. */
+    char rm[512];
+    ck_assert_int_lt(snprintf(rm, sizeof(rm), "rm -rf %s", home),
+                     (int)sizeof(rm));
+    int rc = system(rm);
+    (void)rc;
+    unsetenv("HOME");
 }
 
 START_TEST(test_notes_rejects_traversal_name)

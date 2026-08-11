@@ -17,6 +17,7 @@
 #include "../src/session/session_branch.h"
 #include "../src/utils/string_utils.h"
 
+/* test_routes_ws - unit tests for routes ws. Depends on: check, the module under test. */
 /* WSChatCtx mirror — matches routes_ws.c */
 typedef struct QueuedMsg { char *data; struct QueuedMsg *next; } QueuedMsg;
 typedef struct WSChatCtx {
@@ -186,7 +187,12 @@ int ws_send_json(WSClient *ws, const char *json)
 }
 
 int ws_send(WSClient *ws, const char *data, size_t len)
-{ (void)ws; (void)data; (void)len; return 0; }
+ {
+    (void)ws;
+    (void)data;
+    (void)len;
+    return 0;
+}
 
 static WSChatCtx *g_loop_ctx = NULL;
 static int g_want_approval = 0;
@@ -254,14 +260,25 @@ Agent *agent_create(const AgentConfig *cfg)
 }
 
 void agent_set_session_manager(Agent *a, SessionManager *sm)
-{ (void)a; if (!sm) stub_agent_clear_sm_calls++; }
+ {
+    (void)a;
+    if (!sm) stub_agent_clear_sm_calls++;
+}
 void agent_set_approval_callback(Agent *a, int (*cb)(const char *, const char *, void *), void *u)
-{ (void)a; (void)cb; (void)u; }
+ {
+    (void)a;
+    (void)cb;
+    (void)u;
+}
 void agent_set_title_callback(Agent *a, title_callback cb, void *u) { (void)a; (void)cb; (void)u; }
 void agent_set_tool_start_callback(Agent *a, tool_start_callback cb, void *u) { (void)a; (void)cb; (void)u; }
 void agent_set_tool_end_callback(Agent *a, tool_end_callback cb, void *u) { (void)a; (void)cb; (void)u; }
 void agent_set_ask_user_callback(Agent *a, ask_user_callback cb, void *u)
-{ (void)a; (void)cb; (void)u; }
+ {
+    (void)a;
+    (void)cb;
+    (void)u;
+}
 void agent_set_safety(Agent *a, SafetyConfig *s) { (void)a; (void)s; }
 void agent_set_metrics(Agent *a, Metrics *m) { (void)a; (void)m; }
 
@@ -284,11 +301,12 @@ int agent_set_provider(Agent *a, const char *provider, const char *base_url,
     return stub_agent_set_provider_result;
 }
 
-void agent_set_model(Agent *a, const char *m)
+int agent_set_model(Agent *a, const char *m)
 {
     (void)a;
     free((char *)stub_agent_set_model_name);
     stub_agent_set_model_name = str_dup(m);
+    return 0;
 }
 void agent_set_callback_manager(Agent *a, CallbackManager *m) { (void)a; (void)m; }
 
@@ -297,26 +315,57 @@ void agent_set_callback_manager(Agent *a, CallbackManager *m) { (void)a; (void)m
  * — the agent layer is stubbed above. Stub them so the real factory
  * mapping links without dragging in live LLM clients. */
 LLMProvider *ollama_provider_create(const char *b, int n, int k, const char *e)
-{ (void)b; (void)n; (void)k; (void)e; return NULL; }
+ {
+    (void)b;
+    (void)n;
+    (void)k;
+    (void)e;
+    return NULL;
+}
 LLMProvider *openai_compatible_provider_create(const char *b, const char *t,
                                                const char *e)
-{ (void)b; (void)t; (void)e; return NULL; }
+ {
+    (void)b;
+    (void)t;
+    (void)e;
+    return NULL;
+}
 LLMProvider *openai_provider_create(const char *b, const char *t, const char *e,
                                     OpenAIOAuth *auth)
-{ (void)b; (void)t; (void)e; (void)auth; return NULL; }
+ {
+    (void)b;
+    (void)t;
+    (void)e;
+    (void)auth;
+    return NULL;
+}
 LLMProvider *opencode_zen_provider_create(const char *b, const char *t,
                                           const char *e)
-{ (void)b; (void)t; (void)e; return NULL; }
+ {
+    (void)b;
+    (void)t;
+    (void)e;
+    return NULL;
+}
 
 Session *session_manager_load_session_alloc(SessionManager *sm, const char *id)
-{ (void)sm; (void)id; return stub_session_load_result; }
+ {
+    (void)sm;
+    (void)id;
+    return stub_session_load_result;
+}
 
 SessionManager *session_manager_retain(SessionManager *sm) { return sm; }
 void session_manager_free(SessionManager *sm)
 { if (sm) stub_session_manager_free_calls++; }
 
 int session_manager_truncate_history(SessionManager *sm, const char *sid, int idx)
-{ (void)sm; (void)sid; (void)idx; return 0; }
+ {
+    (void)sm;
+    (void)sid;
+    (void)idx;
+    return 0;
+}
 
 /* Branch-API stubs. The real fork_branch hands the caller ownership of the
  * result's strings; mirror that so ws_run_fork's frees are balanced. */
@@ -361,7 +410,12 @@ int session_manager_fork_branch(SessionManager *sm, const char *sid,
 static int stub_switch_rc = 0;
 int session_manager_switch_branch(SessionManager *sm, const char *sid,
                                   const char *bid)
-{ (void)sm; (void)sid; (void)bid; return stub_switch_rc; }
+ {
+    (void)sm;
+    (void)sid;
+    (void)bid;
+    return stub_switch_rc;
+}
 
 char *session_manager_tag_message_new(SessionManager *sm, const char *sid,
                                   int index, const char *fork_group_id)
@@ -481,20 +535,28 @@ void session_free(Session *s)
 }
 
 void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *u)
-{ (void)cb; (void)u; }
+ {
+    (void)cb;
+    (void)u;
+}
 
 void log_error(const char *fmt, ...) { (void)fmt; }
 int log_init(void) { return 0; }
 void log_cleanup(void) {}
 void log_set_level(int l) { (void)l; }
 void log_msg(int l, const char *f, int line, const char *fmt, ...)
-{ (void)l; (void)f; (void)line; (void)fmt; }
+ {
+    (void)l;
+    (void)f;
+    (void)line;
+    (void)fmt;
+}
 
 /* ==================================================================
  * ws_chat_on_chunk tests
  * ================================================================== */
 
-START_TEST(test_on_chunk_basic)
+START_TEST(test_on_chunk_forwards_content_frame)
 {
     WSChatCtx c = {0};
     char dummy_ws = 0;
@@ -578,7 +640,7 @@ END_TEST
  * ws_send_done tests
  * ================================================================== */
 
-START_TEST(test_send_done_basic)
+START_TEST(test_send_done_emits_done_frame)
 {
     char dummy_ws = 0;
     ws_send_done((WSClient *)&dummy_ws, NULL, NULL, &fake_resp_basic);
@@ -858,7 +920,10 @@ START_TEST(test_enqueue_allocation_failure_leaves_queue_unchanged)
     ws_chat_enqueue(c, "{\"msg\":2}");
     QueuedMsg *q = c->msg_queue;
     size_t len = 0;
-    while (q) { len++; q = q->next; }
+    while (q) {
+        len++;
+        q = q->next;
+    }
     ck_assert_uint_eq(len, queue_len_before + 1);
     ck_assert_str_eq(c->msg_queue_tail->data, "{\"msg\":2}");
 
@@ -1584,7 +1649,7 @@ START_TEST(test_on_message_provider_config_model_only)
 }
 END_TEST
 
-START_TEST(test_on_message_message_simple)
+START_TEST(test_on_message_message_runs_agent)
 {
     WSChatCtx c = {0};
     Agent agent = {0};
@@ -1911,6 +1976,47 @@ START_TEST(test_on_message_regenerate_invalid_index_errors)
     free(agent.session_id);
 }
 
+START_TEST(test_on_message_edit_rejects_negative_index)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    c.sm = (SessionManager *)&c;
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    stub_agent_run_streaming_count = 0;
+    /* L3 regression: index -1 used to reach ws_run_fork with keep = -1 and
+     * clear messages[-1] (heap underflow read + free of garbage). The
+     * handler must reject the frame before any fork work happens. */
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"type\":\"edit\",\"index\":-1,\"content\":\"edited\"}", 42, &c);
+    ck_assert_int_eq(stub_agent_run_streaming_count, 0);
+    ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
+    ck_assert(strstr(captured_ws_json, "invalid index"));
+    reset_capture();
+}
+END_TEST
+
+START_TEST(test_on_message_edit_rejects_huge_index)
+{
+    WSChatCtx c = {0};
+    Agent agent = {0};
+    c.agent = &agent;
+    c.sm = (SessionManager *)&c;
+    char dummy_ws = 0;
+    c.ws = (WSClient *)&dummy_ws;
+    stub_agent_run_streaming_count = 0;
+    /* L3 second vector: (int)1e100 is UB; a non-integral or out-of-int
+     * range double must be rejected the same way as a negative index. */
+    ws_chat_on_message((WSClient *)&dummy_ws,
+        "{\"type\":\"edit\",\"index\":1e100,\"content\":\"edited\"}", 45, &c);
+    ck_assert_int_eq(stub_agent_run_streaming_count, 0);
+    ck_assert(strstr(captured_ws_json, "\"type\":\"error\""));
+    ck_assert(strstr(captured_ws_json, "invalid index"));
+    reset_capture();
+}
+END_TEST
+
 START_TEST(test_on_message_branch_switch_success)
 {
     WSChatCtx c = {0};
@@ -1999,7 +2105,7 @@ START_TEST(test_ws_init_agent_create_fails)
 }
 END_TEST
 
-START_TEST(test_ws_init_basic)
+START_TEST(test_ws_init_creates_agent_and_sends_ready)
 {
     WSClient ws = {0};
     ServerContext ctx = {0};
@@ -2084,7 +2190,7 @@ Suite *routes_ws_suite(void)
 
     TCase *tc = tcase_create("ws_chat_on_chunk");
     tcase_add_checked_fixture(tc, setup, teardown);
-    tcase_add_test(tc, test_on_chunk_basic);
+    tcase_add_test(tc, test_on_chunk_forwards_content_frame);
     tcase_add_test(tc, test_on_chunk_null_chunk);
     tcase_add_test(tc, test_on_chunk_null_ctx);
     tcase_add_test(tc, test_on_chunk_null_ws);
@@ -2094,7 +2200,7 @@ Suite *routes_ws_suite(void)
 
     tc = tcase_create("ws_send_done");
     tcase_add_checked_fixture(tc, setup, teardown);
-    tcase_add_test(tc, test_send_done_basic);
+    tcase_add_test(tc, test_send_done_emits_done_frame);
     tcase_add_test(tc, test_send_done_null_resp);
     tcase_add_test(tc, test_send_done_with_session_id);
     tcase_add_test(tc, test_send_done_with_title);
@@ -2168,6 +2274,10 @@ Suite *routes_ws_suite(void)
     suite_add_tcase(s, tc);
 
     tc = tcase_create("ws_ask_user_cb");
+    /* E11: the one TCase without a checked fixture — the timeout test
+     * depends on stub_uv_now_calls being 0, which setup() resets; without
+     * the fixture, serial-mode runs see a stale counter and hang. */
+    tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_ask_user_cb_null_ctx);
     tcase_add_test(tc, test_ask_user_cb_null_ws);
     tcase_add_test(tc, test_ask_user_cb_with_answer);
@@ -2203,7 +2313,7 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_provider_config_same_provider);
     tcase_add_test(tc, test_on_message_provider_config_failure_sends_error);
     tcase_add_test(tc, test_on_message_provider_config_model_only);
-    tcase_add_test(tc, test_on_message_message_simple);
+    tcase_add_test(tc, test_on_message_message_runs_agent);
     tcase_add_test(tc, test_on_message_rejects_expired_auth_generation);
     tcase_add_test(tc, test_on_message_message_null_resp);
     tcase_add_test(tc, test_on_message_message_enqueued_when_not_ready);
@@ -2216,6 +2326,8 @@ Suite *routes_ws_suite(void)
     tcase_add_test(tc, test_on_message_edit_forks);
     tcase_add_test(tc, test_on_message_edit_clears_tail_then_appends_fork);
     tcase_add_test(tc, test_on_message_edit_disconnect_during_run_is_safe);
+    tcase_add_test(tc, test_on_message_edit_rejects_negative_index);
+    tcase_add_test(tc, test_on_message_edit_rejects_huge_index);
     tcase_add_test(tc, test_on_message_regenerate_forks_at_previous_user_turn);
     tcase_add_test(tc, test_on_message_regenerate_invalid_index_errors);
     tcase_add_test(tc, test_on_message_branch_switch_success);
@@ -2227,7 +2339,7 @@ Suite *routes_ws_suite(void)
     tc = tcase_create("routes_ws_chat_init");
     tcase_add_checked_fixture(tc, setup, teardown);
     tcase_add_test(tc, test_ws_init_agent_create_fails);
-    tcase_add_test(tc, test_ws_init_basic);
+    tcase_add_test(tc, test_ws_init_creates_agent_and_sends_ready);
     tcase_add_test(tc, test_ws_init_with_query_no_session_param);
     tcase_add_test(tc, test_ws_init_agent_has_session_id);
     tcase_add_test(tc, test_ws_init_with_session_id_query);

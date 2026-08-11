@@ -1,3 +1,4 @@
+/* fuzz_fernet_token - libFuzzer target for fernet token parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for the Fernet session-token layout parser in
  * src/session/encryption.c (decrypt_fernet_token via
  * encryption_test_validate_token under ENCRYPTION_TEST). Fuzzes raw

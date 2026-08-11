@@ -1,3 +1,4 @@
+/* fuzz_websocket_frame - libFuzzer target for websocket frame parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for the RFC 6455 frame parser in
  * src/server/websocket.c (ws_frame_header, the same code the read loop
  * uses — exposed to tests via websocket_test_frame_walk under

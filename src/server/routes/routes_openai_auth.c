@@ -69,10 +69,16 @@ static int login_id_from_query(const HTTPRequest *req, char **login_id)
 
 void handle_openai_oauth_status(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
-    if (!ctx->openai_oauth) { server_response_error(client, 500, "OpenAI OAuth unavailable"); return; }
+    if (!ctx->openai_oauth) {
+        server_response_error(client, 500, "OpenAI OAuth unavailable");
+        return;
+    }
     char *login_id = NULL;
     if (login_id_from_query(req, &login_id) != 0)
-    { server_response_error(client, 400, "invalid OpenAI login id"); return; }
+     {
+        server_response_error(client, 400, "invalid OpenAI login id");
+        return;
+    }
     char *account = NULL;
     char *plan = NULL;
     char *error = NULL;
@@ -95,7 +101,10 @@ void handle_openai_oauth_start(HTTPRequest *req, Client *client, ServerContext *
 {
     (void)req;
     if (!ctx->openai_oauth || !ctx->sm)
-    { server_response_error(client, 503, "OpenAI OAuth requires unlocked credential storage"); return; }
+     {
+        server_response_error(client, 503, "OpenAI OAuth requires unlocked credential storage");
+        return;
+    }
     char *url = NULL;
     char *login_id = NULL;
     if (openai_oauth_start(ctx->openai_oauth, &url, &login_id) != 0)
@@ -130,7 +139,10 @@ void handle_openai_oauth_start(HTTPRequest *req, Client *client, ServerContext *
 void handle_openai_oauth_logout(HTTPRequest *req, Client *client, ServerContext *ctx)
 {
     if (!ctx->openai_oauth)
-    { server_response_error(client, 500, "OpenAI OAuth unavailable"); return; }
+     {
+        server_response_error(client, 500, "OpenAI OAuth unavailable");
+        return;
+    }
     char *login_id = NULL;
     if (req && req->body && req->body_len > 0)
     {
@@ -147,7 +159,10 @@ void handle_openai_oauth_logout(HTTPRequest *req, Client *client, ServerContext 
         if (login_id) memcpy(login_id, id->valuestring, login_id_len + 1);
         cJSON_Delete(json);
         if (!login_id)
-        { server_response_error(client, 500, "out of memory"); return; }
+         {
+            server_response_error(client, 500, "out of memory");
+            return;
+        }
     }
     int result = login_id ? openai_oauth_cancel_login(ctx->openai_oauth, login_id) :
                             openai_oauth_logout(ctx->openai_oauth);

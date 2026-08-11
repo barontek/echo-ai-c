@@ -54,6 +54,30 @@ typedef struct {
 
 static SearchIndex search_index = {0};
 
+/* Public teardown for the process-wide index: frees every document, term,
+ * frequency row, and the backing arrays, leaving the index empty and
+ * reusable. Documented in semantic_search.h; called by the tool destroy
+ * and the test reset hook. */
+void semantic_search_free_index(void)
+{
+    for (int i = 0; i < search_index.doc_count; i++)
+        free(search_index.documents[i]);
+    for (int i = 0; i < search_index.term_count; i++)
+        free(search_index.all_terms[i]);
+    for (int i = 0; i < search_index.doc_count; i++)
+        free(search_index.term_freqs[i]);
+    free(search_index.documents);
+    free(search_index.all_terms);
+    free(search_index.term_freqs);
+    free(search_index.doc_lengths);
+    search_index.documents = NULL;
+    search_index.all_terms = NULL;
+    search_index.term_freqs = NULL;
+    search_index.doc_lengths = NULL;
+    search_index.doc_count = 0;
+    search_index.term_count = 0;
+}
+
 #ifdef SEMANTIC_SEARCH_TEST
 void semantic_search_test_set_alloc_fail(int nth_allocation)
 {
@@ -73,22 +97,7 @@ void semantic_search_test_reset(void)
     sem_alloc_fail_at = -1;
     sem_realloc_counter = 0;
     sem_realloc_fail_at = -1;
-    for (int i = 0; i < search_index.doc_count; i++) {
-        free(search_index.documents[i]);
-        free(search_index.term_freqs[i]);
-    }
-    for (int i = 0; i < search_index.term_count; i++)
-        free(search_index.all_terms[i]);
-    free(search_index.documents);
-    free(search_index.all_terms);
-    free(search_index.term_freqs);
-    free(search_index.doc_lengths);
-    search_index.documents = NULL;
-    search_index.all_terms = NULL;
-    search_index.term_freqs = NULL;
-    search_index.doc_lengths = NULL;
-    search_index.doc_count = 0;
-    search_index.term_count = 0;
+    semantic_search_free_index();
 }
 #endif
 
@@ -231,6 +240,18 @@ int semantic_search_index_document(const char *content)
             search_index.term_freqs[idx][term_idx]++;
             search_index.doc_lengths[idx]++;
         }
+        else
+        {
+            /* All-or-nothing per the header contract: a failed term must
+             * not leave a half-indexed committed document (the old code
+             * silently skipped the term and committed the document with a
+             * missing term anyway). */
+            free(search_index.documents[idx]);
+            search_index.documents[idx] = NULL;
+            free(search_index.term_freqs[idx]);
+            search_index.term_freqs[idx] = NULL;
+            return -1;
+        }
     }
 
     search_index.doc_count++;
@@ -296,7 +317,11 @@ ToolResult *semantic_search_execute(Tool *self, const char *args_json)
     /* map from doc_idx -> score */
     double *scores = calloc(search_index.doc_count, sizeof(double));
     int *indices = malloc(sizeof(int) * search_index.doc_count);
-    if (!scores || !indices) { free(scores); free(indices); return tool_result_error("oom", "execution_error"); }
+    if (!scores || !indices) {
+        free(scores);
+        free(indices);
+        return tool_result_error("oom", "execution_error");
+    }
 
     for (int i = 0; i < search_index.doc_count; i++) indices[i] = i;
 
@@ -374,22 +399,7 @@ ToolResult *semantic_search_execute(Tool *self, const char *args_json)
 void semantic_search_destroy(Tool *self)
 {
     if (!self) return;
-    for (int i = 0; i < search_index.doc_count; i++)
-        free(search_index.documents[i]);
-    for (int i = 0; i < search_index.term_count; i++)
-        free(search_index.all_terms[i]);
-    for (int i = 0; i < search_index.doc_count; i++)
-        free(search_index.term_freqs[i]);
-    free(search_index.documents);
-    free(search_index.all_terms);
-    free(search_index.term_freqs);
-    free(search_index.doc_lengths);
-    search_index.documents = NULL;
-    search_index.all_terms = NULL;
-    search_index.term_freqs = NULL;
-    search_index.doc_lengths = NULL;
-    search_index.doc_count = 0;
-    search_index.term_count = 0;
+    semantic_search_free_index();
 
     free(self->name);
     free(self->description);

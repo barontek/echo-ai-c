@@ -56,9 +56,13 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
         ssize_t len = getline(&answer, &cap, stdin);
         if (len < 0)
         {
+            /* C11: EIO/closed stdin used to masquerade as "the user did
+             * not respond" — a successful result. Report it as an error
+             * instead. */
             free(answer);
             free(q);
-            return tool_result_create("(user did not respond)");
+            return tool_result_error("failed reading user input",
+                                     "execution_error");
         }
         if (len > 0 && answer[len - 1] == '\n')
             answer[len - 1] = '\0';
@@ -96,7 +100,10 @@ Tool *tool_ask_user_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     AskUserCtx *ctx = calloc(1, sizeof(AskUserCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("ask_user");

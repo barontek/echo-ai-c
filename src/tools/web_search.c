@@ -82,7 +82,10 @@ Tool *tool_web_search_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     SearchCtx *ctx = calloc(1, sizeof(SearchCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("web_search");

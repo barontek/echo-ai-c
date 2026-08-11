@@ -5,6 +5,7 @@
 #include "server/websocket.h"
 #include "utils/logging.h"
 
+/* test_websocket - unit tests for websocket. Depends on: check, the module under test. */
 int websocket_test_send_control(WSClient *ws, unsigned char opcode,
                                 const unsigned char *payload, size_t payload_len);
 int websocket_test_protocol_offered(const char *headers, const char *protocol);

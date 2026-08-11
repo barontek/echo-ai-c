@@ -114,7 +114,9 @@ int ws_start_read(WSClient *ws);
  * on the connection's loop, and starts it at a 15 s interval. Call once
  * per connection, after ws_do_handshake().
  *
- * Return: void; never fails. Call on the loop thread.
+ * Return: 0 on success, -1 when ws is NULL or the timer cannot be
+ * initialized (uv_timer_init OOM) — in that case the connection runs
+ * without a keepalive. Call on the loop thread.
  */
 int ws_start_ping_timer(WSClient *ws);
 

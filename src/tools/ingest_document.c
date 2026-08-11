@@ -70,10 +70,17 @@ static ToolResult *ingest_document_execute(Tool *self, const char *args_json)
 
         FILE *f = fopen(resolved, "rb");
         free(resolved);
-        if (!f) { cJSON_Delete(args); return tool_result_error("cannot open file", "execution_error"); }
+        if (!f) {
+            cJSON_Delete(args);
+            return tool_result_error("cannot open file", "execution_error");
+        }
 
         freed_content = malloc((size_t)st.st_size + 1);
-        if (!freed_content) { fclose(f); cJSON_Delete(args); return tool_result_error("oom", "execution_error"); }
+        if (!freed_content) {
+            fclose(f);
+            cJSON_Delete(args);
+            return tool_result_error("oom", "execution_error");
+        }
 
         size_t read = fread(freed_content, 1, (size_t)st.st_size, f);
         fclose(f);
@@ -123,7 +130,10 @@ Tool *tool_ingest_document_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     IngestCtx *ctx = calloc(1, sizeof(IngestCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("ingest_document");

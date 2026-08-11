@@ -19,7 +19,10 @@ char *json_string_escape_dup(const char *str)
     size_t j = 0;
     for (size_t i = 0; i < len; i++)
     {
-        if (j + 2 > cap) { free(esc); return NULL; }
+        if (j + 2 > cap) {
+            free(esc);
+            return NULL;
+        }
         switch (str[i])
         {
         case '"':  esc[j++] = '\\'; esc[j++] = '"';  break;

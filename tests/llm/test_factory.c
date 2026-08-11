@@ -5,6 +5,7 @@
 #include "../../src/llm/provider.h"
 #include "../../src/llm/openai_oauth.h"
 
+/* test_factory - unit tests for factory. Depends on: check, the module under test. */
 /* ================================================================
  *  get_provider tests
  * ================================================================ */

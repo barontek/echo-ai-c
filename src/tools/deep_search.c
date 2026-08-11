@@ -176,20 +176,31 @@ static ToolResult *deep_search_execute(Tool *self, const char *args_json)
 
     if (urls_to_fetch) cJSON_Delete(urls_to_fetch);
 
-    /* Step 3: build combined result */
+    /* Step 3: build combined result. Ownership of results_json transfers
+     * into output only when it is an array; any other shape is discarded
+     * here so the free at cJSON_Delete(output) is the ONLY free of it
+     * (the historical bug freed it again afterwards). */
     cJSON *output = cJSON_CreateObject();
     cJSON_AddStringToObject(output, "query", query);
     free(query);
     if (results_json)
-        cJSON_AddItemToObject(output, "search_results", results_json);
+    {
+        if (cJSON_IsArray(results_json))
+            cJSON_AddItemToObject(output, "search_results", results_json);
+        else
+        {
+            cJSON_Delete(results_json);
+            cJSON_AddStringToObject(output, "search_results", "none");
+        }
+    }
     else
+    {
         cJSON_AddStringToObject(output, "search_results", "none");
+    }
     cJSON_AddItemToObject(output, "fetched_pages", fetched_arr);
 
     char *result = cJSON_PrintUnformatted(output);
     cJSON_Delete(output);
-    if (results_json && !cJSON_IsArray(results_json)) /* already added */
-        cJSON_Delete(results_json);
 
     if (!result) return tool_result_create("(no output)");
     ToolResult *tr = tool_result_create(result);

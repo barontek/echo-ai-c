@@ -112,7 +112,10 @@ StrArray str_split(const char *str, char delimiter)
             {
                 capacity *= 2;
                 char **new_items = realloc(result.items, sizeof(char *) * capacity);
-                if (!new_items) { str_array_free(&result); return result; }
+                if (!new_items) {
+                    str_array_free(&result);
+                    return result;
+                }
                 result.items = new_items;
             }
 
@@ -133,7 +136,10 @@ StrArray str_split(const char *str, char delimiter)
     {
         capacity *= 2;
         char **new_items = realloc(result.items, sizeof(char *) * capacity);
-        if (!new_items) { str_array_free(&result); return result; }
+        if (!new_items) {
+            str_array_free(&result);
+            return result;
+        }
         result.items = new_items;
     }
 

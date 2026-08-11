@@ -3,6 +3,7 @@
 #include <string.h>
 #include "utils/circuit_breaker.h"
 
+/* test_circuit_breaker - unit tests for circuit breaker. Depends on: check, the module under test. */
 START_TEST(test_cb_starts_closed)
 {
     CircuitBreaker *cb = cb_create(5, 30000);

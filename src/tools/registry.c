@@ -26,6 +26,18 @@ void registry_test_set_alloc_fail(int nth_allocation)
     reg_alloc_fail_at = nth_allocation;
 }
 
+/* B1: free tally so tests can assert registry_destroy released the
+ * delegate-config strings (defined before the #define so its own body
+ * calls the real free). */
+static int reg_free_count = 0;
+static void reg_test_free(void *p)
+{
+    reg_free_count++;
+    free(p);
+}
+void registry_test_free_reset(void) { reg_free_count = 0; }
+int registry_test_free_tally(void) { return reg_free_count; }
+
 static char *reg_test_strdup(const char *s)
 {
     reg_alloc_counter++;
@@ -34,6 +46,7 @@ static char *reg_test_strdup(const char *s)
 }
 
 #define str_dup reg_test_strdup
+#define free reg_test_free
 #endif
 
 #define MAX_TOOLS 32
@@ -323,9 +336,10 @@ int registry_has_ask_user_callback(void)
 void registry_destroy(void)
 {
     /* Only registry-owned state is released: tools (via destroy), the
-     * search provider (destroyed), and the OAuth pointer (cleared). The
-     * borrowed session-manager reference and ask-user callback are left
-     * in place. */
+     * search provider (destroyed), the OAuth pointer (cleared), and the
+     * delegate config strings (owned since registry_set_delegate_config
+     * str_dups them). The borrowed session-manager reference and ask-user
+     * callback are left in place. */
     openai_oauth_global = NULL;
     for (int i = 0; i < tool_count; i++)
     {
@@ -337,4 +351,9 @@ void registry_destroy(void)
         search_provider_global->destroy(search_provider_global);
         search_provider_global = NULL;
     }
+    free(delegate_config.provider_name);
+    free(delegate_config.base_url);
+    free(delegate_config.api_token);
+    free(delegate_config.model);
+    memset(&delegate_config, 0, sizeof(delegate_config));
 }

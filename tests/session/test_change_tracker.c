@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "change_tracker/change_tracker.h"
 
+/* test_change_tracker - unit tests for change tracker. Depends on: check, the module under test. */
 START_TEST(test_ct_create_initializes_empty_undo_redo_stacks)
 {
     ChangeTracker *ct = ct_create();

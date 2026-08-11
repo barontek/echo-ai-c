@@ -9,6 +9,7 @@
 #include "llm/openai_oauth.h"
 #include "utils/logging.h"
 
+/* test_openai - unit tests for openai. Depends on: check, the module under test. */
 struct OpenAIOAuth {
     int refresh_result;
 };
@@ -682,8 +683,14 @@ START_TEST(test_unauthorized_refresh_uses_rejected_token_and_new_credentials)
     ck_assert_str_eq(account, "account-new");
     free(token);
     free(account);
+}
+END_TEST
 
-    auth.refresh_result = -1;
+START_TEST(test_unauthorized_refresh_failure_returns_error)
+{
+    OpenAIOAuth auth = {.refresh_result = -1};
+    char *token = NULL;
+    char *account = NULL;
     ck_assert_int_eq(openai_test_refresh_after_401(
         &auth, "rejected-token", &token, &account), -1);
     ck_assert_ptr_null(token);
@@ -827,6 +834,7 @@ int main(void)
     tcase_set_timeout(transport, 5);
     tcase_add_test(transport, test_request_metadata_uses_codex_endpoint_headers_and_timeout);
     tcase_add_test(transport, test_unauthorized_refresh_uses_rejected_token_and_new_credentials);
+    tcase_add_test(transport, test_unauthorized_refresh_failure_returns_error);
     tcase_add_test(transport, test_provider_ignores_static_configuration_and_requires_oauth_for_requests);
     tcase_add_test(transport, test_provider_accepts_valid_effort_values);
     tcase_add_test(transport, test_provider_rejects_invalid_effort);

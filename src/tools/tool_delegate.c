@@ -309,7 +309,19 @@ static ToolResult *delegate_execute(Tool *self, const char *args_json)
                 }
                 if (!t_role || !t_content || !t_call_id || !t_name || (result->error && !t_err_cat))
                 {
-                    free(t_role); free(t_content); free(t_call_id); free(t_name); free(t_err_cat); free(tool_msg); tool_result_free(result); continue;
+                    /* C11: an OOM-dropped tool message used to vanish with
+                     * no trace; the delegate run then continued without
+                     * it. Log the drop. */
+                    log_error("tool_delegate: OOM building tool message",
+                              "tool", tname, NULL);
+                    free(t_role);
+                    free(t_content);
+                    free(t_call_id);
+                    free(t_name);
+                    free(t_err_cat);
+                    free(tool_msg);
+                    tool_result_free(result);
+                    continue;
                 }
                 tool_msg->role = t_role;
                 tool_msg->content = t_content;
@@ -380,7 +392,10 @@ Tool *tool_delegate_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     DelegateToolCtx *ctx = calloc(1, sizeof(DelegateToolCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("delegate");

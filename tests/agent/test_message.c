@@ -5,6 +5,7 @@
 #include "utils/string_utils.h"
 #include "session/session.h"
 
+/* test_message - unit tests for message. Depends on: check, the module under test. */
 START_TEST(test_message_create_initializes_role_content_and_timestamp)
 {
     Message *msg = message_create("user", "hello world");

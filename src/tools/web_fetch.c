@@ -89,7 +89,10 @@ static int looks_like_challenge(const char *data, size_t len)
     int hit = 0;
     for (int i = 0; markers[i]; i++)
     {
-        if (strstr(lower, markers[i])) { hit = 1; break; }
+        if (strstr(lower, markers[i])) {
+            hit = 1;
+            break;
+        }
     }
     free(lower);
     return hit;
@@ -193,7 +196,10 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
             close(out_pipe[0]);
             return NULL;
         }
-        if (pr == 0) { elapsed_ms += 100; continue; }
+        if (pr == 0) {
+            elapsed_ms += 100;
+            continue;
+        }
         ssize_t n = read(out_pipe[0], chunk, sizeof(chunk));
         if (n > 0)
         {
@@ -479,7 +485,10 @@ Tool *tool_web_fetch_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     WebCtx *ctx = calloc(1, sizeof(WebCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("web_fetch");

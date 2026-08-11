@@ -44,15 +44,37 @@ static char *html_extract(const char *html, const char *start_tag, const char *e
 
             /* decode common HTML entities */
             char *decoded = str_dup(buf);
+            if (!decoded)
+            {
+                /* M1: OOM must abort cleanly, not NULL-deref in the
+                 * decode loop below. */
+                cJSON_Delete(arr);
+                return NULL;
+            }
             char *src = decoded;
             char *dst = decoded;
             while (*src)
             {
-                if (strncmp(src, "&amp;", 5) == 0) { *dst++ = '&'; src += 5; }
-                else if (strncmp(src, "&lt;", 4) == 0) { *dst++ = '<'; src += 4; }
-                else if (strncmp(src, "&gt;", 4) == 0) { *dst++ = '>'; src += 4; }
-                else if (strncmp(src, "&quot;", 6) == 0) { *dst++ = '"'; src += 6; }
-                else if (strncmp(src, "&#39;", 5) == 0) { *dst++ = '\''; src += 5; }
+                if (strncmp(src, "&amp;", 5) == 0) {
+                    *dst++ = '&';
+                    src += 5;
+                }
+                else if (strncmp(src, "&lt;", 4) == 0) {
+                    *dst++ = '<';
+                    src += 4;
+                }
+                else if (strncmp(src, "&gt;", 4) == 0) {
+                    *dst++ = '>';
+                    src += 4;
+                }
+                else if (strncmp(src, "&quot;", 6) == 0) {
+                    *dst++ = '"';
+                    src += 6;
+                }
+                else if (strncmp(src, "&#39;", 5) == 0) {
+                    *dst++ = '\'';
+                    src += 5;
+                }
                 else { *dst++ = *src++; }
             }
             *dst = '\0';
@@ -90,10 +112,17 @@ static char *search_duckduckgo_search(SearchProvider *self, const char *query, i
 
     char *url = NULL;
     char *encoded = curl_easy_escape(curl, query, 0);
-    if (!encoded) { curl_easy_cleanup(curl); return str_dup("Error: oom"); }
+    if (!encoded) {
+        curl_easy_cleanup(curl);
+        return str_dup("Error: oom");
+    }
 
     if (asprintf(&url, "https://html.duckduckgo.com/html/?q=%s", encoded) < 0)
-    { curl_free(encoded); curl_easy_cleanup(curl); return str_dup("Error: oom"); }
+     {
+        curl_free(encoded);
+        curl_easy_cleanup(curl);
+        return str_dup("Error: oom");
+    }
     curl_free(encoded);
 
     struct curl_slist *headers = NULL;

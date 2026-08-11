@@ -46,6 +46,13 @@ static int mig_test_rename(const char *old_path, const char *new_path)
     return rename(old_path, new_path);
 }
 #define rename mig_test_rename
+
+/* asprintf interception shared with session_manager.c / session_branch.c
+ * (same counter, one knob): the migration paths allocate file paths and
+ * re-encrypted rows via asprintf, so their OOM handling needs the same
+ * fault injection as the str_dup counter provides elsewhere. */
+int sm_test_asprintf(char **strp, const char *fmt, ...);
+#define asprintf sm_test_asprintf
 #endif
 
 static int restore_old_files(SessionManager *sm, const char *salt,

@@ -62,7 +62,7 @@ if(HAS_LIBFUZZER)
     target_compile_definitions(fuzz_ollama_tool_calls PRIVATE OLLAMA_TEST=1)
     target_include_directories(fuzz_ollama_tool_calls PRIVATE ../src)
     target_compile_options(fuzz_ollama_tool_calls PRIVATE
-        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_ollama_tool_calls PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::CJSON PkgConfig::LIBCURL)
 
@@ -74,7 +74,7 @@ if(HAS_LIBFUZZER)
     )
     target_include_directories(fuzz_config PRIVATE ../src)
     target_compile_options(fuzz_config PRIVATE
-        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_config PRIVATE
         -fsanitize=fuzzer,address,undefined)
 
@@ -88,7 +88,7 @@ if(HAS_LIBFUZZER)
     )
     target_include_directories(fuzz_session_deserialize PRIVATE ../src)
     target_compile_options(fuzz_session_deserialize PRIVATE
-        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_session_deserialize PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::CJSON)
 
@@ -100,7 +100,7 @@ if(HAS_LIBFUZZER)
     )
     target_include_directories(fuzz_html_extract PRIVATE ../src)
     target_compile_options(fuzz_html_extract PRIVATE
-        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_html_extract PRIVATE
         -fsanitize=fuzzer,address,undefined m)
 
@@ -142,7 +142,7 @@ if(HAS_LIBFUZZER)
     target_compile_definitions(fuzz_duckduckgo_html_extract PRIVATE SEARCH_DUCKDUCKGO_TEST=1)
     target_include_directories(fuzz_duckduckgo_html_extract PRIVATE ../src)
     target_compile_options(fuzz_duckduckgo_html_extract PRIVATE
-        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_duckduckgo_html_extract PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::LIBCURL PkgConfig::CJSON)
 
@@ -156,7 +156,7 @@ if(HAS_LIBFUZZER)
     target_compile_definitions(fuzz_fernet_token PRIVATE ENCRYPTION_TEST=1)
     target_include_directories(fuzz_fernet_token PRIVATE ../src)
     target_compile_options(fuzz_fernet_token PRIVATE
-        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_fernet_token PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::OPENSSL)
 
@@ -219,7 +219,7 @@ if(HAS_LIBFUZZER)
     target_compile_definitions(fuzz_ollama_parse_response PRIVATE OLLAMA_TEST=1)
     target_include_directories(fuzz_ollama_parse_response PRIVATE ../src)
     target_compile_options(fuzz_ollama_parse_response PRIVATE
-        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -Wno-unused-parameter)
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
     target_link_libraries(fuzz_ollama_parse_response PRIVATE
         -fsanitize=fuzzer,address,undefined PkgConfig::CJSON PkgConfig::LIBCURL)
 

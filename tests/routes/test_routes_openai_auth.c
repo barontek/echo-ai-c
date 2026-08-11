@@ -7,6 +7,7 @@
 #include "server/routes/routes_openai_auth.h"
 #include "llm/openai_oauth.h"
 
+/* test_routes_openai_auth - unit tests for routes openai auth. Depends on: check, the module under test. */
 static int captured_status = 0;
 static char *captured_body = NULL;
 static OpenAIOAuthState stub_state = OPENAI_OAUTH_SIGNED_OUT;

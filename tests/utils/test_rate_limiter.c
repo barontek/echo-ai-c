@@ -3,7 +3,8 @@
 #include <string.h>
 #include "utils/rate_limiter.h"
 
-START_TEST(test_rl_create_destroy)
+/* test_rate_limiter - unit tests for rate limiter. Depends on: check, the module under test. */
+START_TEST(test_rl_create_destroy_roundtrip)
 {
     RateLimiter *rl = rate_limiter_create(10, 60, NULL);
     ck_assert_ptr_nonnull(rl);
@@ -137,7 +138,7 @@ Suite *rate_limiter_suite(void)
     Suite *s = suite_create("RateLimiter");
     TCase *tc = tcase_create("Lifecycle");
     tcase_set_timeout(tc, 10);
-    tcase_add_test(tc, test_rl_create_destroy);
+    tcase_add_test(tc, test_rl_create_destroy_roundtrip);
     tcase_add_test(tc, test_rl_destroy_null);
     suite_add_tcase(s, tc);
 

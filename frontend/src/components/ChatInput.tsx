@@ -13,8 +13,8 @@ interface ChatInputProps {
  *   your message...').
  *
  * Disabled while disconnected from the backend (isConnected from
- * useChat()); submits via sendMessage. Renders nothing else and owns no
- * effects.
+ * useChat()); submits via sendMessage. Renders nothing else; the single
+ * effect auto-resizes the textarea on input changes.
  */
 export const ChatInput = memo(function ChatInput({
   placeholder = 'Type your message...',

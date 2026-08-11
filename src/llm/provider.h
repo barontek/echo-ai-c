@@ -16,7 +16,14 @@ typedef struct LLMProvider LLMProvider;
 /* Provider vtable. Every callback is invoked with a live provider and
  * returns a caller-owned LLMResponse (free with llm_response_free());
  * destroy() frees both the provider and its ctx. ctx is provider-owned
- * opaque state and must not be touched by the caller. */
+ * opaque state and must not be touched by the caller.
+ *
+ * Concurrency: no method is concurrent-safe — a provider instance may be
+ * used from one thread at a time (the agent loop serializes all calls).
+ * chat()/chat_streaming()/extract_structured() must not run concurrently
+ * on the same provider; each implementation documents any internal
+ * _Atomic state it uses to tolerate overlapping calls across DIFFERENT
+ * instances. */
 struct LLMProvider {
     LLMResponse *(*chat)(LLMProvider *self, Message *messages, int count,
                          const char *model, double temperature, int timeout,

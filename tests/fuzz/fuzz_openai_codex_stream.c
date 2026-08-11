@@ -5,6 +5,7 @@
 
 #include "llm/openai.h"
 
+/* fuzz_openai_codex_stream - libFuzzer target for openai codex stream parsing. Depends on: check, the module under test. */
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     if (size > 1024U * 1024U || memchr(data, '\0', size)) return 0;

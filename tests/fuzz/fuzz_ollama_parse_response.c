@@ -1,3 +1,4 @@
+/* fuzz_ollama_parse_response - libFuzzer target for ollama parse response parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for ollama_parse_response — the non-stream response
  * parser for the Ollama /api/chat endpoint. Compiles the REAL
  * src/llm/ollama.c under OLLAMA_TEST and drives the existing

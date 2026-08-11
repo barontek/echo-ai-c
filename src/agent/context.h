@@ -35,13 +35,13 @@ char *split_thinking_content_dup(const char *raw);
  *   to a token budget at 4 chars/token.
  *
  * Returns msgs unchanged (and *count unchanged) when the list already fits
- * both budgets; otherwise deep-copies and trims via smart_select_alloc() and
- * trim_messages_by_tokens_new(). When a new array is returned the caller must
- * free it with message_free_all() and free the original msgs itself.
+ * both budgets; otherwise returns a trimmed deep copy with *count set to
+ * the kept count. When a new array is returned the caller must free it
+ * with message_free_all() and free the original msgs itself.
  *
  * Return: original msgs when already within budget or on any allocation
- * failure (never NULL); otherwise a new caller-owned array with *count set
- * to the kept count. Thread-safe; no shared state.
+ * failure (never NULL); otherwise a new caller-owned array. Thread-safe;
+ * no shared state.
  */
 Message *apply_context_window(Message *msgs, int *count,
                               int max_messages, int max_chars);

@@ -256,7 +256,10 @@ static int make_pkce(char **verifier, char **challenge)
     *challenge = NULL;
     if (random_string(verifier) != 0) return -1;
     *challenge = pkce_challenge(*verifier);
-    if (!*challenge) { secure_free(verifier); return -1; }
+    if (!*challenge) {
+        secure_free(verifier);
+        return -1;
+    }
     return 0;
 }
 
@@ -302,16 +305,25 @@ static char *url_decode_exact(const unsigned char *value, size_t len)
         unsigned char byte = value[index];
         if (byte == '%')
         {
-            if (index + 2 >= len) { free(decoded); return NULL; }
+            if (index + 2 >= len) {
+                free(decoded);
+                return NULL;
+            }
             int high = hex_value(value[index + 1]);
             int low = hex_value(value[index + 2]);
-            if (high < 0 || low < 0) { free(decoded); return NULL; }
+            if (high < 0 || low < 0) {
+                free(decoded);
+                return NULL;
+            }
             byte = (unsigned char)((high << 4) | low);
             index += 2;
         }
         else if (byte == '+') byte = ' ';
         if (byte == 0 || byte < 0x20 || byte == 0x7f)
-        { free(decoded); return NULL; }
+         {
+            free(decoded);
+            return NULL;
+        }
         decoded[output++] = (char)byte;
     }
     decoded[output] = '\0';
@@ -352,7 +364,10 @@ static int name_equal(const unsigned char *name, size_t len, const char *wanted)
 
 static int host_value_valid(const unsigned char *value, size_t len)
 {
-    while (len > 0 && (*value == ' ' || *value == '\t')) { value++; len--; }
+    while (len > 0 && (*value == ' ' || *value == '\t')) {
+        value++;
+        len--;
+    }
     while (len > 0 && (value[len - 1] == ' ' || value[len - 1] == '\t')) len--;
     const char *localhost = "localhost:1455";
     const char *loopback = "127.0.0.1:1455";
@@ -432,12 +447,24 @@ static int parse_callback_query(const unsigned char *query, size_t len,
         size_t name_len = (size_t)(equals - (query + offset));
         char *name = url_decode_exact(query + offset, name_len);
         char *value = url_decode_exact(equals + 1, part_len - name_len - 1);
-        if (!name || !value) { free(name); secure_free(&value); goto cleanup; }
+        if (!name || !value) {
+            free(name);
+            secure_free(&value);
+            goto cleanup;
+        }
         names[count] = name;
         if (callback_set_field(callback, names, count, name, value) != 0)
-        { free(name); names[count] = NULL; secure_free(&value); goto cleanup; }
+         {
+            free(name);
+            names[count] = NULL;
+            secure_free(&value);
+            goto cleanup;
+        }
         count++;
-        if (!amp) { offset = len; break; }
+        if (!amp) {
+            offset = len;
+            break;
+        }
         offset += part_len + 1;
         if (offset == len) goto cleanup;
     }
@@ -515,7 +542,10 @@ static unsigned char *base64url_decode(const char *input, size_t *output_len)
         int c = remaining > 2 ? base64url_value((unsigned char)input[index + 2]) : 0;
         int d = remaining > 3 ? base64url_value((unsigned char)input[index + 3]) : 0;
         if (a < 0 || b < 0 || (remaining > 2 && c < 0) || (remaining > 3 && d < 0))
-        { free(output); return NULL; }
+         {
+            free(output);
+            return NULL;
+        }
         unsigned int value = ((unsigned int)a << 18) | ((unsigned int)b << 12) |
                              ((unsigned int)c << 6) | (unsigned int)d;
         output[output_index++] = (unsigned char)(value >> 16);
@@ -572,7 +602,10 @@ static cJSON *jwt_payload_json(const char *jwt)
     free(decoded);
     if (!json || !cJSON_IsObject(json) || !parsed_exactly ||
         !json_keys_are_unique(json))
-    { cJSON_Delete(json); return NULL; }
+     {
+        cJSON_Delete(json);
+        return NULL;
+    }
     return json;
 }
 
@@ -584,13 +617,24 @@ static int jwt_metadata(const char *jwt, char **account, char **plan)
     cJSON *payload = jwt_payload_json(jwt);
     if (!payload) return -1;
     if (json_string_field(payload, "chatgpt_account_id", 0, account) != 0)
-    { cJSON_Delete(payload); return -1; }
+     {
+        cJSON_Delete(payload);
+        return -1;
+    }
     cJSON *claims = cJSON_GetObjectItemCaseSensitive(payload,
                                                      "https://api.openai.com/auth");
     if (claims && !cJSON_IsObject(claims))
-    { secure_free(account); cJSON_Delete(payload); return -1; }
+     {
+        secure_free(account);
+        cJSON_Delete(payload);
+        return -1;
+    }
     if (claims && !json_keys_are_unique(claims))
-    { secure_free(account); cJSON_Delete(payload); return -1; }
+     {
+        secure_free(account);
+        cJSON_Delete(payload);
+        return -1;
+    }
     if (claims)
     {
         char *nested_account = NULL;
@@ -603,7 +647,10 @@ static int jwt_metadata(const char *jwt, char **account, char **plan)
             cJSON_Delete(payload);
             return -1;
         }
-        if (!*account) { *account = nested_account; nested_account = NULL; }
+        if (!*account) {
+            *account = nested_account;
+            nested_account = NULL;
+        }
         secure_free(&nested_account);
     }
     cJSON_Delete(payload);
@@ -616,7 +663,10 @@ static int exact_json_object(const char *data, cJSON **output)
     const char *end = NULL;
     cJSON *json = cJSON_ParseWithOpts(data, &end, 1);
     if (!json || !cJSON_IsObject(json) || !end || *end != '\0')
-    { cJSON_Delete(json); return -1; }
+     {
+        cJSON_Delete(json);
+        return -1;
+    }
     *output = json;
     return 0;
 }
@@ -639,7 +689,10 @@ static int token_set_parse(const char *data, const char *existing_refresh,
 {
     cJSON *json = NULL;
     if (!output || exact_json_object(data, &json) != 0) return -1;
-    if (!json_keys_are_unique(json)) { cJSON_Delete(json); return -1; }
+    if (!json_keys_are_unique(json)) {
+        cJSON_Delete(json);
+        return -1;
+    }
     OAuthCredentials staged = {0};
     int valid_fields = json_string_field(json, "access_token", 1,
                                          &staged.access_token) == 0 &&
@@ -668,7 +721,10 @@ static int token_set_parse(const char *data, const char *existing_refresh,
         staged.expires_at <= now || !metadata_ok ||
         (existing_account && !staged.account_id) ||
         (existing_plan && !staged.plan_type))
-    { credentials_clear(&staged); return -1; }
+     {
+        credentials_clear(&staged);
+        return -1;
+    }
     *output = staged;
     return 0;
 }
@@ -695,7 +751,10 @@ static int stored_credentials_parse(const char *data, OAuthCredentials *output)
 {
     cJSON *json = NULL;
     if (!output || exact_json_object(data, &json) != 0) return -1;
-    if (!json_keys_are_unique(json)) { cJSON_Delete(json); return -1; }
+    if (!json_keys_are_unique(json)) {
+        cJSON_Delete(json);
+        return -1;
+    }
     OAuthCredentials staged = {0};
     int valid_fields = json_string_field(json, "access_token", 1,
                                          &staged.access_token) == 0 &&
@@ -711,7 +770,10 @@ static int stored_credentials_parse(const char *data, OAuthCredentials *output)
                 value >= 0.0 && value <= (double)INT64_MAX && floor(value) == value;
     if (valid) staged.expires_at = (time_t)value;
     cJSON_Delete(json);
-    if (!valid) { credentials_clear(&staged); return -1; }
+    if (!valid) {
+        credentials_clear(&staged);
+        return -1;
+    }
     *output = staged;
     return 0;
 }
@@ -910,7 +972,10 @@ static OpenAIOAuthTokenResult device_post(OpenAIOAuth *auth, uint64_t generation
     }
     curl_slist_free_all(headers);
     if (curl) curl_easy_cleanup(curl);
-    if (buffer.data) { OPENSSL_cleanse(buffer.data, buffer.len); free(buffer.data); }
+    if (buffer.data) {
+        OPENSSL_cleanse(buffer.data, buffer.len);
+        free(buffer.data);
+    }
     free(url);
     return result;
 }
@@ -1014,7 +1079,10 @@ static int read_callback_request(OpenAIOAuth *auth, uint64_t generation, int fd,
     while (used <= OAUTH_REQUEST_MAX && callback_still_active(auth, generation))
     {
         const unsigned char *end = bytes_find(request, used, "\r\n\r\n", 4);
-        if (end) { *request_len = used; return 0; }
+        if (end) {
+            *request_len = used;
+            return 0;
+        }
         if (used == OAUTH_REQUEST_MAX) return -1;
         time_t now = time(NULL);
         if (now == (time_t)-1 || now >= deadline) return -1;
@@ -1107,7 +1175,10 @@ static int process_callback(OpenAIOAuth *auth, uint64_t generation,
                 set_error_locked(auth, "OpenAI token exchange failed");
             (void)pthread_mutex_unlock(&auth->lock);
         }
-        if (json) { OPENSSL_cleanse(json, strlen(json)); free(json); }
+        if (json) {
+            OPENSSL_cleanse(json, strlen(json));
+            free(json);
+        }
     }
     else if (valid_state && !callback.denial && !verifier &&
              pthread_mutex_lock(&auth->lock) == 0)
@@ -1171,7 +1242,10 @@ static int wait_for_callback_client(OpenAIOAuth *auth, uint64_t generation, int 
     {
         time_t now = time(NULL);
         if (now == (time_t)-1 || now >= deadline)
-        { *timed_out = 1; return -1; }
+         {
+            *timed_out = 1;
+            return -1;
+        }
         time_t remaining = deadline - now;
         int timeout_ms = remaining > INT_MAX / 1000 ? INT_MAX : (int)remaining * 1000;
         /* Bound each poll slice so cancellation is noticed promptly even on
@@ -1203,7 +1277,10 @@ static void *callback_thread_main(void *userdata)
     free(args);
     int listener = socket(AF_INET, SOCK_STREAM, 0);
     int timed_out = 0;
-    if (listener < 0) { callback_publish_failure(auth, generation); goto finished; }
+    if (listener < 0) {
+        callback_publish_failure(auth, generation);
+        goto finished;
+    }
     int reuse = 1;
     struct sockaddr_in address = {0};
     address.sin_family = AF_INET;
@@ -1213,7 +1290,10 @@ static void *callback_thread_main(void *userdata)
         bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
         listen(listener, 1) != 0 ||
         callback_publish_listener(auth, generation, listener) != 0)
-    { callback_publish_failure(auth, generation); goto close_listener; }
+     {
+        callback_publish_failure(auth, generation);
+        goto close_listener;
+    }
     time_t now = time(NULL);
     if (now == (time_t)-1) goto close_listener;
     time_t deadline = now + OAUTH_LOGIN_TIMEOUT_SECONDS;
@@ -1305,7 +1385,10 @@ OpenAIOAuth *openai_oauth_create(void)
     OpenAIOAuth *auth = calloc(1, sizeof(*auth));
     if (!auth) return NULL;
     if (pthread_mutex_init(&auth->lock, NULL) != 0)
-    { free(auth); return NULL; }
+     {
+        free(auth);
+        return NULL;
+    }
     if (pthread_cond_init(&auth->condition, NULL) != 0)
     {
         (void)pthread_mutex_destroy(&auth->lock);
@@ -1352,13 +1435,19 @@ int openai_oauth_attach_session(OpenAIOAuth *auth, SessionManager *session)
     if (pthread_mutex_lock(&auth->lock) != 0)
         return -1;
     if (auth->destroying || auth->lifecycle_busy)
-    { (void)pthread_mutex_unlock(&auth->lock); return -1; }
+     {
+        (void)pthread_mutex_unlock(&auth->lock);
+        return -1;
+    }
     auth->lifecycle_busy = 1;
     cancel_callback_locked(auth);
     joinable = take_callback_thread_locked(auth, &thread);
     (void)pthread_mutex_unlock(&auth->lock);
     if (join_callback_thread(thread, joinable) != 0)
-    { lifecycle_finish(auth); return -1; }
+     {
+        lifecycle_finish(auth);
+        return -1;
+    }
     if (pthread_mutex_lock(&auth->lock) != 0)
         return -1;
     while (auth->refresh_in_progress || auth->active_operations)
@@ -1379,9 +1468,15 @@ int openai_oauth_attach_session(OpenAIOAuth *auth, SessionManager *session)
     int parse_result = load_result == PROVIDER_OAUTH_LOAD_NOT_FOUND ? 0 :
         (load_result == PROVIDER_OAUTH_LOAD_OK && data ?
              stored_credentials_parse(data, &staged) : -1);
-    if (data) { OPENSSL_cleanse(data, strlen(data)); free(data); }
+    if (data) {
+        OPENSSL_cleanse(data, strlen(data));
+        free(data);
+    }
     if (pthread_mutex_lock(&auth->lock) != 0)
-    { credentials_clear(&staged); return -1; }
+     {
+        credentials_clear(&staged);
+        return -1;
+    }
     if (auth->destroying)
     { auth->lifecycle_busy = 0; (void)pthread_cond_broadcast(&auth->condition);
       (void)pthread_mutex_unlock(&auth->lock); credentials_clear(&staged); return -1; }
@@ -1403,7 +1498,10 @@ static int reap_previous_callback(OpenAIOAuth *auth)
     int joinable = 0;
     if (pthread_mutex_lock(&auth->lock) != 0) return -1;
     if (auth->callback_active || auth->destroying || auth->lifecycle_busy)
-    { (void)pthread_mutex_unlock(&auth->lock); return -1; }
+     {
+        (void)pthread_mutex_unlock(&auth->lock);
+        return -1;
+    }
     joinable = take_callback_thread_locked(auth, &thread);
     (void)pthread_mutex_unlock(&auth->lock);
     return join_callback_thread(thread, joinable);
@@ -1424,9 +1522,19 @@ int openai_oauth_start(OpenAIOAuth *auth, char **authorization_url, char **login
     char *url = build_authorize_url_values(state, challenge);
     char *id_copy = string_dup(id);
     OAuthThreadArgs *args = malloc(sizeof(*args));
-    if (!url || !id_copy || !args) { free(url); free(id_copy); free(args); goto cleanup; }
+    if (!url || !id_copy || !args) {
+        free(url);
+        free(id_copy);
+        free(args);
+        goto cleanup;
+    }
     if (pthread_mutex_lock(&auth->lock) != 0)
-    { free(url); free(id_copy); free(args); goto cleanup; }
+     {
+        free(url);
+        free(id_copy);
+        free(args);
+        goto cleanup;
+    }
     if (!auth->session || auth->callback_active || auth->destroying)
     {
         (void)pthread_mutex_unlock(&auth->lock);
@@ -1462,7 +1570,10 @@ int openai_oauth_start(OpenAIOAuth *auth, char **authorization_url, char **login
     while (!auth->callback_ready)
     {
         if (pthread_cond_wait(&auth->condition, &auth->lock) != 0)
-        { auth->callback_rc = -1; break; }
+         {
+            auth->callback_rc = -1;
+            break;
+        }
     }
     int ready = auth->callback_rc == 0;
     pthread_t thread = auth->callback_thread;
@@ -1525,9 +1636,18 @@ int openai_oauth_device_start(OpenAIOAuth *auth, char **verification_url,
     if (reap_previous_callback(auth) != 0) return -1;
     char *id = NULL;
     char *body = device_json_body(NULL, NULL);
-    if (random_string(&id) != 0 || !body) { secure_free(&id); free(body); return -1; }
+    if (random_string(&id) != 0 || !body) {
+        secure_free(&id);
+        free(body);
+        return -1;
+    }
     if (pthread_mutex_lock(&auth->lock) != 0)
-    { secure_free(&id); OPENSSL_cleanse(body, strlen(body)); free(body); return -1; }
+     {
+        secure_free(&id);
+        OPENSSL_cleanse(body, strlen(body));
+        free(body);
+        return -1;
+    }
     if (!auth->session || auth->callback_active || auth->destroying)
     {
         (void)pthread_mutex_unlock(&auth->lock);
@@ -1560,7 +1680,10 @@ int openai_oauth_device_start(OpenAIOAuth *auth, char **verification_url,
                 response && now != (time_t)-1 &&
                 parse_device_start(response, &device_auth_id, &code,
                                    &interval, &expires_in) == 0;
-    if (response) { OPENSSL_cleanse(response, strlen(response)); free(response); }
+    if (response) {
+        OPENSSL_cleanse(response, strlen(response));
+        free(response);
+    }
     char *url_copy = valid ? string_dup(OPENAI_DEVICE_VERIFICATION_URL) : NULL;
     char *code_copy = valid ? string_dup(code) : NULL;
     char *id_copy = NULL;
@@ -1611,7 +1734,11 @@ static OpenAIOAuthDeviceResult device_error_result(const char *response,
         json_string_field(json, "error", 0, &error) == 0 && error)
     {
         if (strcmp(error, "authorization_pending") == 0)
-        { secure_free(&error); cJSON_Delete(json); return OPENAI_OAUTH_DEVICE_PENDING; }
+         {
+            secure_free(&error);
+            cJSON_Delete(json);
+            return OPENAI_OAUTH_DEVICE_PENDING;
+        }
         if (strcmp(error, "slow_down") == 0)
         {
             *slow_down = 1;
@@ -1637,7 +1764,11 @@ static int parse_device_authorization(const char *response, char **code,
                 json_string_field(json, "authorization_code", 1, code) == 0 &&
                 json_string_field(json, "code_verifier", 1, verifier) == 0;
     cJSON_Delete(json);
-    if (!valid) { secure_free(code); secure_free(verifier); return -1; }
+    if (!valid) {
+        secure_free(code);
+        secure_free(verifier);
+        return -1;
+    }
     return 0;
 }
 
@@ -1676,7 +1807,10 @@ OpenAIOAuthDeviceResult openai_oauth_device_poll(OpenAIOAuth *auth,
     if (!auth->callback_active || !auth->device_auth_id || !auth->device_user_code ||
         !auth->login_id || !state_matches(auth->login_id, login_id) ||
         now == (time_t)-1)
-    { (void)pthread_mutex_unlock(&auth->lock); return OPENAI_OAUTH_DEVICE_TERMINAL; }
+     {
+        (void)pthread_mutex_unlock(&auth->lock);
+        return OPENAI_OAUTH_DEVICE_TERMINAL;
+    }
     if (now >= auth->device_expires_at)
     {
         uint64_t generation = auth->generation;
@@ -1685,9 +1819,15 @@ OpenAIOAuthDeviceResult openai_oauth_device_poll(OpenAIOAuth *auth,
         return OPENAI_OAUTH_DEVICE_TERMINAL;
     }
     if (auth->device_poll_in_progress)
-    { (void)pthread_mutex_unlock(&auth->lock); return OPENAI_OAUTH_DEVICE_PENDING; }
+     {
+        (void)pthread_mutex_unlock(&auth->lock);
+        return OPENAI_OAUTH_DEVICE_PENDING;
+    }
     if (now < auth->device_next_poll)
-    { (void)pthread_mutex_unlock(&auth->lock); return OPENAI_OAUTH_DEVICE_PENDING; }
+     {
+        (void)pthread_mutex_unlock(&auth->lock);
+        return OPENAI_OAUTH_DEVICE_PENDING;
+    }
     char *device_auth_id = string_dup(auth->device_auth_id);
     char *user_code = string_dup(auth->device_user_code);
     uint64_t generation = auth->generation;
@@ -1703,7 +1843,10 @@ OpenAIOAuthDeviceResult openai_oauth_device_poll(OpenAIOAuth *auth,
     secure_free(&device_auth_id);
     secure_free(&user_code);
     if (!body)
-    { device_poll_released(auth, generation); return OPENAI_OAUTH_DEVICE_TRANSIENT; }
+     {
+        device_poll_released(auth, generation);
+        return OPENAI_OAUTH_DEVICE_TRANSIENT;
+    }
     long status = 0;
     char *response = NULL;
     OpenAIOAuthTokenResult request = device_post(auth, generation,
@@ -1711,13 +1854,25 @@ OpenAIOAuthDeviceResult openai_oauth_device_poll(OpenAIOAuth *auth,
     OPENSSL_cleanse(body, strlen(body));
     free(body);
     if (request == OPENAI_OAUTH_TOKEN_CANCELLED)
-    { if (response) { OPENSSL_cleanse(response, strlen(response)); free(response); }
-      device_poll_released(auth, generation);
-      return OPENAI_OAUTH_DEVICE_CANCELLED; }
+    {
+        if (response)
+        {
+            OPENSSL_cleanse(response, strlen(response));
+            free(response);
+        }
+        device_poll_released(auth, generation);
+        return OPENAI_OAUTH_DEVICE_CANCELLED;
+    }
     if (request != OPENAI_OAUTH_TOKEN_OK)
-    { if (response) { OPENSSL_cleanse(response, strlen(response)); free(response); }
-      device_poll_released(auth, generation);
-      return OPENAI_OAUTH_DEVICE_TRANSIENT; }
+    {
+        if (response)
+        {
+            OPENSSL_cleanse(response, strlen(response));
+            free(response);
+        }
+        device_poll_released(auth, generation);
+        return OPENAI_OAUTH_DEVICE_TRANSIENT;
+    }
     int slow_down = 0;
     OpenAIOAuthDeviceResult result = status >= 200 && status < 300 ?
         OPENAI_OAUTH_DEVICE_COMPLETE : device_error_result(response, status, &slow_down);
@@ -1734,7 +1889,10 @@ OpenAIOAuthDeviceResult openai_oauth_device_poll(OpenAIOAuth *auth,
             }
             (void)pthread_mutex_unlock(&auth->lock);
         }
-        if (response) { OPENSSL_cleanse(response, strlen(response)); free(response); }
+        if (response) {
+            OPENSSL_cleanse(response, strlen(response));
+            free(response);
+        }
         device_poll_released(auth, generation);
         return result;
     }
@@ -1743,7 +1901,10 @@ OpenAIOAuthDeviceResult openai_oauth_device_poll(OpenAIOAuth *auth,
     if (result == OPENAI_OAUTH_DEVICE_COMPLETE &&
         parse_device_authorization(response, &authorization_code, &verifier) != 0)
         result = OPENAI_OAUTH_DEVICE_TRANSIENT;
-    if (response) { OPENSSL_cleanse(response, strlen(response)); free(response); }
+    if (response) {
+        OPENSSL_cleanse(response, strlen(response));
+        free(response);
+    }
     if (result == OPENAI_OAUTH_DEVICE_COMPLETE)
     {
         char *tokens = NULL;
@@ -1755,7 +1916,10 @@ OpenAIOAuthDeviceResult openai_oauth_device_poll(OpenAIOAuth *auth,
             result = OPENAI_OAUTH_DEVICE_COMPLETE;
         else result = exchange == OPENAI_OAUTH_TOKEN_CANCELLED ?
             OPENAI_OAUTH_DEVICE_CANCELLED : OPENAI_OAUTH_DEVICE_TRANSIENT;
-        if (tokens) { OPENSSL_cleanse(tokens, strlen(tokens)); free(tokens); }
+        if (tokens) {
+            OPENSSL_cleanse(tokens, strlen(tokens));
+            free(tokens);
+        }
     }
     secure_free(&authorization_code);
     secure_free(&verifier);
@@ -1846,7 +2010,10 @@ int openai_oauth_cancel_login(OpenAIOAuth *auth, const char *login_id)
     joinable = take_callback_thread_locked(auth, &thread);
     (void)pthread_mutex_unlock(&auth->lock);
     if (join_callback_thread(thread, joinable) != 0)
-    { lifecycle_finish(auth); return -1; }
+     {
+        lifecycle_finish(auth);
+        return -1;
+    }
     if (pthread_mutex_lock(&auth->lock) != 0) return -1;
     while (auth->active_operations || auth->refresh_in_progress)
         if (pthread_cond_wait(&auth->condition, &auth->lock) != 0)
@@ -1875,7 +2042,10 @@ static int copy_access_locked(OpenAIOAuth *auth, char **access_token,
     if (auth->account_id)
     {
         *account_id = string_dup(auth->account_id);
-        if (!*account_id) { secure_free(access_token); return -1; }
+        if (!*account_id) {
+            secure_free(access_token);
+            return -1;
+        }
     }
     return 0;
 }
@@ -1914,13 +2084,21 @@ static OpenAIOAuthTokenResult refresh_credentials(OpenAIOAuth *auth, int force,
     char *old_account = auth->account_id ? string_dup(auth->account_id) : NULL;
     char *old_plan = auth->plan_type ? string_dup(auth->plan_type) : NULL;
     if (!refresh || (auth->account_id && !old_account) || (auth->plan_type && !old_plan))
-    { secure_free(&refresh); secure_free(&old_account); secure_free(&old_plan);
-      return OPENAI_OAUTH_TOKEN_TRANSIENT; }
+    {
+        secure_free(&refresh);
+        secure_free(&old_account);
+        secure_free(&old_plan);
+        return OPENAI_OAUTH_TOKEN_TRANSIENT;
+    }
     uint64_t generation = auth->generation;
     auth->refresh_in_progress = 1;
     if (pthread_mutex_unlock(&auth->lock) != 0)
-    { secure_free(&refresh); secure_free(&old_account); secure_free(&old_plan);
-      return OPENAI_OAUTH_TOKEN_TRANSIENT; }
+    {
+        secure_free(&refresh);
+        secure_free(&old_account);
+        secure_free(&old_plan);
+        return OPENAI_OAUTH_TOKEN_TRANSIENT;
+    }
     char *json = NULL;
     OpenAIOAuthTokenResult result = exchange_token(auth, generation, "refresh_token",
                                                     refresh, NULL, NULL, &json);
@@ -1930,12 +2108,18 @@ static OpenAIOAuthTokenResult refresh_credentials(OpenAIOAuth *auth, int force,
         (now == (time_t)-1 || token_set_parse(json, refresh, old_account, old_plan,
                                               now, &staged) != 0))
         result = OPENAI_OAUTH_TOKEN_TRANSIENT;
-    if (json) { OPENSSL_cleanse(json, strlen(json)); free(json); }
+    if (json) {
+        OPENSSL_cleanse(json, strlen(json));
+        free(json);
+    }
     secure_free(&refresh);
     secure_free(&old_account);
     secure_free(&old_plan);
     if (pthread_mutex_lock(&auth->lock) != 0)
-    { credentials_clear(&staged); return OPENAI_OAUTH_TOKEN_TRANSIENT; }
+     {
+        credentials_clear(&staged);
+        return OPENAI_OAUTH_TOKEN_TRANSIENT;
+    }
     if (auth->generation != generation || auth->stop_requested || auth->destroying)
         result = OPENAI_OAUTH_TOKEN_CANCELLED;
     else if (result == OPENAI_OAUTH_TOKEN_OK)
@@ -1986,11 +2170,18 @@ static OpenAIOAuthTokenResult get_access_token_internal(OpenAIOAuth *auth, int f
     if (pthread_mutex_lock(&auth->lock) != 0) return OPENAI_OAUTH_TOKEN_TRANSIENT;
     if (!auth->session || !auth->access_token || !auth->refresh_token ||
         auth->destroying || auth->stop_requested)
-    { (void)pthread_mutex_unlock(&auth->lock); return OPENAI_OAUTH_TOKEN_SIGNED_OUT; }
+     {
+        (void)pthread_mutex_unlock(&auth->lock);
+        return OPENAI_OAUTH_TOKEN_SIGNED_OUT;
+    }
     OpenAIOAuthTokenResult result = refresh_credentials(auth, force,
                                                         access_token, account_id);
     if (pthread_mutex_unlock(&auth->lock) != 0)
-    { secure_free(access_token); secure_free(account_id); return OPENAI_OAUTH_TOKEN_TRANSIENT; }
+     {
+        secure_free(access_token);
+        secure_free(account_id);
+        return OPENAI_OAUTH_TOKEN_TRANSIENT;
+    }
     return result;
 }
 
@@ -2052,13 +2243,19 @@ int openai_oauth_logout(OpenAIOAuth *auth)
     int joinable = 0;
     if (pthread_mutex_lock(&auth->lock) != 0) return -1;
     if (auth->destroying || auth->lifecycle_busy)
-    { (void)pthread_mutex_unlock(&auth->lock); return -1; }
+     {
+        (void)pthread_mutex_unlock(&auth->lock);
+        return -1;
+    }
     auth->lifecycle_busy = 1;
     cancel_callback_locked(auth);
     joinable = take_callback_thread_locked(auth, &thread);
     (void)pthread_mutex_unlock(&auth->lock);
     if (join_callback_thread(thread, joinable) != 0)
-    { lifecycle_finish(auth); return -1; }
+     {
+        lifecycle_finish(auth);
+        return -1;
+    }
     if (pthread_mutex_lock(&auth->lock) != 0) return -1;
     while (auth->refresh_in_progress || auth->active_operations)
         if (pthread_cond_wait(&auth->condition, &auth->lock) != 0)

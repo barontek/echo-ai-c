@@ -25,13 +25,20 @@ Session *session_create(const char *title)
     if (!s) return NULL;
 
     time_t now = time(NULL);
-    if (asprintf(&s->id, "%ld", (long)now) < 0) { free(s); return NULL; }
+    if (asprintf(&s->id, "%ld", (long)now) < 0) {
+        free(s);
+        return NULL;
+    }
     {
         /* The timestamp prefix alone collides for sessions created in the
          * same second; a random suffix makes ids practically unique. */
         int unique = rand() % 1000000;
         char *tmp = NULL;
-        if (asprintf(&tmp, "%s-%d", s->id, unique) < 0) { free(s->id); free(s); return NULL; }
+        if (asprintf(&tmp, "%s-%d", s->id, unique) < 0) {
+            free(s->id);
+            free(s);
+            return NULL;
+        }
         free(s->id);
         s->id = tmp;
     }
@@ -41,7 +48,11 @@ Session *session_create(const char *title)
      * as SQL NULL — a session silently created with no title. Now we abort
      * the create and free all partial state. */
     s->title = str_dup(title ? title : "New Session");
-    if (!s->title) { free(s->id); free(s); return NULL; }
+    if (!s->title) {
+        free(s->id);
+        free(s);
+        return NULL;
+    }
 
     s->title_generation_attempted = 0;
 
@@ -62,7 +73,12 @@ Session *session_create(const char *title)
         s->created_at = str_dup("unknown");
     }
     /* F1: created_at str_dup failure also aborts. */
-    if (!s->created_at) { free(s->title); free(s->id); free(s); return NULL; }
+    if (!s->created_at) {
+        free(s->title);
+        free(s->id);
+        free(s);
+        return NULL;
+    }
 
     s->messages = NULL;
     s->messages_count = 0;
@@ -140,7 +156,10 @@ int session_deserialize_messages(Session *session, const char *json_str)
 {
     if (!json_str) return -1;
     cJSON *arr = cJSON_Parse(json_str);
-    if (!arr || !cJSON_IsArray(arr)) { if (arr) cJSON_Delete(arr); return -1; }
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr) cJSON_Delete(arr);
+        return -1;
+    }
 
     int count = cJSON_GetArraySize(arr);
     if (session->messages)
@@ -150,7 +169,10 @@ int session_deserialize_messages(Session *session, const char *json_str)
         session->messages_count = 0;
     }
     session->messages = calloc((size_t)count, sizeof(Message));
-    if (!session->messages && count > 0) { cJSON_Delete(arr); return -1; }
+    if (!session->messages && count > 0) {
+        cJSON_Delete(arr);
+        return -1;
+    }
     session->messages_count = count;
 
     int i;
@@ -295,7 +317,7 @@ partial_fail_msg:
  * both). No fix beyond this comment; flagging it so a future consumer that
  * tries to depend on the distinction doesn't get surprised.
  *
- * Returns: NULL iff session->metadata is NULL; otherwise caller owns a
+ * Return: NULL iff session->metadata is NULL; otherwise caller owns a
  * malloc'd NUL-terminated JSON string (either "{}" or a real object). */
 char *session_serialize_metadata_new(const Session *session)
 {
@@ -304,7 +326,10 @@ char *session_serialize_metadata_new(const Session *session)
     if (json)
     {
         int len = strlen(json);
-        if (len <= 2) { free(json); return str_dup("{}"); }
+        if (len <= 2) {
+            free(json);
+            return str_dup("{}");
+        }
     }
     return json;
 }
@@ -320,7 +345,10 @@ int session_deserialize_metadata(Session *session, const char *json_str)
     if (!json_str) return -1;
     if (session->metadata) cJSON_Delete(session->metadata);
     session->metadata = cJSON_Parse(json_str);
-    if (!session->metadata) { session->metadata = cJSON_CreateObject(); return -1; }
+    if (!session->metadata) {
+        session->metadata = cJSON_CreateObject();
+        return -1;
+    }
     return 0;
 }
 
@@ -340,7 +368,10 @@ char *session_serialize_events_new(const Session *session)
     if (json)
     {
         int len = strlen(json);
-        if (len <= 2) { free(json); return str_dup("[]"); }
+        if (len <= 2) {
+            free(json);
+            return str_dup("[]");
+        }
     }
     return json;
 }

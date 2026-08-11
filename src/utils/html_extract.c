@@ -209,7 +209,10 @@ static int outbuf_reserve(OutBuf *b, size_t extra)
     size_t new_cap = b->cap ? b->cap * 2 : 64;
     while (new_cap < need)
     {
-        if (new_cap > SIZE_MAX / 2) { new_cap = need; break; }
+        if (new_cap > SIZE_MAX / 2) {
+            new_cap = need;
+            break;
+        }
         new_cap *= 2;
     }
     char *new = realloc(b->data, new_cap);
@@ -439,15 +442,50 @@ static int utf8_valid(const char *s, size_t n)
         unsigned char c = (unsigned char)s[i];
         size_t need;
         unsigned char first_lo, first_hi;
-        if (c < 0x80) { i++; continue; }
-        if (c >= 0xC2 && c <= 0xDF) { need = 1; first_lo = 0x80; first_hi = 0xBF; }
-        else if (c == 0xE0)         { need = 2; first_lo = 0xA0; first_hi = 0xBF; }
-        else if (c >= 0xE1 && c <= 0xEC) { need = 2; first_lo = 0x80; first_hi = 0xBF; }
-        else if (c == 0xED)         { need = 2; first_lo = 0x80; first_hi = 0x9F; }
-        else if (c >= 0xEE && c <= 0xEF) { need = 2; first_lo = 0x80; first_hi = 0xBF; }
-        else if (c == 0xF0)         { need = 3; first_lo = 0x90; first_hi = 0xBF; }
-        else if (c >= 0xF1 && c <= 0xF3) { need = 3; first_lo = 0x80; first_hi = 0xBF; }
-        else if (c == 0xF4)         { need = 3; first_lo = 0x80; first_hi = 0x8F; }
+        if (c < 0x80) {
+            i++;
+            continue;
+        }
+        if (c >= 0xC2 && c <= 0xDF) {
+            need = 1;
+            first_lo = 0x80;
+            first_hi = 0xBF;
+        }
+        else if (c == 0xE0) {
+            need = 2;
+            first_lo = 0xA0;
+            first_hi = 0xBF;
+        }
+        else if (c >= 0xE1 && c <= 0xEC) {
+            need = 2;
+            first_lo = 0x80;
+            first_hi = 0xBF;
+        }
+        else if (c == 0xED) {
+            need = 2;
+            first_lo = 0x80;
+            first_hi = 0x9F;
+        }
+        else if (c >= 0xEE && c <= 0xEF) {
+            need = 2;
+            first_lo = 0x80;
+            first_hi = 0xBF;
+        }
+        else if (c == 0xF0) {
+            need = 3;
+            first_lo = 0x90;
+            first_hi = 0xBF;
+        }
+        else if (c >= 0xF1 && c <= 0xF3) {
+            need = 3;
+            first_lo = 0x80;
+            first_hi = 0xBF;
+        }
+        else if (c == 0xF4) {
+            need = 3;
+            first_lo = 0x80;
+            first_hi = 0x8F;
+        }
         else return 0; /* 0x80-0xC1, 0xF5-0xFF: never a lead byte */
         if (i + need >= n) return 0; /* sequence truncated */
         for (size_t k = 1; k <= need; k++)
@@ -680,7 +718,8 @@ static int append_title_text(OutBuf *b, const char *s, size_t n)
         }
         if (i >= n) break;
         char ebuf[4];
-        size_t elen = 0, consumed = 0;
+        size_t elen = 0;
+        size_t consumed = 0;
         if (decode_entity(s + i, n - i, ebuf, &elen, &consumed))
         {
             for (size_t k = 0; k < elen; k++)
@@ -792,7 +831,8 @@ static int emit_text(Extract *x, const char *s, size_t n)
         if (s[i] == '&')
         {
             char ebuf[4];
-            size_t elen = 0, consumed = 0;
+            size_t elen = 0;
+            size_t consumed = 0;
             if (decode_entity(s + i, n - i, ebuf, &elen, &consumed))
             {
                 if (emit_text_run(&x->w, ebuf, elen, is_pre) != 0) return -1;
@@ -803,7 +843,10 @@ static int emit_text(Extract *x, const char *s, size_t n)
                     int all_ws = 1;
                     for (size_t k = 0; k < elen; k++)
                     {
-                        if (!isspace((unsigned char)ebuf[k])) { all_ws = 0; break; }
+                        if (!isspace((unsigned char)ebuf[k])) {
+                            all_ws = 0;
+                            break;
+                        }
                     }
                     if (!all_ws) x->link_has_text = 1;
                 }
@@ -1255,8 +1298,14 @@ static size_t assemble_copy_parts(char *dst, const char *title, size_t tlen,
         memcpy(dst + w, body, body_len);
         w += body_len;
     }
-    if (mlen > 0) { memcpy(dst + w, marker, mlen); w += mlen; }
-    if (flen > 0) { memcpy(dst + w, footer, flen); w += flen; }
+    if (mlen > 0) {
+        memcpy(dst + w, marker, mlen);
+        w += mlen;
+    }
+    if (flen > 0) {
+        memcpy(dst + w, footer, flen);
+        w += flen;
+    }
     return w;
 }
 
@@ -1310,14 +1359,20 @@ static char *assemble(Extract *x)
     size_t body_len = x->w.out.len;
 
     OutBuf footer = {0};
-    if (build_footer(x, &footer) != 0) { free(footer.data); return NULL; }
+    if (build_footer(x, &footer) != 0) {
+        free(footer.data);
+        return NULL;
+    }
     size_t flen = footer.len;
 
     size_t total = body_len + tlen + flen + (tlen > 0 ? 2 : 0);
     if (total <= max_chars)
     {
         char *res = malloc(total + 1);
-        if (!res) { free(footer.data); return NULL; }
+        if (!res) {
+            free(footer.data);
+            return NULL;
+        }
         size_t w = assemble_copy_parts(res, title, x->title.len,
                                        x->w.out.data, body_len,
                                        footer.data, flen, NULL, 0);
@@ -1375,7 +1430,10 @@ static char *assemble(Extract *x)
 
     size_t fin = tlen + (tlen > 0 ? 2 : 0) + cut + mlen + flen;
     char *res = malloc(fin + 1);
-    if (!res) { free(footer.data); return NULL; }
+    if (!res) {
+        free(footer.data);
+        return NULL;
+    }
     size_t w = assemble_copy_parts(res, title, x->title.len,
                                    x->w.out.data, cut,
                                    footer.data, flen, marker, mlen);

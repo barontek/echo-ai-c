@@ -52,7 +52,10 @@ Message *message_create(const char *role, const char *content)
     if (!msg) return NULL;
     msg->role = str_dup(role);
     msg->content = str_dup(content ? content : "");
-    if (!msg->role) { message_free(msg); return NULL; }
+    if (!msg->role) {
+        message_free(msg);
+        return NULL;
+    }
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     msg->timestamp = (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
@@ -251,7 +254,10 @@ cJSON *messages_to_json_array(Message *msgs, int count)
     for (int i = 0; i < count; i++)
     {
         cJSON *item = cJSON_CreateObject();
-        if (!item) { cJSON_Delete(arr); return NULL; }
+        if (!item) {
+            cJSON_Delete(arr);
+            return NULL;
+        }
 
         cJSON_AddStringToObject(item, "role", msgs[i].role ? msgs[i].role : "");
         cJSON_AddStringToObject(item, "content", msgs[i].content ? msgs[i].content : "");
@@ -262,14 +268,22 @@ cJSON *messages_to_json_array(Message *msgs, int count)
         if (msgs[i].phase)
         {
             if (!cJSON_AddStringToObject(item, "phase", msgs[i].phase))
-            { cJSON_Delete(item); cJSON_Delete(arr); return NULL; }
+             {
+                cJSON_Delete(item);
+                cJSON_Delete(arr);
+                return NULL;
+            }
         }
 
         if (msgs[i].provider_state)
         {
             if (!cJSON_AddStringToObject(item, "provider_state",
                                          msgs[i].provider_state))
-            { cJSON_Delete(item); cJSON_Delete(arr); return NULL; }
+             {
+                cJSON_Delete(item);
+                cJSON_Delete(arr);
+                return NULL;
+            }
         }
 
         if (msgs[i].tool_name)

@@ -7,6 +7,7 @@
 #include "llm/openai_oauth.h"
 #include "utils/logging.h"
 
+/* test_openai_oauth - unit tests for openai oauth. Depends on: check, the module under test. */
 static const char *stored_oauth_payload = NULL;
 static int delete_oauth_result = 0;
 

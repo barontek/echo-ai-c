@@ -27,13 +27,25 @@
  * first use. A document whose indexing fails partway is not counted, so
  * the index stays consistent. The index lives for the whole process and
  * is shared with the semantic_search tool's execute callback; there is
- * no way to remove a single document.
- *
- * Return: nothing. Not thread-safe: must not run concurrently with
- * semantic_search_execute(), semantic_search_destroy(), or
- * semantic_search_test_reset(), which share the same static index.
+ * no way to remove a single document — release the whole index with
+ * semantic_search_free_index() when the process is done with it.
  */
 int semantic_search_index_document(const char *content);
+
+/**
+ * semantic_search_free_index - tear down the process-wide index
+ *
+ * Frees every document, term, frequency row, and the backing arrays,
+ * leaving the index empty and reusable for a fresh indexing pass. The
+ * tool created by tool_semantic_search_create() calls this from its
+ * destroy() callback, so applications that register the tool never need
+ * to call it directly.
+ *
+ * Return: nothing. Not thread-safe: must not run concurrently with
+ * semantic_search_index_document(), semantic_search_execute(), or
+ * semantic_search_test_reset(), which share the same static index.
+ */
+void semantic_search_free_index(void);
 
 /**
  * tool_semantic_search_create - construct the semantic_search tool

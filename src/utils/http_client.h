@@ -52,7 +52,8 @@ void http_buffer_free(HttpBuffer *b);
 /**
  * http_buffer_write_cb - curl CURLOPT_WRITEFUNCTION for HttpBuffer
  * @ptr: chunk delivered by libcurl.
- * @size: element size; @nmemb: element count.
+ * @size: element size.
+ * @nmemb: element count.
  * @userdata: must point to an HttpBuffer.
  *
  * Appends the delivered chunk via http_buffer_append(). Returns the

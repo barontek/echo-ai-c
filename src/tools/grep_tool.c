@@ -36,9 +36,34 @@ static void search_file(const char *path, const char *pattern,
 
         if (strstr(line, pattern) != NULL)
         {
-            *pos += snprintf(buffer + *pos, cap - *pos, "%s:%d:%s\n",
+            /* L4: snprintf returns the would-be length, so accumulating it
+             * unchecked could push *pos past cap; the next file's call
+             * would then compute cap - *pos as a size_t underflow and
+             * write past the buffer. Clamp *pos to cap and stop at the
+             * first truncated line instead, marking the cut so callers
+             * can tell the output is incomplete. */
+            if (*pos >= cap) break;
+            size_t avail = cap - *pos;
+            int n = snprintf(buffer + *pos, avail, "%s:%d:%s\n",
                              path, line_num, line);
-            if (*pos >= cap - 1) break;
+            if (n < 0) break;
+            if ((size_t)n >= avail)
+            {
+                /* C11: mark the cut so callers can tell the output is
+                 * incomplete; memcpy avoids the format-truncation
+                 * warning GCC cannot resolve for a runtime cap. */
+                static const char marker[] = "... (truncated)";
+                size_t marker_len = sizeof(marker) - 1;
+                if (cap >= marker_len + 1)
+                {
+                    size_t mpos = cap - marker_len - 1;
+                    memcpy(buffer + mpos, marker, marker_len);
+                    buffer[cap - 1] = '\0';
+                }
+                *pos = cap;
+                break;
+            }
+            *pos += (size_t)n;
         }
     }
 
@@ -82,7 +107,10 @@ static void search_dir(const char *dir_path, const char *pattern,
                 int skip = 0;
                 for (int i = 0; binary_exts[i]; i++)
                 {
-                    if (strcmp(ext, binary_exts[i]) == 0) { skip = 1; break; }
+                    if (strcmp(ext, binary_exts[i]) == 0) {
+                        skip = 1;
+                        break;
+                    }
                 }
                 if (skip) continue;
             }
@@ -166,7 +194,10 @@ Tool *tool_grep_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     GrepCtx *ctx = calloc(1, sizeof(GrepCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("grep");

@@ -77,7 +77,10 @@ static char *search_tavily_search(SearchProvider *self, const char *query, int n
     char *body = NULL;
     if (asprintf(&body, "{\"api_key\":\"%s\",\"query\":\"%s\",\"max_results\":%d}",
                  ctx->api_key, query, num_results) < 0)
-    { curl_easy_cleanup(curl); return str_dup("Error: oom"); }
+     {
+        curl_easy_cleanup(curl);
+        return str_dup("Error: oom");
+    }
 
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/json");
@@ -110,7 +113,10 @@ static char *search_tavily_search(SearchProvider *self, const char *query, int n
     if (!buf.data) return str_dup("(no results)");
 
     cJSON *json = cJSON_Parse(buf.data);
-    if (!json) { free(buf.data); return str_dup("Error: failed to parse Tavily response"); }
+    if (!json) {
+        free(buf.data);
+        return str_dup("Error: failed to parse Tavily response");
+    }
 
     char *result = tavily_results_to_json(json);
 
@@ -147,7 +153,10 @@ SearchProvider *search_provider_tavily_create(const char *api_key)
     if (!p) return NULL;
 
     TavilyCtx *ctx = calloc(1, sizeof(TavilyCtx));
-    if (!ctx) { free(p); return NULL; }
+    if (!ctx) {
+        free(p);
+        return NULL;
+    }
 
     ctx->api_key = str_dup(api_key);
 

@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/socket.h>
 #include <curl/curl.h>
 
 #include "tool.h"
@@ -205,7 +206,10 @@ Tool *tool_rest_api_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     RestCtx *ctx = calloc(1, sizeof(RestCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("rest_api");

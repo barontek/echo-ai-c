@@ -15,14 +15,19 @@
 #include "utils/callbacks.h"
 #include "utils/circuit_breaker.h"
 
+/* test_agent_save - unit tests for agent save. Depends on: check, the module under test. */
 /* agent_save_session is non-static for testability (see AGENTS.md §6); declare
  * it ourselves since it's not in agent.h. */
 void agent_save_session(Agent *agent);
 
-/* Mock registry + provider symbols so agent.c links without dragging in the
- * whole tool chain. agent_save_session itself never touches these, but
- * agent.c as a translation unit references them. */
-Tool *registry_get(const char *name) { (void)name; return NULL; }
+/* AGENT_TEST seams in agent.c (see the guard in that file). */
+void agent_test_set_realloc_fail(int nth);
+int agent_test_execute_tool_calls(Agent *agent, ToolCall *calls, int count);
+
+/* Controllable registry: the default stub returns NULL (tool not found);
+ * tests can install a stub tool to exercise the real execute path. */
+static Tool *stub_registry_tool = NULL;
+Tool *registry_get(const char *name) { (void)name; return stub_registry_tool; }
 char *registry_schemas_json(void) { return str_dup("[]"); }
 int registry_get_delegate_config(const char **a, const char **b, const char **c,
                                   const char **d, int *e, int *f, double *g,
@@ -38,7 +43,10 @@ void registry_set_delegate_config(const char *a, const char *b, const char *c,
 }
 void registry_set_session_manager(SessionManager *sm) { (void)sm; }
 void registry_set_ask_user_callback(char *(*cb)(const char *, void *), void *u)
-{ (void)cb; (void)u; }
+ {
+    (void)cb;
+    (void)u;
+}
 
 typedef struct {
     LLMProvider provider;
@@ -89,21 +97,56 @@ void cb_record_failure(CircuitBreaker *cb) { (void)cb; }
 
 CallbackManager *cb_manager_create(void) { return NULL; }
 void cb_manager_run_start(CallbackManager *m, const char *id, const char *p)
-{ (void)m; (void)id; (void)p; }
+ {
+    (void)m;
+    (void)id;
+    (void)p;
+}
 void cb_manager_run_end(CallbackManager *m, const char *id, const char *p)
-{ (void)m; (void)id; (void)p; }
+ {
+    (void)m;
+    (void)id;
+    (void)p;
+}
 void cb_manager_run_error(CallbackManager *m, const char *id, const char *e)
-{ (void)m; (void)id; (void)e; }
+ {
+    (void)m;
+    (void)id;
+    (void)e;
+}
 void cb_manager_llm_start(CallbackManager *m, const char *id, int n)
-{ (void)m; (void)id; (void)n; }
+ {
+    (void)m;
+    (void)id;
+    (void)n;
+}
 void cb_manager_llm_end(CallbackManager *m, const char *id, const char *c)
-{ (void)m; (void)id; (void)c; }
+ {
+    (void)m;
+    (void)id;
+    (void)c;
+}
 void cb_manager_tool_start(CallbackManager *m, const char *id, const char *n, const char *a)
-{ (void)m; (void)id; (void)n; (void)a; }
+ {
+    (void)m;
+    (void)id;
+    (void)n;
+    (void)a;
+}
 void cb_manager_tool_end(CallbackManager *m, const char *id, const char *n, const char *c)
-{ (void)m; (void)id; (void)n; (void)c; }
+ {
+    (void)m;
+    (void)id;
+    (void)n;
+    (void)c;
+}
 void cb_manager_tool_error(CallbackManager *m, const char *id, const char *n, const char *e)
-{ (void)m; (void)id; (void)n; (void)e; }
+ {
+    (void)m;
+    (void)id;
+    (void)n;
+    (void)e;
+}
 
 Message *apply_context_window(Message *msgs, int *count, int max_msgs, int max_chars)
 {
@@ -121,7 +164,11 @@ int metrics_histogram_observe(Metrics *m, const char *n, const char *h, double v
  * agent.c references. Always returns 0 — agent_save_session never reaches the
  * approval path, so the actual value is irrelevant for this test. */
 int safety_needs_approval(const SafetyConfig *cfg, const char *tool_name)
-{ (void)cfg; (void)tool_name; return 0; }
+ {
+    (void)cfg;
+    (void)tool_name;
+    return 0;
+}
 
 /* Regression test for C6: agent_save_session used to skip the save entirely
  * when `s->messages_count == 0`. After a /clear or any path that reduces
@@ -197,12 +244,141 @@ START_TEST(test_agent_save_session_persists_empty_state)
 }
 END_TEST
 
+/* ---- execute_tool_calls (B3) ---- */
+
+static ToolResult *stub_tool_execute_ok(Tool *self, const char *args_json)
+{
+    (void)self;
+    (void)args_json;
+    return tool_result_create("tool output text");
+}
+
+static void stub_tool_destroy(Tool *self)
+{
+    if (!self) return;
+    free(self->name);
+    free(self->description);
+    free(self->parameters_schema);
+    free(self);
+}
+
+static Tool *make_stub_tool(void)
+{
+    Tool *t = calloc(1, sizeof(Tool));
+    ck_assert_ptr_nonnull(t);
+    t->name = str_dup("fake");
+    t->description = str_dup("stub");
+    t->parameters_schema = str_dup("{}");
+    t->execute = stub_tool_execute_ok;
+    t->destroy = stub_tool_destroy;
+    return t;
+}
+
+static void free_calls(ToolCall *calls, int count)
+{
+    for (int i = 0; i < count; i++)
+    {
+        free(calls[i].id);
+        free(calls[i].name);
+        free(calls[i].arguments);
+        free(calls[i].result_content);
+        free(calls[i].result_error);
+    }
+    free(calls);
+}
+
+/* Happy path: a resolved tool's result lands in the agent's message list. */
+START_TEST(test_execute_tool_calls_appends_tool_result)
+{
+    Agent agent;
+    memset(&agent, 0, sizeof(agent));
+    Tool *tool = make_stub_tool();
+    stub_registry_tool = tool;
+
+    ToolCall *calls = calloc(1, sizeof(ToolCall));
+    ck_assert_ptr_nonnull(calls);
+    calls[0].id = str_dup("call_1");
+    calls[0].name = str_dup("fake");
+    calls[0].arguments = str_dup("{}");
+    ck_assert_int_eq(agent_test_execute_tool_calls(&agent, calls, 1), 0);
+    ck_assert_int_eq(agent.messages_count, 1);
+    ck_assert_str_eq(agent.messages[0].content, "tool output text");
+    ck_assert_str_eq(agent.messages[0].tool_name, "fake");
+    ck_assert_str_eq(agent.messages[0].tool_call_id, "call_1");
+
+    message_free_all(agent.messages, agent.messages_count);
+    free_calls(calls, 1);
+    stub_registry_tool = NULL;
+    stub_tool_destroy(tool);
+}
+END_TEST
+
+/* B3 regression: a failed message-array growth must free the built message
+ * (no leak) and leave the conversation count untouched — the old code
+ * leaked the message's str_dup'd fields and ignored the failure. */
+START_TEST(test_execute_tool_calls_append_oom_keeps_count)
+{
+    Agent agent;
+    memset(&agent, 0, sizeof(agent));
+    Tool *tool = make_stub_tool();
+    stub_registry_tool = tool;
+
+    ToolCall *calls = calloc(1, sizeof(ToolCall));
+    ck_assert_ptr_nonnull(calls);
+    calls[0].id = str_dup("call_1");
+    calls[0].name = str_dup("fake");
+    calls[0].arguments = str_dup("{}");
+
+    /* First realloc in the executor is the append's growth */
+    agent_test_set_realloc_fail(1);
+    ck_assert_int_eq(agent_test_execute_tool_calls(&agent, calls, 1), 0);
+    agent_test_set_realloc_fail(-1);
+    ck_assert_int_eq(agent.messages_count, 0);
+    ck_assert_ptr_null(agent.messages);
+
+    free_calls(calls, 1);
+    stub_registry_tool = NULL;
+    stub_tool_destroy(tool);
+}
+END_TEST
+
+/* B3 regression: message_create failing (OOM on the tool-result message)
+ * used to be dereferenced unconditionally — a NULL crash. The executor
+ * must skip the tool's contribution cleanly instead. */
+START_TEST(test_execute_tool_calls_message_oom_is_handled)
+{
+    Agent agent;
+    memset(&agent, 0, sizeof(agent));
+    Tool *tool = make_stub_tool();
+    stub_registry_tool = tool;
+
+    ToolCall *calls = calloc(1, sizeof(ToolCall));
+    ck_assert_ptr_nonnull(calls);
+    calls[0].id = str_dup("call_1");
+    calls[0].name = str_dup("fake");
+    calls[0].arguments = str_dup("{}");
+
+    /* message_create: calloc(1) + role str_dup(2) + content str_dup(3) */
+    message_test_set_alloc_fail(1);
+    ck_assert_int_eq(agent_test_execute_tool_calls(&agent, calls, 1), 0);
+    message_test_set_alloc_fail(-1);
+    ck_assert_int_eq(agent.messages_count, 0);
+
+    free_calls(calls, 1);
+    stub_registry_tool = NULL;
+    stub_tool_destroy(tool);
+}
+END_TEST
+
 Suite *agent_suite(void)
 {
     Suite *s = suite_create("Agent");
     TCase *tc = tcase_create("Core");
     tcase_set_timeout(tc, 30);
     tcase_add_test(tc, test_agent_save_session_persists_empty_state);
+    tcase_add_test(tc, test_execute_tool_calls_appends_tool_result);
+    tcase_add_test(tc, test_execute_tool_calls_append_oom_keeps_count);
+    tcase_add_test(tc, test_execute_tool_calls_message_oom_is_handled);
     suite_add_tcase(s, tc);
     return s;
 }

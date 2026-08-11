@@ -3,6 +3,7 @@
 #include <string.h>
 #include "utils/string_utils.h"
 
+/* test_string - unit tests for string. Depends on: check, the module under test. */
 START_TEST(test_str_trim_removes_leading_and_trailing_whitespace)
 {
     char s1[] = "  hello  ";
@@ -19,12 +20,16 @@ START_TEST(test_str_trim_removes_leading_and_trailing_whitespace)
 }
 END_TEST
 
-START_TEST(test_str_starts_with_matches_prefix_and_str_ends_with_matches_suffix)
+START_TEST(test_str_starts_with_matches_prefix)
 {
     ck_assert_int_eq(str_starts_with("hello world", "hello"), 1);
     ck_assert_int_eq(str_starts_with("hello world", "world"), 0);
     ck_assert_int_eq(str_starts_with("", ""), 1);
+}
+END_TEST
 
+START_TEST(test_str_ends_with_matches_suffix)
+{
     ck_assert_int_eq(str_ends_with("hello.c", ".c"), 1);
     ck_assert_int_eq(str_ends_with("hello.c", ".h"), 0);
 }
@@ -245,7 +250,8 @@ Suite *string_suite(void)
     TCase *tc = tcase_create("Core");
     tcase_set_timeout(tc, 10);
     tcase_add_test(tc, test_str_trim_removes_leading_and_trailing_whitespace);
-    tcase_add_test(tc, test_str_starts_with_matches_prefix_and_str_ends_with_matches_suffix);
+    tcase_add_test(tc, test_str_starts_with_matches_prefix);
+    tcase_add_test(tc, test_str_ends_with_matches_suffix);
     tcase_add_test(tc, test_str_split_divides_string_on_delimiter_and_counts_items);
     tcase_add_test(tc, test_str_split_many_items_triggers_realloc);
     tcase_add_test(tc, test_str_dup_null);

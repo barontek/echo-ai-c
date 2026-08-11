@@ -28,10 +28,22 @@ typedef struct {
 static int run_with_timeout(const char *command, int timeout_secs, char **output)
 {
     int pipefd[2] = {-1, -1};
-    if (pipe(pipefd) < 0) return -1;
+    if (pipe(pipefd) < 0)
+    {
+        /* C12: pre-launch failures used to collapse into "Exit code: -1"
+         * with no explanation; the errno context is logged here and
+         * signalled to the caller as -3. */
+        log_error("bash: pipe creation failed", "err", strerror(errno), NULL);
+        return -3;
+    }
 
     pid_t pid = fork();
-    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return -1; }
+    if (pid < 0) {
+        log_error("bash: fork failed", "err", strerror(errno), NULL);
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -3;
+    }
 
     if (pid == 0)
     {
@@ -50,18 +62,20 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
     pipefd[1] = -1;
     if (setpgid(pid, pid) != 0 && errno != EACCES && errno != ESRCH)
     {
+        log_error("bash: setpgid failed", "err", strerror(errno), NULL);
         (void)kill(pid, SIGKILL);
         (void)waitpid(pid, NULL, 0);
         close(pipefd[0]);
-        return -1;
+        return -3;
     }
     int flags = fcntl(pipefd[0], F_GETFL, 0);
     if (flags < 0 || fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK) != 0)
     {
+        log_error("bash: fcntl failed", "err", strerror(errno), NULL);
         (void)kill(-pid, SIGKILL);
         (void)waitpid(pid, NULL, 0);
         close(pipefd[0]);
-        return -1;
+        return -3;
     }
 
     int max_wait = timeout_secs > 0 ? timeout_secs : 30;
@@ -211,6 +225,15 @@ static ToolResult *bash_execute(Tool *self, const char *args_json)
         return tool_result_error("command timed out", "timeout");
     }
 
+    if (rc == -3)
+    {
+        /* C12: launch failures get a real error, not a fake exit code;
+         * the syscall context is already in the server log. */
+        free(output);
+        return tool_result_error("failed to launch command",
+                                 "execution_error");
+    }
+
     char *result = NULL;
     if (rc == 0)
     {
@@ -254,7 +277,10 @@ Tool *tool_bash_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     BashCtx *ctx = calloc(1, sizeof(BashCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("bash");

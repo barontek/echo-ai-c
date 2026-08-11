@@ -101,10 +101,19 @@ int rate_limiter_allow(RateLimiter *rl, const char *ip)
         if (now - window_start >= rl->window_secs)
         {
             const char *reset_sql = "UPDATE rate_buckets SET window_start = ?, count = 1 WHERE ip = ?";
-            if (sqlite3_prepare_v2(rl->db, reset_sql, -1, &stmt, NULL) != SQLITE_OK) return 1;
+            if (sqlite3_prepare_v2(rl->db, reset_sql, -1, &stmt, NULL) != SQLITE_OK)
+            {
+                log_error("rate_limiter: reset prep", "err", sqlite3_errmsg(rl->db), NULL);
+                return 1;
+            }
             sqlite3_bind_int64(stmt, 1, (sqlite3_int64)now);
             sqlite3_bind_text(stmt, 2, ip, -1, SQLITE_TRANSIENT);
-            sqlite3_step(stmt);
+            if (sqlite3_step(stmt) != SQLITE_DONE)
+            {
+                /* Window reset lost: the bucket counts as stale — allow,
+                 * loudly (consistent with the file's fail-open contract). */
+                log_error("rate_limiter: reset step", "err", sqlite3_errmsg(rl->db), NULL);
+            }
             sqlite3_finalize(stmt);
             return 1;
         }
@@ -112,9 +121,16 @@ int rate_limiter_allow(RateLimiter *rl, const char *ip)
         if (count >= rl->max_requests) return 0;
 
         const char *inc_sql = "UPDATE rate_buckets SET count = count + 1 WHERE ip = ?";
-        if (sqlite3_prepare_v2(rl->db, inc_sql, -1, &stmt, NULL) != SQLITE_OK) return 1;
+        if (sqlite3_prepare_v2(rl->db, inc_sql, -1, &stmt, NULL) != SQLITE_OK)
+        {
+            log_error("rate_limiter: increment prep", "err", sqlite3_errmsg(rl->db), NULL);
+            return 1;
+        }
         sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt);
+        if (sqlite3_step(stmt) != SQLITE_DONE)
+        {
+            log_error("rate_limiter: increment step", "err", sqlite3_errmsg(rl->db), NULL);
+        }
         sqlite3_finalize(stmt);
         return 1;
     }
@@ -125,10 +141,17 @@ int rate_limiter_allow(RateLimiter *rl, const char *ip)
      * try to insert the same primary key; the row that wins owns the
      * window and the loser's increment is dropped for this request. */
     const char *insert_sql = "INSERT OR IGNORE INTO rate_buckets (ip, window_start, count) VALUES (?, ?, 1)";
-    if (sqlite3_prepare_v2(rl->db, insert_sql, -1, &stmt, NULL) != SQLITE_OK) return 1;
+    if (sqlite3_prepare_v2(rl->db, insert_sql, -1, &stmt, NULL) != SQLITE_OK)
+    {
+        log_error("rate_limiter: insert prep", "err", sqlite3_errmsg(rl->db), NULL);
+        return 1;
+    }
     sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 2, (sqlite3_int64)now);
-    sqlite3_step(stmt);
+    if (sqlite3_step(stmt) != SQLITE_DONE)
+    {
+        log_error("rate_limiter: insert step", "err", sqlite3_errmsg(rl->db), NULL);
+    }
     sqlite3_finalize(stmt);
 
     return 1;
@@ -140,11 +163,22 @@ void rate_limiter_record_unlock_failure(RateLimiter *rl, const char *ip)
 
     sqlite3_stmt *stmt = NULL;
     const char *sql = "INSERT INTO unlock_failures (ip, timestamp) VALUES (?, ?)";
-    if (sqlite3_prepare_v2(rl->db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
+    if (sqlite3_prepare_v2(rl->db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    {
+        /* Security-relevant (M3): a failed record means this brute-force
+         * attempt is never counted against the unlock throttle. Loudly
+         * logged — fail-open matches the file's documented contract, but
+         * the silence was the bug. */
+        log_error("rate_limiter: unlock-failure prep", "err", sqlite3_errmsg(rl->db), NULL);
+        return;
+    }
 
     sqlite3_bind_text(stmt, 1, ip, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 2, (sqlite3_int64)time(NULL));
-    sqlite3_step(stmt);
+    if (sqlite3_step(stmt) != SQLITE_DONE)
+    {
+        log_error("rate_limiter: unlock-failure step", "err", sqlite3_errmsg(rl->db), NULL);
+    }
     sqlite3_finalize(stmt);
 }
 

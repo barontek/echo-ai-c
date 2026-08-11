@@ -13,6 +13,7 @@
 #include "../src/config/config.h"
 #include "../src/utils/string_utils.h"
 
+/* test_routes_general - unit tests for routes general. Depends on: check, the module under test. */
 extern OpenAIOAuthState openai_oauth_stub_state;
 
 /* ---------------------------------------------------------------------------
@@ -108,7 +109,11 @@ int server_response_error(Client *client, int status, const char *msg)
 
 void client_close(Client *client) { (void)client; }
 int server_sse_write(Client *client, const char *data)
-{ (void)client; (void)data; return 0; }
+ {
+    (void)client;
+    (void)data;
+    return 0;
+}
 
 /* ---------------------------------------------------------------------------
  * Stub middleware
@@ -134,7 +139,11 @@ int ct_undo(ChangeTracker *ct) { (void)ct; return stub_ct_undo_result; }
 int ct_redo(ChangeTracker *ct) { (void)ct; return stub_ct_redo_result; }
 
 SessionManager *session_manager_create(const char *d, const char *p)
-{ (void)d; (void)p; return NULL; }
+ {
+    (void)d;
+    (void)p;
+    return NULL;
+}
 
 SessionList *session_manager_list_sessions(SessionManager *sm) { (void)sm; return NULL; }
 void session_list_free(SessionList *l) { (void)l; }
@@ -179,7 +188,12 @@ void log_init(void) {}
 void log_cleanup(void) {}
 void log_set_level(int l) { (void)l; }
 void log_msg(int level, const char *file, int line, const char *fmt, ...)
-{ (void)level; (void)file; (void)line; (void)fmt; }
+ {
+    (void)level;
+    (void)file;
+    (void)line;
+    (void)fmt;
+}
 
 /* ---------------------------------------------------------------------------
  * Stub curl — with configurable init/perform for handle_models coverage
@@ -238,7 +252,10 @@ struct curl_slist *curl_slist_append(struct curl_slist *list, const char *data)
     struct curl_slist *item = calloc(1, sizeof(*item));
     if (!item) return NULL;
     item->data = data ? str_dup(data) : NULL;
-    if (data && !item->data) { free(item); return NULL; }
+    if (data && !item->data) {
+        free(item);
+        return NULL;
+    }
     if (!list) return item;
     struct curl_slist *tail = list;
     while (tail->next) tail = tail->next;
@@ -1069,6 +1086,9 @@ Suite *routes_general_suite(void)
 
     tc = tcase_create("handle_models");
     tcase_add_checked_fixture(tc, setup, teardown);
+    /* E12: several of these run system("rm -rf ...") subprocesses and
+     * real temp-file I/O — a hang here would block the whole suite. */
+    tcase_set_timeout(tc, 60);
     tcase_add_test(tc, test_handle_models_curl_unavailable);
     tcase_add_test(tc, test_handle_models_perform_fails);
     tcase_add_test(tc, test_handle_models_success);

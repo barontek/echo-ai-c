@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <limits.h>
 #include <cjson/cJSON.h>
 
 #include "routes.h"
@@ -161,7 +162,15 @@ WS_STATIC void ws_chat_on_chunk(const char *chunk, void *userdata)
     if (c->active_session_id)
         cJSON_AddStringToObject(frame, "session_id", c->active_session_id);
     char *str = cJSON_PrintUnformatted(frame);
-    if (str) ws_send_json(c->ws, str);
+    if (!str)
+    {
+        /* C11: a dropped stream chunk was completely silent on both
+         * transports — the user saw a hole in the answer with no trace. */
+        log_error("ws: OOM rendering stream chunk", NULL);
+        cJSON_Delete(frame);
+        return;
+    }
+    ws_send_json(c->ws, str);
     free(str);
     cJSON_Delete(frame);
 }
@@ -277,9 +286,19 @@ WS_STATIC void ws_chat_flush_queue(WSChatCtx *c)
 WS_STATIC void ws_chat_enqueue(WSChatCtx *c, const char *data)
 {
     QueuedMsg *q = calloc(1, sizeof(QueuedMsg));
-    if (!q) return;
+    if (!q)
+    {
+        /* C11: a dropped queued message was completely silent. */
+        log_error("ws: OOM queueing message", NULL);
+        return;
+    }
     q->data = str_dup(data);
-    if (!q->data) { free(q); return; }
+    if (!q->data)
+    {
+        log_error("ws: OOM duplicating queued message", NULL);
+        free(q);
+        return;
+    }
 
     if (c->msg_queue_tail)
         c->msg_queue_tail->next = q;
@@ -304,7 +323,10 @@ WS_STATIC void ws_emit_branch_info(WSChatCtx *c)
         return;
     }
     cJSON *frame = cJSON_CreateObject();
-    if (!frame) { cJSON_Delete(arr); return; }
+    if (!frame) {
+        cJSON_Delete(arr);
+        return;
+    }
     cJSON_AddStringToObject(frame, "type", "branch_info");
     cJSON_AddItemToObject(frame, "branches", arr);
     char *str = cJSON_PrintUnformatted(frame);
@@ -379,12 +401,15 @@ WS_STATIC void ws_run_fork(WSChatCtx *c, const char *message_id, int idx,
     }
 
     /* J2: `idx` is a DB-side index — the in-memory array usually has a
-     * `system` message at index 0, so the agent-side keep is offset. */
+     * `system` message at index 0, so the agent-side keep is offset.
+     * L3 defense in depth: never let the keep point below the start of
+     * the array (the edit handler validates, but any future caller must
+     * not be able to reach messages[-1]). */
     int system_prefix = 0;
     while (system_prefix < c->agent->messages_count &&
            strcmp(c->agent->messages[system_prefix].role, "system") == 0)
         system_prefix++;
-    int keep = idx + system_prefix;
+    int keep = idx < 0 ? 0 : idx + system_prefix;
     if (keep > c->agent->messages_count)
         keep = c->agent->messages_count;
     for (int i = keep; i < c->agent->messages_count; i++)
@@ -529,7 +554,16 @@ static int ws_handle_session_id(WSChatCtx *c, WSClient *ws, cJSON *json)
                 if (s->messages_count > 0)
                 {
                     c->agent->messages = calloc((size_t)s->messages_count, sizeof(Message));
-                    if (c->agent->messages)
+                    if (!c->agent->messages)
+                    {
+                        /* C6: an empty context would make the agent run
+                         * with zero history, silently. Fail loudly and
+                         * refuse the session instead. */
+                        log_error("ws: OOM loading session messages",
+                                  "session_id", session_id_item->valuestring, NULL);
+                        ws_send_json(ws, "{\"type\":\"error\",\"content\":\"out of memory\"}");
+                    }
+                    else
                     {
                         for (int i = 0; i < s->messages_count; i++)
                         {
@@ -538,6 +572,9 @@ static int ws_handle_session_id(WSChatCtx *c, WSClient *ws, cJSON *json)
                                 message_free_all(c->agent->messages, i);
                                 c->agent->messages = NULL;
                                 c->agent->messages_count = 0;
+                                log_error("ws: message copy failed",
+                                          "session_id", session_id_item->valuestring, NULL);
+                                ws_send_json(ws, "{\"type\":\"error\",\"content\":\"out of memory\"}");
                                 break;
                             }
                         }
@@ -610,7 +647,6 @@ static void ws_handle_provider_frame(WSChatCtx *c, WSClient *ws, cJSON *json)
                     {
                         if (effort_item->valuestring[0] == '\0')
                         {
-                            /* Empty string clears back to the API default. */
                             free(c->effort);
                             c->effort = NULL;
                         }
@@ -686,7 +722,21 @@ static void ws_handle_provider_frame(WSChatCtx *c, WSClient *ws, cJSON *json)
             }
             cJSON *model = cJSON_GetObjectItem(json, "model");
             if (model && model->valuestring && c->agent)
-                agent_set_model(c->agent, model->valuestring);
+            {
+                if (agent_set_model(c->agent, model->valuestring) != 0)
+                {
+                    cJSON *err = cJSON_CreateObject();
+                    cJSON_AddStringToObject(err, "type", "error");
+                    cJSON_AddStringToObject(err, "content",
+                                            "model switch failed");
+                    char *es = cJSON_PrintUnformatted(err);
+                    if (es) ws_send_json(ws, es);
+                    free(es);
+                    cJSON_Delete(err);
+                    cJSON_Delete(json);
+                    return;
+                }
+            }
             cJSON_Delete(json);
             cJSON *ready = cJSON_CreateObject();
             cJSON_AddStringToObject(ready, "type", "ready");
@@ -731,7 +781,10 @@ static void ws_handle_regenerate(WSChatCtx *c, WSClient *ws, cJSON *json)
                         if (c->agent->messages[i].id &&
                             strcmp(c->agent->messages[i].id,
                                    msgid_item->valuestring) == 0)
-                        { fi = i - system_prefix; break; }
+                         {
+                            fi = i - system_prefix;
+                            break;
+                        }
                     }
                 }
                 if (fi < 0) fi = idx;
@@ -777,7 +830,23 @@ static void ws_handle_branch_switch(WSChatCtx *c, WSClient *ws, cJSON *json)
                     if (s)
                     {
                         int swap_rc = ws_swap_agent_messages(c, s);
-                        if (swap_rc == 0 && s->messages_count > 0)
+                        if (swap_rc != 0)
+                        {
+                            /* C6: a failed swap must not leave the agent
+                             * running with zero history after a
+                             * "successful" branch switch. */
+                            log_error("ws: branch switch message swap failed",
+                                      "session_id", c->active_session_id, NULL);
+                            cJSON *err = cJSON_CreateObject();
+                            cJSON_AddStringToObject(err, "type", "error");
+                            cJSON_AddStringToObject(err, "content",
+                                                    "out of memory");
+                            char *es = cJSON_PrintUnformatted(err);
+                            if (es) ws_send_json(c->ws, es);
+                            free(es);
+                            cJSON_Delete(err);
+                        }
+                        else if (s->messages_count > 0)
                         {
                             cJSON *hist = cJSON_CreateObject();
                             cJSON_AddStringToObject(hist, "type", "history");
@@ -943,7 +1012,25 @@ WS_STATIC void ws_chat_on_message(WSClient *ws, const char *data, size_t len, vo
             if (idx_item && cJSON_IsNumber(idx_item) && content_item && content_item->valuestring
                 && c->sm && c->agent)
             {
-                int idx = (int)idx_item->valuedouble;
+                /* L3: the index is attacker-supplied. A negative value or a
+                 * huge/high-precision double would corrupt the context
+                 * truncation below (messages[-1] underflow), so it must be
+                 * an exact non-negative integer before it reaches the fork
+                 * path. */
+                double idx_dv = idx_item->valuedouble;
+                if (idx_dv < 0 || idx_dv > INT_MAX || idx_dv != (double)(int)idx_dv)
+                {
+                    cJSON *err = cJSON_CreateObject();
+                    cJSON_AddStringToObject(err, "type", "error");
+                    cJSON_AddStringToObject(err, "content", "invalid index");
+                    char *s = cJSON_PrintUnformatted(err);
+                    if (s) ws_send_json(c->ws, s);
+                    free(s);
+                    cJSON_Delete(err);
+                    cJSON_Delete(json);
+                    return;
+                }
+                int idx = (int)idx_dv;
                 ws_run_fork(c, msgid_item && msgid_item->valuestring
                                 ? msgid_item->valuestring : NULL,
                             idx, content_item->valuestring, 0);
@@ -1068,6 +1155,7 @@ WS_STATIC int ws_approval_cb(const char *tool_name, const char *arguments, void 
     if (!c || !c->ws) return 0;
 
     char *req_id = NULL;
+    /* Loop-thread only (same reasoning as server.c req_counter). */
     static unsigned long approval_counter = 0;
     approval_counter++;
     if (asprintf(&req_id, "apr_%lu", approval_counter) < 0) return 0;
@@ -1214,7 +1302,14 @@ static void ws_apply_query_session(WSChatCtx *c, WSClient *ws, const char *query
                     {
                         c->agent->messages = calloc((size_t)s->messages_count,
                                                     sizeof(Message));
-                        if (c->agent->messages)
+                        if (!c->agent->messages)
+                        {
+                            /* C6: never run with silently empty history */
+                            log_error("ws_apply_query_session: OOM loading "
+                                      "messages", NULL);
+                            ws_send_json(ws, "{\"type\":\"error\",\"content\":\"out of memory\"}");
+                        }
+                        else
                         {
                             int copied = 0;
                             for (int i = 0; i < s->messages_count; i++)
@@ -1225,6 +1320,9 @@ static void ws_apply_query_session(WSChatCtx *c, WSClient *ws, const char *query
                                     message_free_all(c->agent->messages, copied);
                                     c->agent->messages = NULL;
                                     c->agent->messages_count = 0;
+                                    log_error("ws_apply_query_session: message "
+                                              "copy failed", NULL);
+                                    ws_send_json(ws, "{\"type\":\"error\",\"content\":\"out of memory\"}");
                                     break;
                                 }
                                 copied++;

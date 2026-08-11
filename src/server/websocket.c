@@ -66,7 +66,12 @@ static int ws_protocol_offered(const char *headers, const char *protocol)
 
 static void ws_write_done(uv_write_t *req, int status)
 {
-    (void)status;
+    if (status != 0)
+    {
+        /* C10: a failed async write means the peer is gone; log it so
+         * dropped frames are not indistinguishable from delivered ones. */
+        log_error("websocket: write failed", "err", uv_strerror(status), NULL);
+    }
     free(req->data);
     free(req);
 }
@@ -214,7 +219,10 @@ size_t websocket_test_frame_walk(const unsigned char *data, size_t len)
 static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 {
     WSClient *ws = (WSClient *)stream->data;
-    if (!ws) { free(buf->base); return; }
+    if (!ws) {
+        free(buf->base);
+        return;
+    }
 
     if (nread < 0)
     {
@@ -231,7 +239,10 @@ static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
         return;
     }
 
-    if (nread == 0) { free(buf->base); return; }
+    if (nread == 0) {
+        free(buf->base);
+        return;
+    }
 
     unsigned char *data = (unsigned char *)buf->base;
     size_t pos = 0;
@@ -249,6 +260,10 @@ static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
 
         if ((size_t)(nread - pos) < payload_len) break;
 
+        /* RFC 6455 opcodes: 0x8 close, 0x9 ping, 0xA pong, 0x1 text,
+         * 0x2 binary. Close tears the connection down; a ping must be
+         * answered with a pong (echoing the payload) and a pong refreshes
+         * the keepalive deadline. */
         if (opcode == 0x8)
         {
             ws_stop_ping_timer(ws);
@@ -282,6 +297,8 @@ static void ws_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
             unsigned char *payload = data + pos;
             if (masked)
             {
+                /* RFC 6455 §5.3: client frames are XOR-masked with a
+                 * 4-byte key repeating cyclically — unmask in place. */
                 for (uint64_t i = 0; i < payload_len; i++)
                     payload[i] ^= mask_key[i % 4];
             }
@@ -315,8 +332,13 @@ int ws_do_handshake(HTTPRequest *req, Client *client, ServerContext *ctx)
     const char *h = req->headers;
     const char *key_start = strstr(h, "Sec-WebSocket-Key:");
     if (!key_start) key_start = strstr(h, "sec-websocket-key:");
-    if (!key_start) { log_info("no WS key found", NULL); return -1; }
+    if (!key_start) {
+        log_info("no WS key found", NULL);
+        return -1;
+    }
 
+    /* "Sec-WebSocket-Key:" is 18 characters — skip it to reach the
+     * base64 key value. */
     key_start += 18;
     while (*key_start == ' ') key_start++;
     const char *key_end = key_start;
@@ -352,7 +374,10 @@ int ws_do_handshake(HTTPRequest *req, Client *client, ServerContext *ctx)
     size_t resp_len = strlen(resp);
     uv_buf_t uvresp = {.base = resp, .len = resp_len};
     uv_write_t *wreq = malloc(sizeof(uv_write_t));
-    if (!wreq) { free(resp); return -1; }
+    if (!wreq) {
+        free(resp);
+        return -1;
+    }
     wreq->data = resp;
     int write_rc = uv_write(wreq, (uv_stream_t *)req->client, &uvresp, 1,
                             ws_write_done);
@@ -394,6 +419,7 @@ int ws_send(WSClient *ws, const char *data, size_t len)
     if (!frame) return -1;
 
     size_t pos = 0;
+    /* 0x81: FIN + text-frame opcode (RFC 6455 §5.2) */
     frame[pos++] = 0x81;
 
     if (len <= 125)
@@ -418,7 +444,10 @@ int ws_send(WSClient *ws, const char *data, size_t len)
 
     uv_buf_t buf = {.base = (char *)frame, .len = pos};
     uv_write_t *req = malloc(sizeof(uv_write_t));
-    if (!req) { free(frame); return -1; }
+    if (!req) {
+        free(frame);
+        return -1;
+    }
 
     req->data = frame;
     int rc = uv_write(req, (uv_stream_t *)ws->handle, &buf, 1, ws_write_done);

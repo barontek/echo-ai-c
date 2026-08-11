@@ -70,8 +70,14 @@ static ToolResult *write_file_execute(Tool *self, const char *args_json)
         return tool_result_error("path resolution failed", "execution_error");
     }
 
-    if (ctx->ct)
-        ct_snapshot(ctx->ct, resolved);
+    if (ctx->ct && ct_snapshot(ctx->ct, resolved) != 0)
+    {
+        /* C11: an un-snapshotted edit is permanently un-undoable; the
+         * write itself is still correct, but the user loses the undo
+         * path. Log so the failure is not invisible. */
+        log_error("write_file: ct_snapshot failed (edit will not be "
+                  "undoable)", "path", path, NULL);
+    }
 
     FILE *fp = fopen(resolved, "w");
     if (!fp)
@@ -126,7 +132,10 @@ Tool *tool_write_file_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     FileCtx *ctx = calloc(1, sizeof(FileCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("write_file");

@@ -49,9 +49,24 @@ static ToolResult *list_dir_execute(Tool *self, const char *args_json)
     {
         if (entry->d_name[0] == '.') continue;
         int is_dir = entry->d_type == DT_DIR;
-        pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s%s\n",
-                        entry->d_name, is_dir ? "/" : "");
+        /* Same accumulation rule as grep_tool (L4): snprintf returns the
+         * would-be length, so cap the position at the buffer end and
+         * stop; never let the next call underflow the size argument. */
         if (pos >= sizeof(buffer) - 1) break;
+        size_t avail = sizeof(buffer) - pos;
+        int n = snprintf(buffer + pos, avail, "%s%s\n",
+                         entry->d_name, is_dir ? "/" : "");
+        if (n < 0) break;
+        if ((size_t)n >= avail)
+        {
+            /* C11: mark the truncation instead of silently ending. */
+            const char marker[] = "... (truncated)\n";
+            snprintf(buffer + sizeof(buffer) - 1 - sizeof(marker),
+                     sizeof(marker), "%s", marker);
+            pos = sizeof(buffer) - 1;
+            break;
+        }
+        pos += (size_t)n;
     }
 
     closedir(d);
@@ -85,7 +100,10 @@ Tool *tool_list_dir_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     DirCtx *ctx = calloc(1, sizeof(DirCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("list_dir");

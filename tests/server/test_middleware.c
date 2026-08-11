@@ -5,6 +5,7 @@
 
 #include "server/middleware.h"
 
+/* test_middleware - unit tests for middleware. Depends on: check, the module under test. */
 int rate_limiter_allow(RateLimiter *rl, const char *ip)
 {
     (void)rl;
@@ -27,7 +28,12 @@ void log_init(void) {}
 void log_cleanup(void) {}
 void log_set_level(int l) { (void)l; }
 void log_msg(int l, const char *f, int line, const char *fmt, ...)
-{ (void)l; (void)f; (void)line; (void)fmt; }
+ {
+    (void)l;
+    (void)f;
+    (void)line;
+    (void)fmt;
+}
 
 START_TEST(test_token_exact_match_returns_valid)
 {

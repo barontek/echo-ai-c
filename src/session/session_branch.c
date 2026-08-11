@@ -8,6 +8,7 @@
 
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -19,6 +20,7 @@
 #include "session.h"
 #include "../agent/message.h"
 #include "../utils/string_utils.h"
+#include "../utils/logging.h"
 
 #ifdef SESSION_MANAGER_TEST
 /* Shared fault-injection hook: session_manager.c defines sm_test_strdup
@@ -28,6 +30,15 @@
  * split out. Production builds never see this TU compiled with the define. */
 char *sm_test_strdup(const char *s);
 #define str_dup sm_test_strdup
+
+/* The fork-id mints allocate via asprintf, which the str_dup counter
+ * cannot reach — and failing them lands on the goto-cleanup path BEFORE
+ * message_copy initializes fork_copy (the L5 window). The shim lives in
+ * session_manager.c (shared by migration.c under the same counter);
+ * this TU routes its asprintf calls through it. Position 1 is the
+ * fork-message id mint, position 2 the fork-group mint, in call order. */
+int sm_test_asprintf(char **strp, const char *fmt, ...);
+#define asprintf sm_test_asprintf
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -148,7 +159,10 @@ static char *branch_next_created_at(Session *s)
     char *now = branch_now_iso();
     if (!now) return NULL;
     char *prev = branch_active_created_at(s);
-    if (!prev) { free(now); return NULL; }
+    if (!prev) {
+        free(now);
+        return NULL;
+    }
 
     if (strcmp(now, prev) <= 0)
     {
@@ -158,7 +172,10 @@ static char *branch_next_created_at(Session *s)
             if (nanosleep(&pause, NULL) != 0) break;
             free(now);
             now = branch_now_iso();
-            if (!now) { free(prev); return NULL; }
+            if (!now) {
+                free(prev);
+                return NULL;
+            }
         }
     }
     free(prev);
@@ -200,18 +217,34 @@ static cJSON *branch_record_create(const char *created_at,
     cJSON *rec = cJSON_CreateObject();
     if (!rec) return NULL;
     char *id = branch_mint_id("br_");
-    if (!id) { cJSON_Delete(rec); return NULL; }
-    if (!cJSON_AddStringToObject(rec, "id", id)) { free(id); cJSON_Delete(rec); return NULL; }
+    if (!id) {
+        cJSON_Delete(rec);
+        return NULL;
+    }
+    if (!cJSON_AddStringToObject(rec, "id", id)) {
+        free(id);
+        cJSON_Delete(rec);
+        return NULL;
+    }
     free(id);
     if (!cJSON_AddStringToObject(rec, "created_at", created_at ? created_at : ""))
-    { cJSON_Delete(rec); return NULL; }
+     {
+        cJSON_Delete(rec);
+        return NULL;
+    }
     if (anchor_message_id)
     {
         if (!cJSON_AddStringToObject(rec, "anchor_message_id", anchor_message_id))
-        { cJSON_Delete(rec); return NULL; }
+         {
+            cJSON_Delete(rec);
+            return NULL;
+        }
     }
     if (!cJSON_AddItemToObject(rec, "messages", snapshot))
-    { cJSON_Delete(rec); return NULL; }
+     {
+        cJSON_Delete(rec);
+        return NULL;
+    }
     return rec;
 }
 
@@ -230,11 +263,17 @@ static int branch_record_snapshot_live(Session *s, cJSON *list)
     if (!created_at) return -1;
 
     cJSON *snapshot = branch_snapshot_messages(s->messages, s->messages_count);
-    if (!snapshot) { free(created_at); return -1; }
+    if (!snapshot) {
+        free(created_at);
+        return -1;
+    }
 
     cJSON *rec = branch_record_create(created_at, NULL, snapshot);
     free(created_at);
-    if (!rec) { cJSON_Delete(snapshot); return -1; }
+    if (!rec) {
+        cJSON_Delete(snapshot);
+        return -1;
+    }
     if (!cJSON_AddItemToArray(list, rec))
     {
         cJSON_Delete(rec);
@@ -276,7 +315,10 @@ static int branch_find_fork_index(Session *s, const char *message_id, int index)
     {
         for (int i = 0; i < s->messages_count; i++)
             if (s->messages[i].id && strcmp(s->messages[i].id, message_id) == 0)
-            { fi = i; break; }
+             {
+                fi = i;
+                break;
+            }
     }
     if (fi < 0)
         fi = index;
@@ -301,7 +343,10 @@ static int branch_do_fork(SessionManager *sm, Session *s, int fi,
     char *created_at = NULL;
     char *fork_message_id = NULL;
     char *fork_group_id = NULL;
-    Message fork_copy;
+    /* Zeroed so the OOM goto-cleanup paths below can message_clear it
+     * safely before message_copy ever initializes it (frees of garbage
+     * pointers were the historical bug here). */
+    Message fork_copy = {0};
 
     list = branch_list_ensure(s);
     if (!list) goto cleanup;
@@ -362,9 +407,15 @@ static int branch_do_fork(SessionManager *sm, Session *s, int fi,
     cJSON *snapshot = branch_snapshot_messages(s->messages, s->messages_count);
     if (!snapshot) goto cleanup;
     created_at = branch_active_created_at(s);
-    if (!created_at) { cJSON_Delete(snapshot); goto cleanup; }
+    if (!created_at) {
+        cJSON_Delete(snapshot);
+        goto cleanup;
+    }
     cJSON *rec = branch_record_create(created_at, NULL, snapshot);
-    if (!rec) { cJSON_Delete(snapshot); goto cleanup; }
+    if (!rec) {
+        cJSON_Delete(snapshot);
+        goto cleanup;
+    }
     if (!cJSON_AddItemToArray(list, rec))
     {
         cJSON_Delete(rec);
@@ -384,9 +435,15 @@ static int branch_do_fork(SessionManager *sm, Session *s, int fi,
     char *now = branch_next_created_at(s);
     if (!now) goto cleanup;
     cJSON *branches = cJSON_GetObjectItem(s->metadata, "branches");
-    if (!branches) { free(now); goto cleanup; }
+    if (!branches) {
+        free(now);
+        goto cleanup;
+    }
     if (branch_set_active_created_at(s, now) != 0)
-    { free(now); goto cleanup; }
+     {
+        free(now);
+        goto cleanup;
+    }
     free(now);
 
     if (session_manager_save_session_nolock(sm, s) != 0) goto cleanup;
@@ -432,19 +489,32 @@ int session_manager_fork_branch(SessionManager *sm, const char *session_id,
 
     session_manager_lock(sm);
     Session *s = session_manager_load_session_nolock_alloc(sm, session_id);
-    if (!s) { session_manager_unlock(sm); return -1; }
+    if (!s)
+    {
+        session_manager_unlock(sm);
+        log_error("fork_branch: session load failed",
+                  "session_id", session_id, NULL);
+        return -1;
+    }
 
     int fi = branch_find_fork_index(s, message_id, index);
     if (fi < 0)
     {
         session_free(s);
         session_manager_unlock(sm);
+        log_error("fork_branch: fork point not found",
+                  "session_id", session_id, "index", index, NULL);
         return -1;
     }
 
     int rc = branch_do_fork(sm, s, fi, new_content, out);
     session_free(s);
     session_manager_unlock(sm);
+    if (rc != 0)
+    {
+        log_error("fork_branch: fork failed",
+                  "session_id", session_id, "index", index, NULL);
+    }
     return rc;
 }
 
@@ -456,7 +526,10 @@ int session_manager_switch_branch(SessionManager *sm, const char *session_id,
 
     session_manager_lock(sm);
     Session *s = session_manager_load_session_nolock_alloc(sm, session_id);
-    if (!s) { session_manager_unlock(sm); return -1; }
+    if (!s) {
+        session_manager_unlock(sm);
+        return -1;
+    }
 
     int rc = -1;
     cJSON *list = branch_list_ensure(s);
@@ -475,10 +548,16 @@ int session_manager_switch_branch(SessionManager *sm, const char *session_id,
      * it would append a phantom duplicate record and inflate the pill
      * count. Compare serialized message arrays. */
     cJSON *live_json = messages_to_json_array(s->messages, s->messages_count);
-    if (!live_json) { free(snap_str); goto cleanup; }
+    if (!live_json) {
+        free(snap_str);
+        goto cleanup;
+    }
     char *live_str = cJSON_PrintUnformatted(live_json);
     cJSON_Delete(live_json);
-    if (!live_str) { free(snap_str); goto cleanup; }
+    if (!live_str) {
+        free(snap_str);
+        goto cleanup;
+    }
     int same = strcmp(live_str, snap_str) == 0;
     free(live_str);
     if (same)
@@ -489,7 +568,10 @@ int session_manager_switch_branch(SessionManager *sm, const char *session_id,
 
     /* Preserve the current live chain so no chain is lost. */
     if (branch_record_snapshot_live(s, list) != 0)
-    { free(snap_str); goto cleanup; }
+     {
+        free(snap_str);
+        goto cleanup;
+    }
 
     /* Load the target snapshot into session->messages. */
     session_truncate_messages(s, 0);
@@ -513,9 +595,15 @@ int session_manager_switch_branch(SessionManager *sm, const char *session_id,
         char *now = branch_next_created_at(s);
         if (!now) goto cleanup;
         cJSON *branches = cJSON_GetObjectItem(s->metadata, "branches");
-        if (!branches) { free(now); goto cleanup; }
+        if (!branches) {
+            free(now);
+            goto cleanup;
+        }
         if (branch_set_active_created_at(s, now) != 0)
-        { free(now); goto cleanup; }
+         {
+            free(now);
+            goto cleanup;
+        }
         free(now);
     }
 
@@ -554,7 +642,10 @@ char *session_manager_tag_message_new(SessionManager *sm, const char *session_id
 
     session_manager_lock(sm);
     Session *s = session_manager_load_session_nolock_alloc(sm, session_id);
-    if (!s) { session_manager_unlock(sm); return NULL; }
+    if (!s) {
+        session_manager_unlock(sm);
+        return NULL;
+    }
 
     int rc = -1;
     char *id_out = NULL;
@@ -567,7 +658,10 @@ char *session_manager_tag_message_new(SessionManager *sm, const char *session_id
     if (!m->fork_group_id)
     {
         char *group = str_dup(fork_group_id);
-        if (!group) { free(id); goto cleanup; }
+        if (!group) {
+            free(id);
+            goto cleanup;
+        }
         m->fork_group_id = group;
     }
     free(m->id);
@@ -612,7 +706,10 @@ static int branch_group_chain_count(cJSON *list, const char *group,
             cJSON *m = cJSON_GetArrayItem(rec_msgs, j);
             cJSON *g = m ? cJSON_GetObjectItem(m, "fork_group_id") : NULL;
             if (g && g->valuestring && strcmp(g->valuestring, group) == 0)
-            { hit = 1; break; }
+             {
+                hit = 1;
+                break;
+            }
         }
         if (!hit) continue;
         count++;
@@ -636,7 +733,10 @@ char *session_manager_branch_info_alloc(SessionManager *sm, const char *session_
 
     session_manager_lock(sm);
     Session *s = session_manager_load_session_nolock_alloc(sm, session_id);
-    if (!s) { session_manager_unlock(sm); return NULL; }
+    if (!s) {
+        session_manager_unlock(sm);
+        return NULL;
+    }
 
     char *result = NULL;
     cJSON *arr = cJSON_CreateArray();

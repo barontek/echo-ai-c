@@ -4,6 +4,7 @@
 
 #include "llm/openai_oauth.h"
 
+/* fuzz_openai_oauth_callback - libFuzzer target for openai oauth callback parsing. Depends on: check, the module under test. */
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     char *code = NULL;

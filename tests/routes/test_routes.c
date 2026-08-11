@@ -7,6 +7,7 @@
 #include "../src/agent/message.h"
 #include "../src/server/routes/routes.h"
 
+/* test_routes - unit tests for routes. Depends on: check, the module under test. */
 /* ---------------------------------------------------------------------------
  * route_match
  * --------------------------------------------------------------------------- */
@@ -76,7 +77,7 @@ END_TEST
  * ws_add_message_to_json
  * --------------------------------------------------------------------------- */
 
-START_TEST(test_ws_add_message_to_json_basic)
+START_TEST(test_ws_add_message_to_json_includes_fields)
 {
     Message msg = {0};
     msg.role = "user";
@@ -412,7 +413,7 @@ Suite *routes_suite(void)
     suite_add_tcase(s, tc_match);
 
     TCase *tc_json = tcase_create("ws_add_message_to_json");
-    tcase_add_test(tc_json, test_ws_add_message_to_json_basic);
+    tcase_add_test(tc_json, test_ws_add_message_to_json_includes_fields);
     tcase_add_test(tc_json, test_ws_add_message_to_json_null_role);
     tcase_add_test(tc_json, test_ws_add_message_to_json_null_content);
     tcase_add_test(tc_json, test_ws_add_message_to_json_with_thinking);

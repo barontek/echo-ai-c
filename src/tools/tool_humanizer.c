@@ -144,7 +144,10 @@ Tool *tool_humanizer_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     HumanizerCtx *ctx = calloc(1, sizeof(HumanizerCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("humanizer");

@@ -63,7 +63,11 @@ static AgentConfig *load_agent_config(Conf *conf)
     cfg->provider = v ? v : "ollama";
 
     v = conf_get(conf, "agent.model");
-    if (!v) { log_error("agent.model required in config", NULL); free(cfg); return NULL; }
+    if (!v) {
+        log_error("agent.model required in config", NULL);
+        free(cfg);
+        return NULL;
+    }
     cfg->model = v;
 
     /* Per-provider base URL: [<provider>.base_url] override, else the
@@ -119,7 +123,10 @@ static SessionManager *init_session_manager(Conf *conf)
     }
 
     const char *home = getenv("HOME");
-    if (!home) { log_error("HOME not set, cannot initialize session manager", NULL); return NULL; }
+    if (!home) {
+        log_error("HOME not set, cannot initialize session manager", NULL);
+        return NULL;
+    }
 
     char *data_dir = NULL;
     if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0) return NULL;
@@ -167,7 +174,10 @@ static int run_openai_device_login(OpenAIOAuth *auth);
 static void run_chat(Conf *conf)
 {
     SafetyConfig *safety = load_safety_config(conf);
-    if (!safety) { log_error("failed to load safety config", NULL); return; }
+    if (!safety) {
+        log_error("failed to load safety config", NULL);
+        return;
+    }
 
     {
         int reg_failed = registry_init(safety);
@@ -190,14 +200,31 @@ static void run_chat(Conf *conf)
     }
 
     OpenAIOAuth *openai_auth = openai_oauth_create();
-    if (!openai_auth) { registry_destroy(); safety_config_free(safety); return; }
+    if (!openai_auth) {
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
     registry_set_openai_oauth(openai_auth);
     AgentConfig *cfg = load_agent_config(conf);
     if (cfg) cfg->openai_auth = openai_auth;
-    if (!cfg) { log_error("failed to load agent config", NULL); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
+    if (!cfg) {
+        log_error("failed to load agent config", NULL);
+        openai_oauth_destroy(openai_auth);
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
 
     Agent *agent = agent_create(cfg);
-    if (!agent) { log_error("failed to create agent", NULL); free(cfg); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
+    if (!agent) {
+        log_error("failed to create agent", NULL);
+        free(cfg);
+        openai_oauth_destroy(openai_auth);
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
     agent_set_safety(agent, safety);
 
     SessionManager *sm = NULL;
@@ -327,7 +354,10 @@ static int run_openai_device_login(OpenAIOAuth *auth)
 static void run_cli(Conf *conf)
 {
     SafetyConfig *safety = load_safety_config(conf);
-    if (!safety) { log_error("failed to load safety config", NULL); return; }
+    if (!safety) {
+        log_error("failed to load safety config", NULL);
+        return;
+    }
 
     {
         int reg_failed = registry_init(safety);
@@ -352,14 +382,31 @@ static void run_cli(Conf *conf)
     }
 
     OpenAIOAuth *openai_auth = openai_oauth_create();
-    if (!openai_auth) { registry_destroy(); safety_config_free(safety); return; }
+    if (!openai_auth) {
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
     registry_set_openai_oauth(openai_auth);
     AgentConfig *cfg = load_agent_config(conf);
     if (cfg) cfg->openai_auth = openai_auth;
-    if (!cfg) { log_error("failed to load agent config", NULL); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
+    if (!cfg) {
+        log_error("failed to load agent config", NULL);
+        openai_oauth_destroy(openai_auth);
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
 
     Agent *agent = agent_create(cfg);
-    if (!agent) { log_error("failed to create agent", NULL); free(cfg); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
+    if (!agent) {
+        log_error("failed to create agent", NULL);
+        free(cfg);
+        openai_oauth_destroy(openai_auth);
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
     agent_set_safety(agent, safety);
 
     registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
@@ -417,7 +464,10 @@ static void run_cli(Conf *conf)
                 }
                 free(new_cfg);
             }
-            if (!agent) { log_error("failed to recreate agent", NULL); break; }
+            if (!agent) {
+                log_error("failed to recreate agent", NULL);
+                break;
+            }
             printf("Session reset.\n\n");
             continue;
         }
@@ -457,7 +507,7 @@ static void run_cli(Conf *conf)
         {
             int rc = ct_undo(ct);
             if (rc < 0)
-                printf("Nothing to undo.\n\n");
+                printf("Nothing to undo (or the restore write failed).\n\n");
             else
                 printf("Undone (%d bytes restored).\n\n", rc);
             continue;
@@ -467,7 +517,7 @@ static void run_cli(Conf *conf)
         {
             int rc = ct_redo(ct);
             if (rc < 0)
-                printf("Nothing to redo.\n\n");
+                printf("Nothing to redo (or the restore write failed).\n\n");
             else
                 printf("Redone (%d bytes written).\n\n", rc);
             continue;
@@ -599,7 +649,10 @@ static void run_cli(Conf *conf)
 static void run_web(Conf *conf, const char *config_path)
 {
     SafetyConfig *safety = load_safety_config(conf);
-    if (!safety) { log_error("failed to load safety config", NULL); return; }
+    if (!safety) {
+        log_error("failed to load safety config", NULL);
+        return;
+    }
 
     {
         int reg_failed = registry_init(safety);
@@ -624,14 +677,31 @@ static void run_web(Conf *conf, const char *config_path)
     }
 
     OpenAIOAuth *openai_auth = openai_oauth_create();
-    if (!openai_auth) { registry_destroy(); safety_config_free(safety); return; }
+    if (!openai_auth) {
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
     registry_set_openai_oauth(openai_auth);
     AgentConfig *cfg = load_agent_config(conf);
     if (cfg) cfg->openai_auth = openai_auth;
-    if (!cfg) { log_error("failed to load agent config", NULL); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
+    if (!cfg) {
+        log_error("failed to load agent config", NULL);
+        openai_oauth_destroy(openai_auth);
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
 
     Agent *agent = agent_create(cfg);
-    if (!agent) { log_error("failed to create agent", NULL); free(cfg); openai_oauth_destroy(openai_auth); registry_destroy(); safety_config_free(safety); return; }
+    if (!agent) {
+        log_error("failed to create agent", NULL);
+        free(cfg);
+        openai_oauth_destroy(openai_auth);
+        registry_destroy();
+        safety_config_free(safety);
+        return;
+    }
     agent_set_safety(agent, safety);
 
     registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,

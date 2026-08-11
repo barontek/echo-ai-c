@@ -84,7 +84,11 @@ static char *search_brave_search(SearchProvider *self, const char *query, int nu
         free(url);
         if (asprintf(&url, "%s?q=%s&count=%d&safesearch=off",
                      ctx->base_url, curl_encoded, num_results) < 0)
-        { curl_free(curl_encoded); curl_easy_cleanup(curl); return str_dup("Error: oom"); }
+         {
+            curl_free(curl_encoded);
+            curl_easy_cleanup(curl);
+            return str_dup("Error: oom");
+        }
         curl_free(curl_encoded);
     }
 
@@ -123,7 +127,10 @@ static char *search_brave_search(SearchProvider *self, const char *query, int nu
     if (!buf.data) return str_dup("(no results)");
 
     cJSON *json = cJSON_Parse(buf.data);
-    if (!json) { free(buf.data); return str_dup("Error: failed to parse Brave response"); }
+    if (!json) {
+        free(buf.data);
+        return str_dup("Error: failed to parse Brave response");
+    }
 
     char *result = brave_results_to_json(json);
 
@@ -162,7 +169,10 @@ SearchProvider *search_provider_brave_create(const char *api_key, const char *ba
     if (!p) return NULL;
 
     BraveCtx *ctx = calloc(1, sizeof(BraveCtx));
-    if (!ctx) { free(p); return NULL; }
+    if (!ctx) {
+        free(p);
+        return NULL;
+    }
 
     ctx->api_key = str_dup(api_key);
     ctx->base_url = str_dup(base_url ? base_url : "https://api.search.brave.com/res/v1/web/search");

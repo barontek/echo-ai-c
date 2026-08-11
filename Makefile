@@ -26,6 +26,16 @@ clean: frontend-clean
 test: debug
 	$(CTEST) --test-dir $(BUILD_DIR) -V
 
+# G1: debugger/valgrind helpers for a single Check suite (see
+# scripts/debug-check.sh — uses CK_FORK=no + CK_RUN_* isolation).
+check-debug:
+	@echo "usage: make check-debug BIN=build/tests/... MODE=gdb|valgrind|run"
+	@[ -n "$(BIN)" ] && scripts/debug-check.sh $(MODE) $(BIN) || true
+
+valgrind:
+	@echo "usage: make valgrind BIN=build/tests/..."
+	@[ -n "$(BIN)" ] && scripts/debug-check.sh valgrind $(BIN) || true
+
 run: run-web
 
 run-web: frontend-build debug

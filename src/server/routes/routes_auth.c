@@ -69,14 +69,25 @@ void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
     }
     char *password = str_dup(pw->valuestring);
     cJSON_Delete(json);
-    if (!password) { server_response_error(client, 500, "oom"); return; }
+    if (!password) {
+        server_response_error(client, 500, "oom");
+        return;
+    }
 
     const char *home = getenv("HOME");
-    if (!home) { free(password); server_response_error(client, 500, "HOME not set"); return; }
+    if (!home) {
+        free(password);
+        server_response_error(client, 500, "HOME not set");
+        return;
+    }
 
     char *data_dir = NULL;
     if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0)
-    { free(password); server_response_error(client, 500, "out of memory"); return; }
+     {
+        free(password);
+        server_response_error(client, 500, "out of memory");
+        return;
+    }
 
     SessionManager *sm = session_manager_create(data_dir, password);
     free(data_dir);
@@ -171,11 +182,18 @@ void handle_unlock(HTTPRequest *req, Client *client, ServerContext *ctx)
     }
     char *password = str_dup(pw->valuestring);
     cJSON_Delete(json);
-    if (!password) { server_response_error(client, 500, "oom"); return; }
+    if (!password) {
+        server_response_error(client, 500, "oom");
+        return;
+    }
 
     const char *home = getenv("HOME");
     log_debug("unlock", "home", home ? home : "NULL", NULL);
-    if (!home) { free(password); server_response_error(client, 500, "HOME not set"); return; }
+    if (!home) {
+        free(password);
+        server_response_error(client, 500, "HOME not set");
+        return;
+    }
 
     char *data_dir = NULL;
     if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0)
@@ -392,7 +410,13 @@ void handle_change_password(HTTPRequest *req, Client *client, ServerContext *ctx
     server_response_json(client, 200, "{\"changed\":true}");
 
 cleanup:
-    if (current) { memset(current, 0, current_len); free(current); }
-    if (next) { memset(next, 0, next_len); free(next); }
+    if (current) {
+        memset(current, 0, current_len);
+        free(current);
+    }
+    if (next) {
+        memset(next, 0, next_len);
+        free(next);
+    }
     cJSON_Delete(json);
 }

@@ -13,6 +13,7 @@
 #include "utils/callbacks.h"
 #include "utils/circuit_breaker.h"
 
+/* test_agent_provider - unit tests for agent provider. Depends on: check, the module under test. */
 /* Mock symbols so agent.c links without dragging in the whole tool chain.
  * Same approach as test_agent_save.c (AGENTS.md §11.2): agent.c as a
  * translation unit references these, but the tests only exercise
@@ -51,21 +52,56 @@ void cb_record_failure(CircuitBreaker *cb) { (void)cb; }
 
 CallbackManager *cb_manager_create(void) { return NULL; }
 void cb_manager_run_start(CallbackManager *m, const char *id, const char *p)
-{ (void)m; (void)id; (void)p; }
+ {
+    (void)m;
+    (void)id;
+    (void)p;
+}
 void cb_manager_run_end(CallbackManager *m, const char *id, const char *p)
-{ (void)m; (void)id; (void)p; }
+ {
+    (void)m;
+    (void)id;
+    (void)p;
+}
 void cb_manager_run_error(CallbackManager *m, const char *id, const char *e)
-{ (void)m; (void)id; (void)e; }
+ {
+    (void)m;
+    (void)id;
+    (void)e;
+}
 void cb_manager_llm_start(CallbackManager *m, const char *id, int n)
-{ (void)m; (void)id; (void)n; }
+ {
+    (void)m;
+    (void)id;
+    (void)n;
+}
 void cb_manager_llm_end(CallbackManager *m, const char *id, const char *c)
-{ (void)m; (void)id; (void)c; }
+ {
+    (void)m;
+    (void)id;
+    (void)c;
+}
 void cb_manager_tool_start(CallbackManager *m, const char *id, const char *n, const char *a)
-{ (void)m; (void)id; (void)n; (void)a; }
+ {
+    (void)m;
+    (void)id;
+    (void)n;
+    (void)a;
+}
 void cb_manager_tool_end(CallbackManager *m, const char *id, const char *n, const char *c)
-{ (void)m; (void)id; (void)n; (void)c; }
+ {
+    (void)m;
+    (void)id;
+    (void)n;
+    (void)c;
+}
 void cb_manager_tool_error(CallbackManager *m, const char *id, const char *n, const char *e)
-{ (void)m; (void)id; (void)n; (void)e; }
+ {
+    (void)m;
+    (void)id;
+    (void)n;
+    (void)e;
+}
 
 Message *apply_context_window(Message *msgs, int *count, int max_msgs, int max_chars)
 {
@@ -80,7 +116,11 @@ int metrics_histogram_observe(Metrics *m, const char *n, const char *h, double v
                                 const double *b, int bn) { (void)m; (void)n; (void)h; (void)v; (void)b; (void)bn; return 0; }
 
 int safety_needs_approval(const SafetyConfig *cfg, const char *tool_name)
-{ (void)cfg; (void)tool_name; return 0; }
+ {
+    (void)cfg;
+    (void)tool_name;
+    return 0;
+}
 
 /* ---- Mock provider (get_provider) ---- */
 

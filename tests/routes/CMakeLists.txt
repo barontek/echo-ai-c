@@ -19,6 +19,7 @@ add_test(NAME test_routes_session COMMAND test_routes_session)
 add_executable(test_routes_session_handlers
     ../../src/server/routes/routes_session.c
     ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
     test_routes_session_handlers.c
 )
 target_compile_definitions(test_routes_session_handlers PRIVATE ROUTES_SESSION_ALLOC_TEST=1)
@@ -58,6 +59,7 @@ add_test(NAME test_routes_openai_auth COMMAND test_routes_openai_auth)
 add_executable(test_routes_chat
     ../../src/server/routes/routes_chat.c
     ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
     test_routes_chat.c
 )
 target_compile_definitions(test_routes_chat PRIVATE ROUTES_CHAT_TEST=1)

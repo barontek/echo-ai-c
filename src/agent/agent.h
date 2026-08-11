@@ -65,7 +65,7 @@ typedef struct {
     int max_tool_result_chars;
     int parallel_tool_exec;
     char *effort; /* owned; NULL = provider default */
-    volatile int cancel_requested;
+    _Atomic int cancel_requested;
     SessionManager *sm;
     CircuitBreaker *cb;
     CallbackManager *cb_mgr;
@@ -118,7 +118,8 @@ void agent_destroy(Agent *agent);
  * agent_run_new - run one full agent turn (buffered, non-streaming)
  * @agent: agent to run; must be non-NULL.
  * @user_input: user message text, borrowed for the duration of the call;
- *   a copy is appended to the agent's message list.
+ *   a copy is appended to the agent's message list. NULL is accepted and
+ *   appends an empty user turn.
  *
  * Appends the user turn, then loops: LLM call, tool execution, until the
  * model produces a final answer or max_iterations is exhausted. The
@@ -300,9 +301,13 @@ void agent_set_callback_manager(Agent *agent, CallbackManager *mgr);
  * @model: model name; the agent keeps its own copy. NULL is ignored and
  *   the current model is kept.
  *
- * Return: void. Not thread-safe.
+ * The previous model stays installed on allocation failure, never a
+ * silently-cleared one.
+ *
+ * Return: 0 on success, -1 on NULL arguments or allocation failure. Not
+ * thread-safe.
  */
-void agent_set_model(Agent *agent, const char *model);
+int agent_set_model(Agent *agent, const char *model);
 
 /**
  * agent_set_provider - swap the live LLM provider

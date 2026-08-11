@@ -8,6 +8,7 @@
 #include "../src/server/routes/routes_auth.h"
 #include "../src/utils/string_utils.h"
 
+/* test_routes_auth - unit tests for routes auth. Depends on: check, the module under test. */
 extern int openai_oauth_stub_attach_result;
 
 /* ---------------------------------------------------------------------------
@@ -87,7 +88,11 @@ int server_response_error(Client *client, int status, const char *msg)
 
 void client_close(Client *client) { (void)client; }
 int server_sse_write(Client *client, const char *data)
-{ (void)client; (void)data; return 0; }
+ {
+    (void)client;
+    (void)data;
+    return 0;
+}
 void routes_ws_invalidate_auth(ServerContext *ctx) { (void)ctx; }
 
 /* ---------------------------------------------------------------------------
@@ -195,7 +200,12 @@ void log_init(void) {}
 void log_cleanup(void) {}
 void log_set_level(int l) { (void)l; }
 void log_msg(int level, const char *file, int line, const char *fmt, ...)
-{ (void)level; (void)file; (void)line; (void)fmt; }
+ {
+    (void)level;
+    (void)file;
+    (void)line;
+    (void)fmt;
+}
 
 /* ---------------------------------------------------------------------------
  * handle_setup

@@ -34,7 +34,10 @@ void routes_chat_test_set_alloc_fail(int nth_allocation)
 static int rc_test_asprintf(char **strp, const char *fmt, ...)
 {
     rc_alloc_counter++;
-    if (rc_alloc_counter == rc_alloc_fail_at) { *strp = NULL; return -1; }
+    if (rc_alloc_counter == rc_alloc_fail_at) {
+        *strp = NULL;
+        return -1;
+    }
     va_list ap;
     va_start(ap, fmt);
     int rc = vasprintf(strp, fmt, ap);
@@ -137,17 +140,30 @@ static void sse_on_chunk(const char *chunk, void *userdata)
     if (!c || !c->client) return;
 
     cJSON *event = cJSON_CreateObject();
-    if (!event) return;
+    if (!event)
+    {
+        /* C11: dropped stream chunks were silent on both transports. */
+        log_error("sse_on_chunk: OOM building event", NULL);
+        return;
+    }
     cJSON_AddStringToObject(event, "type", "content");
     cJSON_AddStringToObject(event, "content", chunk ? chunk : "");
     char *json = cJSON_PrintUnformatted(event);
     cJSON_Delete(event);
-    if (!json) return;
+    if (!json)
+    {
+        log_error("sse_on_chunk: OOM rendering event", NULL);
+        return;
+    }
 
     char *sse = NULL;
     if (asprintf(&sse, "data: %s\n\n", json) < 0) sse = NULL;
     free(json);
-    if (!sse) return;
+    if (!sse)
+    {
+        log_error("sse_on_chunk: OOM building SSE frame", NULL);
+        return;
+    }
     server_sse_write(c->client, sse);
     free(sse);
 }
@@ -166,7 +182,10 @@ void handle_sse_stream(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
 
-    if (!ctx->agent) { server_response_error(client, 500, "no agent"); return; }
+    if (!ctx->agent) {
+        server_response_error(client, 500, "no agent");
+        return;
+    }
 
     char *headers = NULL;
     if (asprintf(&headers,

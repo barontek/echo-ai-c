@@ -47,7 +47,10 @@ static char **parse_csv(const char *val, int *count)
     if (arr.count == 0) return NULL;
 
     char **result = malloc(sizeof(char *) * arr.count);
-    if (!result) { str_array_free(&arr); return NULL; }
+    if (!result) {
+        str_array_free(&arr);
+        return NULL;
+    }
 
     for (int i = 0; i < arr.count; i++)
     {
@@ -72,7 +75,10 @@ int safety_load_from_conf(SafetyConfig *cfg, const Conf *conf)
     if (v)
     {
         char *dup = str_dup(v);
-        if (dup) { free(cfg->workspace); cfg->workspace = dup; }
+        if (dup) {
+            free(cfg->workspace);
+            cfg->workspace = dup;
+        }
         else failed = 1;
     }
 
@@ -86,64 +92,113 @@ int safety_load_from_conf(SafetyConfig *cfg, const Conf *conf)
     if (v && v[0])
     {
         char **parsed = parse_csv(v, &cfg->allowed_commands_count);
-        if (parsed) { free(cfg->allowed_commands); cfg->allowed_commands = parsed; }
+        if (parsed) {
+            free(cfg->allowed_commands);
+            cfg->allowed_commands = parsed;
+        }
         else failed = 1;
     }
-    else if (v) { free(cfg->allowed_commands); cfg->allowed_commands = NULL; cfg->allowed_commands_count = 0; }
+    else if (v) {
+        free(cfg->allowed_commands);
+        cfg->allowed_commands = NULL;
+        cfg->allowed_commands_count = 0;
+    }
 
     v = conf_get(conf, "safety.blocked_commands");
     if (v && v[0])
     {
         char **parsed = parse_csv(v, &cfg->blocked_commands_count);
-        if (parsed) { free(cfg->blocked_commands); cfg->blocked_commands = parsed; }
+        if (parsed) {
+            free(cfg->blocked_commands);
+            cfg->blocked_commands = parsed;
+        }
         else failed = 1;
     }
-    else if (v) { free(cfg->blocked_commands); cfg->blocked_commands = NULL; cfg->blocked_commands_count = 0; }
+    else if (v) {
+        free(cfg->blocked_commands);
+        cfg->blocked_commands = NULL;
+        cfg->blocked_commands_count = 0;
+    }
 
     v = conf_get(conf, "safety.allowed_extensions");
     if (v && v[0])
     {
         char **parsed = parse_csv(v, &cfg->allowed_extensions_count);
-        if (parsed) { free(cfg->allowed_extensions); cfg->allowed_extensions = parsed; }
+        if (parsed) {
+            free(cfg->allowed_extensions);
+            cfg->allowed_extensions = parsed;
+        }
         else failed = 1;
     }
-    else if (v) { free(cfg->allowed_extensions); cfg->allowed_extensions = NULL; cfg->allowed_extensions_count = 0; }
+    else if (v) {
+        free(cfg->allowed_extensions);
+        cfg->allowed_extensions = NULL;
+        cfg->allowed_extensions_count = 0;
+    }
 
     v = conf_get(conf, "safety.blocked_extensions");
     if (v && v[0])
     {
         char **parsed = parse_csv(v, &cfg->blocked_extensions_count);
-        if (parsed) { free(cfg->blocked_extensions); cfg->blocked_extensions = parsed; }
+        if (parsed) {
+            free(cfg->blocked_extensions);
+            cfg->blocked_extensions = parsed;
+        }
         else failed = 1;
     }
-    else if (v) { free(cfg->blocked_extensions); cfg->blocked_extensions = NULL; cfg->blocked_extensions_count = 0; }
+    else if (v) {
+        free(cfg->blocked_extensions);
+        cfg->blocked_extensions = NULL;
+        cfg->blocked_extensions_count = 0;
+    }
 
     v = conf_get(conf, "safety.blocked_paths");
     if (v && v[0])
     {
         char **parsed = parse_csv(v, &cfg->blocked_paths_count);
-        if (parsed) { free(cfg->blocked_paths); cfg->blocked_paths = parsed; }
+        if (parsed) {
+            free(cfg->blocked_paths);
+            cfg->blocked_paths = parsed;
+        }
         else failed = 1;
     }
-    else if (v) { free(cfg->blocked_paths); cfg->blocked_paths = NULL; cfg->blocked_paths_count = 0; }
+    else if (v) {
+        free(cfg->blocked_paths);
+        cfg->blocked_paths = NULL;
+        cfg->blocked_paths_count = 0;
+    }
 
     v = conf_get(conf, "safety.allowed_domains");
     if (v && v[0])
     {
         char **parsed = parse_csv(v, &cfg->allowed_domains_count);
-        if (parsed) { free(cfg->allowed_domains); cfg->allowed_domains = parsed; }
+        if (parsed) {
+            free(cfg->allowed_domains);
+            cfg->allowed_domains = parsed;
+        }
         else failed = 1;
     }
-    else if (v) { free(cfg->allowed_domains); cfg->allowed_domains = NULL; cfg->allowed_domains_count = 0; }
+    else if (v) {
+        free(cfg->allowed_domains);
+        cfg->allowed_domains = NULL;
+        cfg->allowed_domains_count = 0;
+    }
 
     v = conf_get(conf, "safety.require_approval_for");
     if (v && v[0])
     {
         char **parsed = parse_csv(v, &cfg->require_approval_count);
-        if (parsed) { free(cfg->require_approval_for); cfg->require_approval_for = parsed; }
+        if (parsed) {
+            free(cfg->require_approval_for);
+            cfg->require_approval_for = parsed;
+        }
         else failed = 1;
     }
-    else if (v) { free(cfg->require_approval_for); cfg->require_approval_for = NULL; cfg->require_approval_count = 0; }
+    else if (v) {
+        free(cfg->require_approval_for);
+        cfg->require_approval_for = NULL;
+        cfg->require_approval_count = 0;
+    }
 
     /* Sensible defaults: tools that modify files or execute code */
     if (cfg->require_approval_count == 0)
@@ -186,7 +241,10 @@ int safety_load_from_conf(SafetyConfig *cfg, const Conf *conf)
     if (v)
     {
         char *dup = str_dup(v);
-        if (dup) { free(cfg->audit_log_path); cfg->audit_log_path = dup; }
+        if (dup) {
+            free(cfg->audit_log_path);
+            cfg->audit_log_path = dup;
+        }
         else failed = 1;
     }
 
@@ -234,7 +292,10 @@ int safety_check_path(const SafetyConfig *cfg, const char *path)
         int allowed = 0;
         for (int i = 0; i < cfg->allowed_extensions_count; i++)
         {
-            if (str_ends_with(path, cfg->allowed_extensions[i])) { allowed = 1; break; }
+            if (str_ends_with(path, cfg->allowed_extensions[i])) {
+                allowed = 1;
+                break;
+            }
         }
         if (!allowed) return 0;
     }

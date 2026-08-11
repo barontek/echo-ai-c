@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 #include "config.h"
 #include "../utils/string_utils.h"
@@ -63,7 +64,10 @@ Conf *conf_load(const char *path)
     if (!fp) return NULL;
 
     Conf *conf = calloc(1, sizeof(Conf));
-    if (!conf) { fclose(fp); return NULL; }
+    if (!conf) {
+        fclose(fp);
+        return NULL;
+    }
 
     char section[256] = "";
     char line[4096];
@@ -107,12 +111,18 @@ Conf *conf_load(const char *path)
             if (section[0])
             {
                 if (asprintf(&full_key, "%s.%s", section, key) < 0)
-                { free(full_key); continue; }
+                 {
+                    free(full_key);
+                    continue;
+                }
             }
             else
             {
                 if (asprintf(&full_key, "%s", key) < 0)
-                { free(full_key); continue; }
+                 {
+                    free(full_key);
+                    continue;
+                }
             }
 
             /* fixed-size table: entries past MAX_ENTRIES are silently dropped */
@@ -173,6 +183,11 @@ int conf_get_int(const Conf *conf, const char *key, int def)
     char *end = NULL;
     long result = strtol(val, &end, 10);
     if (end == val || *end != '\0') return def;
+    /* C13: clamp to the int range — a config value of 2^40 would
+     * otherwise become an implementation-defined (and negative) int that
+     * later feeds overflow-prone arithmetic. */
+    if (result > INT_MAX) return def;
+    if (result < INT_MIN) return def;
     return (int)result;
 }
 

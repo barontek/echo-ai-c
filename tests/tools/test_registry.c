@@ -5,6 +5,7 @@
 #include "../src/tools/registry.h"
 #include "../src/utils/string_utils.h"
 
+/* test_registry - registry unit tests. Depends on: check, the module under test. */
 static void fake_tool_destroy(Tool *tool)
 {
     free(tool->name);
@@ -111,6 +112,33 @@ START_TEST(test_registry_set_delegate_config_fail_third_alloc)
 }
 END_TEST
 
+/* B1 regression: registry_set_delegate_config str_dups four strings into
+ * the registry-owned delegate_config; registry_destroy used to leak them
+ * on every shutdown. With the fix, destroy releases exactly those four
+ * allocations (no tools registered, so nothing else frees in registry.c). */
+START_TEST(test_registry_destroy_releases_delegate_config)
+{
+    registry_set_delegate_config("provider_x", "http://url_x", "token_x",
+                                 "model_x", 1024, 300, 0.7, 30, 10);
+    /* Tally reset after the set, so only the destroy's frees count */
+    registry_test_free_reset();
+    registry_destroy();
+    ck_assert_int_eq(registry_test_free_tally(), 4);
+    /* registry is reusable after destroy */
+    registry_set_delegate_config("provider_y", "http://url_y", "token_y",
+                                 "model_y", 1024, 300, 0.7, 30, 10);
+    const char *pn = NULL, *bu = NULL, *tk = NULL, *md = NULL;
+    ck_assert_int_eq(registry_get_delegate_config(&pn, &bu, &tk, &md,
+        NULL, NULL, NULL, NULL, NULL), 0);
+    ck_assert_str_eq(pn, "provider_y");
+    registry_set_delegate_config(NULL, NULL, NULL, NULL, 0, 0, 0.0, 0, 0);
+    registry_test_free_reset();
+    registry_destroy();
+    /* the four NULL fields still go through free (NULL-safe) */
+    ck_assert_int_eq(registry_test_free_tally(), 4);
+}
+END_TEST
+
 Suite *registry_suite(void)
 {
     Suite *s = suite_create("Registry");
@@ -125,6 +153,7 @@ Suite *registry_suite(void)
     tcase_add_test(tc_fault, test_registry_set_delegate_config_fail_first_alloc);
     tcase_add_test(tc_fault, test_registry_set_delegate_config_fail_second_alloc);
     tcase_add_test(tc_fault, test_registry_set_delegate_config_fail_third_alloc);
+    tcase_add_test(tc_fault, test_registry_destroy_releases_delegate_config);
     suite_add_tcase(s, tc_fault);
 
     return s;

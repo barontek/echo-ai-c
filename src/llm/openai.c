@@ -313,12 +313,21 @@ static int add_provider_state(cJSON *input, const char *provider_state)
         cJSON *type = cJSON_GetObjectItemCaseSensitive(item, "type");
         if (!cJSON_IsObject(item) || !valid_nonempty_string(type) ||
             strcmp(cJSON_GetStringValue(type), "reasoning") != 0)
-        { cJSON_Delete(items); return -1; }
+         {
+            cJSON_Delete(items);
+            return -1;
+        }
         cJSON *copy = cJSON_Duplicate(item, 1);
         if (!copy)
-        { cJSON_Delete(items); return -1; }
+         {
+            cJSON_Delete(items);
+            return -1;
+        }
         if (json_array_add(input, copy) != 0)
-        { cJSON_Delete(items); return -1; }
+         {
+            cJSON_Delete(items);
+            return -1;
+        }
     }
     cJSON_Delete(items);
     return 0;
@@ -389,7 +398,10 @@ static cJSON *convert_tools(const char *tools_json)
         return NULL;
     }
     cJSON *result = cJSON_CreateArray();
-    if (!result) { cJSON_Delete(source); return NULL; }
+    if (!result) {
+        cJSON_Delete(source);
+        return NULL;
+    }
     cJSON *item = NULL;
     cJSON_ArrayForEach(item, source)
     {
@@ -647,7 +659,10 @@ static int build_headers(const Credentials *credentials,
     int written = snprintf(authorization, sizeof(authorization),
                            "Authorization: Bearer %s", credentials->token);
     if (written < 0 || (size_t)written >= sizeof(authorization))
-    { OPENSSL_cleanse(authorization, sizeof(authorization)); return -1; }
+     {
+        OPENSSL_cleanse(authorization, sizeof(authorization));
+        return -1;
+    }
     int header_result = header_append(headers_out, "Content-Type: application/json") == 0 &&
         header_append(headers_out, authorization) == 0 &&
         header_append(headers_out, "originator: echo-ai") == 0 &&
@@ -758,7 +773,10 @@ static void log_empty_catalog_diagnostic(const char *body)
     cJSON *root = NULL;
     if (!body || parse_bounded_json(body, OPENAI_MAX_MODELS_RESPONSE_BYTES,
                                     &root) != 0 || !cJSON_IsObject(root))
-    { cJSON_Delete(root); return; }
+     {
+        cJSON_Delete(root);
+        return;
+    }
     cJSON *items = cJSON_GetObjectItemCaseSensitive(root, "models");
     int total = cJSON_IsArray(items) ? cJSON_GetArraySize(items) : 0;
     int list_visible = 0;
@@ -804,14 +822,23 @@ static int parse_models_response(const char *raw, char ***models_out,
     cJSON *root = NULL;
     if (parse_bounded_json(raw, OPENAI_MAX_MODELS_RESPONSE_BYTES, &root) != 0 ||
         !cJSON_IsObject(root))
-    { cJSON_Delete(root); return -1; }
+     {
+        cJSON_Delete(root);
+        return -1;
+    }
     cJSON *items = cJSON_GetObjectItemCaseSensitive(root, "models");
     int item_count = cJSON_IsArray(items) ? cJSON_GetArraySize(items) : -1;
     if (item_count < 0 || (size_t)item_count > OPENAI_MAX_MODELS)
-    { cJSON_Delete(root); return -1; }
+     {
+        cJSON_Delete(root);
+        return -1;
+    }
     char **models = item_count > 0 ?
         calloc((size_t)item_count, sizeof(*models)) : NULL;
-    if (item_count > 0 && !models) { cJSON_Delete(root); return -1; }
+    if (item_count > 0 && !models) {
+        cJSON_Delete(root);
+        return -1;
+    }
     size_t count = 0U;
     cJSON *item = NULL;
     cJSON_ArrayForEach(item, items)
@@ -905,10 +932,17 @@ int openai_models_fetch_alloc(OpenAIOAuth *auth, char ***models_out,
         char *body = NULL;
         long status = 0L;
         if (models_request_once(&credentials, &body, &status) != 0)
-        { log_error("OpenAI Codex models request failed", NULL); free(body); break; }
+         {
+            log_error("OpenAI Codex models request failed", NULL);
+            free(body);
+            break;
+        }
         if (status == 401L && attempt == 0 &&
             credentials_refresh_401(auth, &credentials) == 0)
-        { free(body); continue; }
+         {
+            free(body);
+            continue;
+        }
         if (status < 200L || status >= 300L)
         {
             log_http_error("models", status, body);
@@ -938,7 +972,10 @@ static void copy_safe_error_field(char output[OPENAI_ERROR_FIELD_BYTES],
 {
     const char *value = cJSON_IsString(field) ? cJSON_GetStringValue(field) : NULL;
     size_t used = 0U;
-    if (!value) { output[0] = '\0'; return; }
+    if (!value) {
+        output[0] = '\0';
+        return;
+    }
     while (*value && used + 1U < OPENAI_ERROR_FIELD_BYTES)
     {
         unsigned char byte = (unsigned char)*value++;
@@ -1090,9 +1127,15 @@ static LLMResponse *parse_response(const char *raw)
         return NULL;
     }
     cJSON *output = cJSON_GetObjectItemCaseSensitive(root, "output");
-    if (!cJSON_IsArray(output)) { cJSON_Delete(root); return NULL; }
+    if (!cJSON_IsArray(output)) {
+        cJSON_Delete(root);
+        return NULL;
+    }
     LLMResponse *response = llm_response_create();
-    if (!response) { cJSON_Delete(root); return NULL; }
+    if (!response) {
+        cJSON_Delete(root);
+        return NULL;
+    }
     char *reasoning_text = NULL;
     cJSON *item = NULL;
     cJSON_ArrayForEach(item, output)
@@ -1115,7 +1158,10 @@ static LLMResponse *parse_response(const char *raw)
             {
                 if ((reasoning_text && str_append(&reasoning_text, "\n") != 0) ||
                     str_append(&reasoning_text, summary) != 0)
-                { free(summary); goto fail; }
+                 {
+                    free(summary);
+                    goto fail;
+                }
                 free(summary);
             }
         }
@@ -1126,7 +1172,10 @@ static LLMResponse *parse_response(const char *raw)
         char *tagged = NULL;
         if (asprintf(&tagged, "<think>\n%s\n</think>\n\n%s", reasoning_text,
                      response->content ? response->content : "") < 0)
-        { free(reasoning_text); goto fail; }
+         {
+            free(reasoning_text);
+            goto fail;
+        }
         free(response->content);
         response->content = tagged;
         response->thinking = reasoning_text; /* ownership transferred */
@@ -1315,19 +1364,32 @@ static int merge_completed_output(StreamParser *parser, const cJSON *response)
     {
         cJSON *type = cJSON_GetObjectItemCaseSensitive(item, "type");
         if (!valid_nonempty_string(type))
-        { cJSON_Delete(reasoning); return -1; }
+         {
+            cJSON_Delete(reasoning);
+            return -1;
+        }
         if (strcmp(cJSON_GetStringValue(type), "reasoning") == 0)
         {
             cJSON *copy = cJSON_Duplicate(item, 1);
             if (!copy || !cJSON_AddItemToArray(reasoning, copy))
-            { cJSON_Delete(copy); cJSON_Delete(reasoning); return -1; }
+             {
+                cJSON_Delete(copy);
+                cJSON_Delete(reasoning);
+                return -1;
+            }
         }
         else if (strcmp(cJSON_GetStringValue(type), "function_call") == 0 &&
             upsert_function_item(parser, index, item) != 0)
-        { cJSON_Delete(reasoning); return -1; }
+         {
+            cJSON_Delete(reasoning);
+            return -1;
+        }
         else if (strcmp(cJSON_GetStringValue(type), "message") == 0 &&
                  capture_message_phase(parser->response, item) != 0)
-        { cJSON_Delete(reasoning); return -1; }
+         {
+            cJSON_Delete(reasoning);
+            return -1;
+        }
         index++;
     }
     char *serialized = cJSON_GetArraySize(reasoning) > 0 ?
@@ -1426,7 +1488,10 @@ static char *reasoning_summary_join(const cJSON *item)
         {
             if (str_append(&joined, "\n") != 0 ||
                 str_append(&joined, part) != 0)
-            { free(joined); return NULL; }
+             {
+                free(joined);
+                return NULL;
+            }
         }
     }
     return joined;
@@ -1447,8 +1512,14 @@ static int emit_summary_text(StreamParser *parser, const char *text)
     char *dst = clean;
     while (*src)
     {
-        if (strncmp(src, "<!--", 4) == 0) { src += 4; continue; }
-        if (strncmp(src, "-->", 3) == 0) { src += 3; continue; }
+        if (strncmp(src, "<!--", 4) == 0) {
+            src += 4;
+            continue;
+        }
+        if (strncmp(src, "-->", 3) == 0) {
+            src += 3;
+            continue;
+        }
         *dst++ = *src++;
     }
     *dst = '\0';
@@ -1473,7 +1544,10 @@ static int parse_stream_event(StreamParser *parser, const char *text)
         return -1;
     }
     cJSON *type_json = cJSON_GetObjectItemCaseSensitive(event, "type");
-    if (!valid_nonempty_string(type_json)) { cJSON_Delete(event); return -1; }
+    if (!valid_nonempty_string(type_json)) {
+        cJSON_Delete(event);
+        return -1;
+    }
     const char *type = cJSON_GetStringValue(type_json);
     int result = 0;
     if (strcmp(type, "response.output_text.delta") == 0)

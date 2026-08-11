@@ -97,7 +97,10 @@ Tool *tool_glob_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     GlobCtx *ctx = calloc(1, sizeof(GlobCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("glob");

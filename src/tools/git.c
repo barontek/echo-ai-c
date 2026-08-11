@@ -261,7 +261,10 @@ Tool *tool_git_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     GitCtx *ctx = calloc(1, sizeof(GitCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->timeout = 60;
 
     t->name = str_dup("git");

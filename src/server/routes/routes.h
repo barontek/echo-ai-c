@@ -57,11 +57,11 @@ int route_match(const char *method, const char *path, const Route *r);
  * tool_calls array with has_tools only when present. NULL/empty strings are
  * coalesced to "unknown"/"".
  *
- * Return: void. Allocation failure inside cJSON silently drops fields —
- * callers cannot distinguish a truncated object. Thread-safe (reads only).
+ * Return: 0 on success, -1 when m or msg is NULL (allocation failures
+ * inside cJSON silently drop fields — callers cannot distinguish a
+ * truncated object). Thread-safe (reads only).
  */
 int ws_add_message_to_json(cJSON *m, const Message *msg);
-
 /**
  * server_sse_write - queue a Server-Sent-Events frame on a client
  * @client: connection to write to; borrowed. Non-WS connections only.
@@ -69,10 +69,11 @@ int ws_add_message_to_json(cJSON *m, const Message *msg);
  *   synchronously, so the caller may free it after return.
  *
  * The copy is written asynchronously on the libuv loop; this call never
- * blocks. Failure (OOM, or client already upgraded to WebSocket) is silent.
+ * blocks. Allocation failures are logged with context.
  *
- * Return: void; failures are logged nowhere and must be treated as best
- * effort. Thread-safety: libuv loop thread only, matching its callers.
+ * Return: 0 on success, -1 on failure (NULL/websocket client, OOM
+ * duplicating the frame, or uv_write failing to start). Thread-safety:
+ * libuv loop thread only, matching its callers.
  */
 int server_sse_write(Client *client, const char *data);
 

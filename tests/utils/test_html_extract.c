@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* test_html_extract - unit tests for html extract. Depends on: check, the module under test. */
 static Suite *html_extract_suite(void);
 
 int main(void)
@@ -331,15 +332,50 @@ static int is_valid_utf8(const char *s)
         unsigned char c = (unsigned char)s[i];
         size_t need;
         unsigned char first_lo, first_hi;
-        if (c < 0x80) { i++; continue; }
-        if (c >= 0xC2 && c <= 0xDF) { need = 1; first_lo = 0x80; first_hi = 0xBF; }
-        else if (c == 0xE0)         { need = 2; first_lo = 0xA0; first_hi = 0xBF; }
-        else if (c >= 0xE1 && c <= 0xEC) { need = 2; first_lo = 0x80; first_hi = 0xBF; }
-        else if (c == 0xED)         { need = 2; first_lo = 0x80; first_hi = 0x9F; }
-        else if (c >= 0xEE && c <= 0xEF) { need = 2; first_lo = 0x80; first_hi = 0xBF; }
-        else if (c == 0xF0)         { need = 3; first_lo = 0x90; first_hi = 0xBF; }
-        else if (c >= 0xF1 && c <= 0xF3) { need = 3; first_lo = 0x80; first_hi = 0xBF; }
-        else if (c == 0xF4)         { need = 3; first_lo = 0x80; first_hi = 0x8F; }
+        if (c < 0x80) {
+            i++;
+            continue;
+        }
+        if (c >= 0xC2 && c <= 0xDF) {
+            need = 1;
+            first_lo = 0x80;
+            first_hi = 0xBF;
+        }
+        else if (c == 0xE0) {
+            need = 2;
+            first_lo = 0xA0;
+            first_hi = 0xBF;
+        }
+        else if (c >= 0xE1 && c <= 0xEC) {
+            need = 2;
+            first_lo = 0x80;
+            first_hi = 0xBF;
+        }
+        else if (c == 0xED) {
+            need = 2;
+            first_lo = 0x80;
+            first_hi = 0x9F;
+        }
+        else if (c >= 0xEE && c <= 0xEF) {
+            need = 2;
+            first_lo = 0x80;
+            first_hi = 0xBF;
+        }
+        else if (c == 0xF0) {
+            need = 3;
+            first_lo = 0x90;
+            first_hi = 0xBF;
+        }
+        else if (c >= 0xF1 && c <= 0xF3) {
+            need = 3;
+            first_lo = 0x80;
+            first_hi = 0xBF;
+        }
+        else if (c == 0xF4) {
+            need = 3;
+            first_lo = 0x80;
+            first_hi = 0x8F;
+        }
         else return 0;
         if (i + need >= n) return 0;
         for (size_t k = 1; k <= need; k++)
@@ -473,7 +509,10 @@ END_TEST
 
 static Suite *html_extract_suite(void)
 {
-    TCase *tc = tcase_create("html_extract");
+    /* E15: split the former single flat tcase into per-area TCases */
+    Suite *s = suite_create("html_extract");
+
+    TCase *tc = tcase_create("Extraction");
     tcase_add_test(tc, test_extracts_plain_text);
     tcase_add_test(tc, test_strips_boilerplate_tags);
     tcase_add_test(tc, test_strips_script_and_style);
@@ -487,16 +526,28 @@ static Suite *html_extract_suite(void)
     tcase_add_test(tc, test_citation_deduplicated);
     tcase_add_test(tc, test_nav_class_blocks_pruned);
     tcase_add_test(tc, test_small_budget_truncates_with_marker);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("Dispatch");
     tcase_add_test(tc, test_dispatch_html_by_type);
     tcase_add_test(tc, test_dispatch_sniffs_missing_type);
     tcase_add_test(tc, test_dispatch_plain_text_passthrough);
     tcase_add_test(tc, test_dispatch_json_truncated);
     tcase_add_test(tc, test_dispatch_binary_descriptor);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("FaultInjection");
     tcase_add_test(tc, test_oom_allocation_failure);
     tcase_add_test(tc, test_oom_mid_parse_rolls_back);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("Ellipsis");
     tcase_add_test(tc, test_ellipsis_short_passthrough);
     tcase_add_test(tc, test_ellipsis_truncates);
     tcase_add_test(tc, test_ellipsis_keeps_marker_when_room);
+    suite_add_tcase(s, tc);
+
+    tc = tcase_create("Encodings");
     tcase_add_test(tc, test_entities_decode_to_valid_utf8);
     tcase_add_test(tc, test_numeric_entities_keep_full_codepoint);
     tcase_add_test(tc, test_latin1_body_transcoded);
@@ -505,8 +556,7 @@ static Suite *html_extract_suite(void)
     tcase_add_test(tc, test_plain_text_latin1_sanitized);
     tcase_add_test(tc, test_truncation_does_not_split_utf8);
     tcase_add_test(tc, test_ellipsis_utf8_boundary);
-
-    Suite *s = suite_create("html_extract");
     suite_add_tcase(s, tc);
+
     return s;
 }

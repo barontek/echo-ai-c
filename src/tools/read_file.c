@@ -63,7 +63,11 @@ static ToolResult *read_file_execute(Tool *self, const char *args_json)
     fseek(fp, 0, SEEK_SET);
 
     char *content = malloc((size_t)size + 1);
-    if (!content) { fclose(fp); free(resolved); return NULL; }
+    if (!content) {
+        fclose(fp);
+        free(resolved);
+        return NULL;
+    }
 
     size_t read_size = fread(content, 1, (size_t)size, fp);
     content[read_size] = '\0';
@@ -99,7 +103,10 @@ Tool *tool_read_file_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     FileCtx *ctx = calloc(1, sizeof(FileCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("read_file");

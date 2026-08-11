@@ -6,9 +6,15 @@
 
 #include "../src/server/routes/routes.h"
 #include "../src/server/routes/routes_session.h"
+
+/* Defined in routes_session.c under ROUTES_SESSION_ALLOC_TEST (the test
+ * target's compile definition); not in the header since production builds
+ * never see it. */
+void routes_session_test_set_alloc_fail(int nth_allocation);
 #include "../src/session/session_branch.h"
 #include "../src/utils/string_utils.h"
 
+/* test_routes_session_handlers - unit tests for routes session handlers. Depends on: check, the module under test. */
 /* ---------------------------------------------------------------------------
  * Stub state — controlling return values for mocked functions
  * --------------------------------------------------------------------------- */
@@ -94,7 +100,11 @@ int server_response_error(Client *client, int status, const char *msg)
 
 void client_close(Client *client) { (void)client; }
 int server_sse_write(Client *client, const char *data)
-{ (void)client; (void)data; return 0; }
+ {
+    (void)client;
+    (void)data;
+    return 0;
+}
 
 /* ---------------------------------------------------------------------------
  * Stub middleware
@@ -229,13 +239,21 @@ Session *session_manager_import_session_new(SessionManager *sm, const char *json
     (void)sm; (void)json_str;
     if (stub_import_result_null) return NULL;
     Session *s = calloc(1, sizeof(Session));
-    if (s) { s->id = str_dup("imp-123"); s->title = str_dup("Imported Session"); }
+    if (s) {
+        s->id = str_dup("imp-123");
+        s->title = str_dup("Imported Session");
+    }
     return s;
 }
 
 int session_manager_truncate_history(SessionManager *sm, const char *session_id,
                                       int index)
-{ (void)sm; (void)session_id; (void)index; return 0; }
+ {
+    (void)sm;
+    (void)session_id;
+    (void)index;
+    return 0;
+}
 
 static const char *stub_branch_info_json = NULL;
 char *session_manager_branch_info_alloc(SessionManager *sm, const char *sid)
@@ -316,7 +334,10 @@ static HTTPRequest make_req(const char *path, const char *body,
 {
     HTTPRequest req = {0};
     if (path) strncpy(req.path, path, sizeof(req.path) - 1);
-    if (body) { req.body = str_dup(body); req.body_len = strlen(body); }
+    if (body) {
+        req.body = str_dup(body);
+        req.body_len = strlen(body);
+    }
     if (headers) strncpy(req.headers, headers, sizeof(req.headers) - 1);
     return req;
 }
@@ -360,6 +381,9 @@ END_TEST
 
 START_TEST(test_handle_sessions_list_null)
 {
+    /* C8: a failing session store must surface as an error, not as an
+     * empty session list (a DB outage looked identical to "no sessions").
+     * The old contract returned 200 {"sessions":[]} here. */
     stub_unlock_result = 1;
     stub_list_result_null = 1;
     SessionManager sm = {0};
@@ -367,8 +391,8 @@ START_TEST(test_handle_sessions_list_null)
     HTTPRequest req = make_req("/api/sessions", NULL, NULL);
 
     handle_sessions(&req, NULL, &ctx);
-    ck_assert_int_eq(captured_status, 200);
-    ck_assert(captured_body && strstr(captured_body, "\"sessions\":[]"));
+    ck_assert_int_eq(captured_status, 500);
+    ck_assert(captured_body && strstr(captured_body, "session store error"));
 
     reset_stubs(); free_req(&req);
 }
@@ -472,6 +496,34 @@ START_TEST(test_handle_create_session_custom_title)
     ck_assert(strstr(captured_body, "\"title\":\"Custom Chat\""));
 
     reset_stubs(); free_req(&req);
+}
+END_TEST
+
+/* E2: the routes_session alloc-fail hook was dead — wired into the build
+ * but never invoked. Fail the default-title str_dup (1) and the
+ * body-title str_dup (2); each must abort with a 500 and never commit a
+ * session. */
+START_TEST(test_handle_create_session_title_alloc_fail_returns_500)
+{
+    stub_unlock_result = 1;
+    SessionManager sm = {0};
+    ServerContext ctx = make_ctx(&sm, STATE_UNLOCKED, NULL);
+
+    for (int fail_at = 1; fail_at <= 2; fail_at++)
+    {
+        HTTPRequest req = make_req("/api/sessions",
+                                   fail_at == 2
+                                       ? "{\"title\":\"custom\"}"
+                                       : NULL,
+                                   NULL);
+        routes_session_test_set_alloc_fail(fail_at);
+        handle_create_session(&req, NULL, &ctx);
+        routes_session_test_set_alloc_fail(-1);
+        /* the failed title dup aborts before any session is created */
+        ck_assert_int_eq(captured_status, 500);
+        free_req(&req);
+        reset_stubs();
+    }
 }
 END_TEST
 
@@ -1074,6 +1126,7 @@ Suite *routes_session_handlers_suite(void)
     tcase_add_test(tc, test_handle_create_session_custom_title);
     tcase_add_test(tc, test_handle_create_session_invalid_json_still_defaults);
     tcase_add_test(tc, test_handle_create_session_fails);
+    tcase_add_test(tc, test_handle_create_session_title_alloc_fail_returns_500);
     suite_add_tcase(s, tc);
 
     tc = tcase_create("handle_session_get");

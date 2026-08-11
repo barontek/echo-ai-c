@@ -1,6 +1,6 @@
 # Echo AI
 
-Lean, self-contained C rewrite of the Echo AI agentic system. Single binary, minimal dependencies, vanilla JS frontend.
+Lean, self-contained C rewrite of the Echo AI agentic system. Single binary, minimal dependencies, React + TypeScript frontend.
 
 [![CI](https://github.com/barontek/echo-ai-c/actions/workflows/ci.yml/badge.svg)](https://github.com/barontek/echo-ai-c/actions/workflows/ci.yml)
 
@@ -91,7 +91,7 @@ cmake --build build
 |------|-------------|
 | `--web` | HTTP server on port 8080 (default) |
 | `--cli` | Interactive REPL with rich-rendered chat |
-| `--chat` | Lightweight interactive chat (not yet implemented) |
+| `--chat` | Lightweight interactive chat (implemented; run with `--chat` after `--cli`-style setup)
 | `--config PATH` | Path to config file (default: `config.conf`) |
 | `--debug` | Enable debug-level logging |
 | `--help` | Show help message |
@@ -165,8 +165,10 @@ src/
 ├── config/             .conf parser
 ├── change_tracker/     File undo/redo
 ├── utils/              Logging, metrics, circuit breaker, rate limiter, strings, etc.
-web/
+frontend/
+├── src/                React + TypeScript SPA (chat UI, hooks, ApiClient)
 ├── index.html          SPA shell
-├── css/style.css       Dark/light theme
-├── js/                 app.js, chat.js, websocket.js, api.js, components.js
+└── vite.config.ts      Build configuration
 ```
+
+Each subsystem under `src/` carries its own README documenting what it owns and why it exists.

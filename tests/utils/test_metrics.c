@@ -4,7 +4,8 @@
 #include <string.h>
 #include "utils/metrics.h"
 
-START_TEST(test_metrics_empty)
+/* test_metrics - unit tests for metrics. Depends on: check, the module under test. */
+START_TEST(test_metrics_render_empty_is_zero_values)
 {
     Metrics *m = metrics_create();
     ck_assert_ptr_nonnull(m);
@@ -126,7 +127,7 @@ Suite *metrics_suite(void)
     Suite *s = suite_create("Metrics");
 
     TCase *tc_render = tcase_create("Rendering");
-    tcase_add_test(tc_render, test_metrics_empty);
+    tcase_add_test(tc_render, test_metrics_render_empty_is_zero_values);
     tcase_add_test(tc_render, test_metrics_counter_increments_and_renders_prometheus_format);
     tcase_add_test(tc_render, test_metrics_histogram_observes_and_renders_buckets_and_sum);
     suite_add_tcase(s, tc_render);

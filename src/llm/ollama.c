@@ -242,10 +242,17 @@ static char *ollama_chat_request(const char *base_url, const char *json_body,
     if (!curl) return NULL;
 
     char *url = build_url(base_url);
-    if (!url) { curl_easy_cleanup(curl); return NULL; }
+    if (!url) {
+        curl_easy_cleanup(curl);
+        return NULL;
+    }
 
     struct curl_slist *headers = curl_slist_append(NULL, "Content-Type: application/json");
-    if (!headers) { free(url); curl_easy_cleanup(curl); return NULL; }
+    if (!headers) {
+        free(url);
+        curl_easy_cleanup(curl);
+        return NULL;
+    }
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -564,7 +571,10 @@ static LLMResponse *ollama_chat_streaming(LLMProvider *self, Message *messages, 
     sctx.on_chunk = on_chunk;
     sctx.userdata = userdata;
     sctx.resp = llm_response_create();
-    if (!sctx.resp) { free(body); return NULL; }
+    if (!sctx.resp) {
+        free(body);
+        return NULL;
+    }
 
     ToolCall *tc_from_stream = NULL;
     int tc_count = 0;
@@ -620,7 +630,10 @@ static LLMResponse *ollama_extract_structured(LLMProvider *self, Message *messag
                      "\"format\":%s}",
                      model, msgs_json, effort_frag, temperature, ctx->num_ctx,
                      ctx->keep_alive_secs, json_schema) < 0)
-        { free(msgs_json); return NULL; }
+         {
+            free(msgs_json);
+            return NULL;
+        }
     }
     else
     {
@@ -630,7 +643,10 @@ static LLMResponse *ollama_extract_structured(LLMProvider *self, Message *messag
                      "\"format\":\"json\"}",
                      model, msgs_json, effort_frag, temperature, ctx->num_ctx,
                      ctx->keep_alive_secs) < 0)
-        { free(msgs_json); return NULL; }
+         {
+            free(msgs_json);
+            return NULL;
+        }
     }
     free(msgs_json);
 
@@ -668,17 +684,29 @@ LLMProvider *ollama_provider_create(const char *base_url, int num_ctx,
     if (!p) return NULL;
 
     OllamaCtx *ctx = calloc(1, sizeof(OllamaCtx));
-    if (!ctx) { free(p); return NULL; }
+    if (!ctx) {
+        free(p);
+        return NULL;
+    }
 
     ctx->base_url = str_dup(base_url ? base_url : "http://localhost:11434");
-    if (!ctx->base_url) { free(ctx); free(p); return NULL; }
+    if (!ctx->base_url) {
+        free(ctx);
+        free(p);
+        return NULL;
+    }
     ctx->num_ctx = num_ctx > 0 ? num_ctx : 4096;
     ctx->keep_alive_secs = keep_alive_secs > 0 ? keep_alive_secs : 120;
 
     if (effort && effort[0])
     {
         ctx->effort = str_dup(effort);
-        if (!ctx->effort) { free(ctx->base_url); free(ctx); free(p); return NULL; }
+        if (!ctx->effort) {
+            free(ctx->base_url);
+            free(ctx);
+            free(p);
+            return NULL;
+        }
     }
 
     p->chat = ollama_chat;

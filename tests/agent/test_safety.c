@@ -11,6 +11,7 @@
 #include "config/config.h"
 #include "utils/string_utils.h"
 
+/* test_safety - unit tests for safety. Depends on: check, the module under test. */
 /* --- safety_config_create / safety_config_free --- */
 
 START_TEST(test_safety_config_create_defaults)

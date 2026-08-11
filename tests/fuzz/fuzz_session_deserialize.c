@@ -1,3 +1,4 @@
+/* fuzz_session_deserialize - libFuzzer target for session deserialize parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for session_deserialize_messages — the JSON message
  * array parser that deserializes conversation history from the database.
  *

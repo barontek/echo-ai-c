@@ -96,7 +96,10 @@ void handle_metrics(HTTPRequest *req, Client *client, ServerContext *ctx)
         return;
     }
     char *body = metrics_render_new(ctx->metrics);
-    if (!body) { server_response_error(client, 500, "oom"); return; }
+    if (!body) {
+        server_response_error(client, 500, "oom");
+        return;
+    }
     server_response(client, 200, "text/plain; charset=utf-8", body);
     free(body);
 }

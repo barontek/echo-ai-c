@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+/* fuzz_html_extract - libFuzzer target for html extract parsing. Depends on: check, the module under test. */
 /* Fuzz target for html_extract_text_alloc: the parser must never crash, overrun,
  * or allocate unboundedly regardless of input. */
 int LLVMFuzzerTestOneInput(const unsigned char *data, size_t size)

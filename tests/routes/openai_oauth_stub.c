@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "llm/openai_oauth.h"
 
+/* openai_oauth_stub - unit tests for openai oauth stub. Depends on: check, the module under test. */
 OpenAIOAuthState openai_oauth_stub_state = OPENAI_OAUTH_SIGNED_OUT;
 int openai_oauth_stub_attach_result = 0;
 

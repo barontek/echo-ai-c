@@ -240,9 +240,11 @@ int registry_has_ask_user_callback(void);
  * registry_destroy - release all registered tools and installed singletons
  *
  * Calls destroy() on every registered Tool, destroys the registry-owned
- * search provider, and clears the OAuth reference without freeing it.
- * The borrowed session-manager reference and the ask-user callback are
- * left untouched; the tool table is reset to empty.
+ * search provider, clears the OAuth reference without freeing it, and
+ * frees the delegate-config strings installed by
+ * registry_set_delegate_config(). The borrowed session-manager reference
+ * and the ask-user callback are left untouched; the tool table is reset
+ * to empty.
  *
  * Return: nothing. Not thread-safe; do not run tools concurrently with
  * this.
@@ -261,6 +263,25 @@ void registry_destroy(void);
  * Return: nothing. Single-threaded tests only.
  */
 void registry_test_set_alloc_fail(int nth_allocation);
+
+/**
+ * registry_test_free_reset - zero the registry free tally
+ *
+ * Test-only hook for the B1 shutdown-leak regression: lets a test count
+ * exactly how many allocations registry.c released.
+ *
+ * Return: nothing. Single-threaded tests only.
+ */
+void registry_test_free_reset(void);
+
+/**
+ * registry_test_free_tally - read the registry free tally
+ *
+ * Test-only hook; see registry_test_free_reset().
+ *
+ * Return: number of free() calls made by registry.c since the last reset.
+ */
+int registry_test_free_tally(void);
 #endif
 
 #endif

@@ -31,6 +31,8 @@ static int sm_alloc_counter = 0;
 static int sm_alloc_fail_at = -1;
 static int sm_realloc_counter = 0;
 static int sm_realloc_fail_at = -1;
+static int sm_asprintf_counter = 0;
+static int sm_asprintf_fail_at = -1;
 
 void session_manager_test_set_alloc_fail(int nth_allocation)
 {
@@ -61,8 +63,36 @@ char *sm_test_strdup(const char *s)
     return str_dup(s);
 }
 
+/* asprintf interception for the session modules (branch mints, migration
+ * multi-alloc): asprintf allocates in one variadic call the str_dup
+ * counter cannot reach. Shared counter so a single knob spans all three
+ * TUs; session_branch.c and migration.c forward-declare it under
+ * SESSION_MANAGER_TEST and #define asprintf to it. */
+int sm_test_asprintf(char **strp, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int rc = vasprintf(strp, fmt, ap);
+    va_end(ap);
+    sm_asprintf_counter++;
+    if (sm_asprintf_counter == sm_asprintf_fail_at)
+    {
+        free(*strp);
+        *strp = NULL;
+        return -1;
+    }
+    return rc;
+}
+
+void session_manager_test_set_asprintf_fail(int nth)
+{
+    sm_asprintf_counter = 0;
+    sm_asprintf_fail_at = nth;
+}
+
 #define str_dup sm_test_strdup
 #define realloc sm_test_realloc
+#define asprintf sm_test_asprintf
 
 /* Fault-injection knob for B1: lets a test force the Nth
  * sqlite3_bind_* call (across bind_text/bind_int/bind_blob/bind_null in any
@@ -206,9 +236,26 @@ static int init_db(sqlite3 *db)
         return -1;
     }
 
-    sqlite3_exec(db, "PRAGMA journal_mode=DELETE", NULL, NULL, NULL);
-    sqlite3_exec(db, "PRAGMA synchronous=FULL", NULL, NULL, NULL);
-
+    /* C11: the PRAGMA durability guarantees used to be silently absent
+     * if these failed — the session store would still work, just without
+     * the crash-durability contract the migration flow relies on. */
+    {
+        char *prag_err = NULL;
+        if (sqlite3_exec(db, "PRAGMA journal_mode=DELETE", NULL, NULL, &prag_err) != SQLITE_OK)
+        {
+            log_error("session_manager: journal_mode PRAGMA failed",
+                      "err", prag_err, NULL);
+            sqlite3_free(prag_err);
+            prag_err = NULL;
+        }
+        if (sqlite3_exec(db, "PRAGMA synchronous=FULL", NULL, NULL, &prag_err) != SQLITE_OK)
+        {
+            log_error("session_manager: synchronous PRAGMA failed",
+                      "err", prag_err, NULL);
+            sqlite3_free(prag_err);
+            prag_err = NULL;
+        }
+    }
     return 0;
 }
 
@@ -498,7 +545,10 @@ SessionManager *session_manager_create_ex(const char *data_dir,
     if (!sm) return NULL;
 
     sm->data_dir = str_dup(data_dir);
-    if (!sm->data_dir) { free(sm); return NULL; }
+    if (!sm->data_dir) {
+        free(sm);
+        return NULL;
+    }
 
     atomic_init(&sm->ref_count, 1U);
     pthread_mutex_init(&sm->lock, NULL);
@@ -625,7 +675,11 @@ static Session *load_session_locked(SessionManager *sm, const char *id)
     }
 
     Session *s = calloc(1, sizeof(Session));
-    if (!s) { log_error("calloc Session in load", NULL); sqlite3_finalize(stmt); return NULL; }
+    if (!s) {
+        log_error("calloc Session in load", NULL);
+        sqlite3_finalize(stmt);
+        return NULL;
+    }
 
     const char *db_id = (const char *)sqlite3_column_text(stmt, 0);
     const void *title_blob = sqlite3_column_blob(stmt, 1);
@@ -645,6 +699,13 @@ static Session *load_session_locked(SessionManager *sm, const char *id)
     s->created_at = str_dup(db_created ? db_created : "");
     s->events = cJSON_CreateArray();
     s->metadata = cJSON_CreateObject();
+    if (!s->id || !s->title || !s->created_at || !s->events || !s->metadata)
+    {
+        log_error("load_session: allocation failure", "id", id, NULL);
+        session_free(s);
+        sqlite3_finalize(stmt);
+        return NULL;
+    }
 
     int partial_fail = 0;
 
@@ -654,9 +715,17 @@ static Session *load_session_locked(SessionManager *sm, const char *id)
         unsigned char *dec = encryption_decrypt(&sm->enc_key, title_blob, title_len, &dec_len);
         if (dec)
         {
-            free(s->title);
-            s->title = str_dup((const char *)dec);
+            char *title_dup = str_dup((const char *)dec);
             free(dec);
+            if (!title_dup)
+            {
+                log_error("load_session: title allocation failure", "id", id, NULL);
+                session_free(s);
+                sqlite3_finalize(stmt);
+                return NULL;
+            }
+            free(s->title);
+            s->title = title_dup;
         }
         else
         {
@@ -758,12 +827,31 @@ Session *session_manager_load_session_alloc(SessionManager *sm, const char *id)
  * immediately, by design. */
 void session_manager_lock(SessionManager *sm)
 {
-    if (sm) pthread_mutex_lock(&sm->lock);
+    if (!sm) return;
+    if (pthread_mutex_lock(&sm->lock) != 0)
+        log_error("session_manager: mutex lock failed", NULL);
 }
 
 void session_manager_unlock(SessionManager *sm)
 {
-    if (sm) pthread_mutex_unlock(&sm->lock);
+    if (!sm) return;
+    if (pthread_mutex_unlock(&sm->lock) != 0)
+        log_error("session_manager: mutex unlock failed", NULL);
+}
+
+/* C4: the module's internal lock/unlock sites (raw pthread calls used to
+ * discard the return value everywhere). A failed lock/unlock cannot be
+ * recovered from — the response is a loud log, not silence. */
+static void sm_lock(SessionManager *sm)
+{
+    if (pthread_mutex_lock(&sm->lock) != 0)
+        log_error("session_manager: internal mutex lock failed", NULL);
+}
+
+static void sm_unlock(SessionManager *sm)
+{
+    if (pthread_mutex_unlock(&sm->lock) != 0)
+        log_error("session_manager: internal mutex unlock failed", NULL);
 }
 
 /* _nolock variants forward to the locked-statics. Caller MUST already
@@ -1055,7 +1143,7 @@ int session_manager_save_session_nolock(SessionManager *sm, Session *session)
 }
 
 /* Delete the session identified by `id`.
- * Returns:  1 if a row was deleted
+ * Return: 1 if a row was deleted
  *           0 if no row matched (caller should treat as 404)
  *          -1 on SQLite error (prepare/bind/step failure)
  *
@@ -1067,14 +1155,14 @@ int session_manager_delete_session(SessionManager *sm, const char *id)
 {
     if (!sm || !id || !sm->db) return -1;
 
-    pthread_mutex_lock(&sm->lock);
+    sm_lock(sm);
 
     sqlite3_stmt *stmt = NULL;
     const char *sql = "DELETE FROM agent_sessions WHERE id = ?";
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
     {
         log_error("sqlite prepare delete", "err", sqlite3_errmsg(sm->db), NULL);
-        pthread_mutex_unlock(&sm->lock);
+        sm_unlock(sm);
         return -1;
     }
 
@@ -1083,14 +1171,14 @@ int session_manager_delete_session(SessionManager *sm, const char *id)
     {
         log_error("sqlite bind delete", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
-        pthread_mutex_unlock(&sm->lock);
+        sm_unlock(sm);
         return -1;
     }
 
     int rc = sqlite3_step(stmt);
     int changed = sqlite3_changes(sm->db);
     sqlite3_finalize(stmt);
-    pthread_mutex_unlock(&sm->lock);
+    sm_unlock(sm);
 
     if (rc != SQLITE_DONE)
     {
@@ -1176,7 +1264,7 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
 {
     if (!sm || !sm->data_dir || !sm->db || !sm->key_initialized) return NULL;
 
-    pthread_mutex_lock(&sm->lock);
+    sm_lock(sm);
 
     sqlite3_stmt *stmt = NULL;
     const char *sql = "SELECT id, title_encrypted, title_generation_attempted, created_at "
@@ -1184,12 +1272,16 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
     if (sqlite3_prepare_v2(sm->db, sql, -1, &stmt, NULL) != SQLITE_OK)
     {
         log_error("sqlite prepare list", "err", sqlite3_errmsg(sm->db), NULL);
-        pthread_mutex_unlock(&sm->lock);
+        sm_unlock(sm);
         return NULL;
     }
 
     SessionList *list = calloc(1, sizeof(SessionList));
-    if (!list) { sqlite3_finalize(stmt); pthread_mutex_unlock(&sm->lock); return NULL; }
+    if (!list) {
+        sqlite3_finalize(stmt);
+        sm_unlock(sm);
+        return NULL;
+    }
 
     int capacity = 16;
     list->ids = malloc(sizeof(char *) * (size_t)capacity);
@@ -1199,7 +1291,7 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
     if (!list->ids || !list->titles || !list->created_ats || !list->title_generation_attempteds)
     {
         sqlite3_finalize(stmt);
-        pthread_mutex_unlock(&sm->lock);
+        sm_unlock(sm);
         session_list_free(list);
         return NULL;
     }
@@ -1209,21 +1301,21 @@ SessionList *session_manager_list_sessions(SessionManager *sm)
         if (list->count >= capacity && session_list_grow(list, &capacity) != 0)
         {
             sqlite3_finalize(stmt);
-            pthread_mutex_unlock(&sm->lock);
+            sm_unlock(sm);
             session_list_free(list);
             return NULL;
         }
         if (session_list_append_row(list, stmt, &sm->enc_key) != 0)
         {
             sqlite3_finalize(stmt);
-            pthread_mutex_unlock(&sm->lock);
+            sm_unlock(sm);
             session_list_free(list);
             return NULL;
         }
     }
 
     sqlite3_finalize(stmt);
-    pthread_mutex_unlock(&sm->lock);
+    sm_unlock(sm);
     return list;
 }
 
@@ -1252,7 +1344,10 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
      * eliminating the last-writer-wins race. */
     session_manager_lock(sm);
     Session *s = load_session_locked(sm, session_id);
-    if (!s) { session_manager_unlock(sm); return -1; }
+    if (!s) {
+        session_manager_unlock(sm);
+        return -1;
+    }
 
     int idx = s->messages_count;
     if (idx < 0 || (size_t)idx >= SIZE_MAX / sizeof(Message) - 1U)
@@ -1263,7 +1358,11 @@ int session_manager_add_message(SessionManager *sm, const char *session_id,
     }
     int new_count = idx + 1;
     Message *new_msgs = realloc(s->messages, sizeof(Message) * (size_t)new_count);
-    if (!new_msgs) { session_free(s); session_manager_unlock(sm); return -1; }
+    if (!new_msgs) {
+        session_free(s);
+        session_manager_unlock(sm);
+        return -1;
+    }
 
     s->messages = new_msgs;
     s->messages_count = new_count;
@@ -1294,7 +1393,10 @@ int session_manager_truncate_history(SessionManager *sm, const char *session_id,
     /* C10: hold sm->lock across the load→mutate→save triad. */
     session_manager_lock(sm);
     Session *s = load_session_locked(sm, session_id);
-    if (!s) { session_manager_unlock(sm); return -1; }
+    if (!s) {
+        session_manager_unlock(sm);
+        return -1;
+    }
 
     if (index < 0 || index >= s->messages_count)
     {
@@ -1372,7 +1474,10 @@ static Session *import_session_build(const char *json_str)
      * because it would just duplicate the SQL-level check that follows. */
 
     Session *s = session_create("Imported Session");
-    if (!s) { cJSON_Delete(json); return NULL; }
+    if (!s) {
+        cJSON_Delete(json);
+        return NULL;
+    }
 
     cJSON *id_item = cJSON_GetObjectItem(json, "id");
     if (id_item && id_item->valuestring)
@@ -1514,7 +1619,7 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
     char cutoff_str[64];
     strftime(cutoff_str, sizeof(cutoff_str), "%Y-%m-%dT%H:%M:%S", tm_cutoff);
 
-    pthread_mutex_lock(&sm->lock);
+    sm_lock(sm);
 
     sqlite3_stmt *stmt = NULL;
     const char *sql = "DELETE FROM agent_sessions WHERE created_at < ?";
@@ -1527,7 +1632,7 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
          * failure — the prior code returned -1 with no operator signal. */
         log_error("sqlite prepare purge", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
-        pthread_mutex_unlock(&sm->lock);
+        sm_unlock(sm);
         return -1;
     }
 
@@ -1536,7 +1641,7 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
     {
         log_error("sqlite bind purge", "err", sqlite3_errmsg(sm->db), NULL);
         sqlite3_finalize(stmt);
-        pthread_mutex_unlock(&sm->lock);
+        sm_unlock(sm);
         return -1;
     }
 
@@ -1547,7 +1652,7 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
     else
         log_error("sqlite step purge", "err", sqlite3_errmsg(sm->db), NULL);
     sqlite3_finalize(stmt);
-    pthread_mutex_unlock(&sm->lock);
+    sm_unlock(sm);
 
     return (step_rc == SQLITE_DONE) ? deleted : -1;
 }
@@ -1560,7 +1665,10 @@ int session_manager_log_event(SessionManager *sm, const char *session_id,
      * here, so its metadata/events written back ARE the freshest. */
     session_manager_lock(sm);
     Session *s = load_session_locked(sm, session_id);
-    if (!s) { session_manager_unlock(sm); return -1; }
+    if (!s) {
+        session_manager_unlock(sm);
+        return -1;
+    }
 
     cJSON *ev = cJSON_CreateObject();
     cJSON_AddStringToObject(ev, "event_type", event_type ? event_type : "");

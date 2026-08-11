@@ -6,12 +6,15 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sqlite3.h>
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
 #include "session/session_manager.h"
 #include "session/session_branch.h"
 #include "session/encryption.h"
 #include "session/memory.h"
 #include "utils/string_utils.h"
 
+/* test_session_manager - unit tests for session manager. Depends on: check, the module under test. */
 /* Declared in migration.h under SESSION_MANAGER_TEST; the test binary
  * compiles migration.c with that define but does not include the header. */
 extern void migration_test_set_rename_fail(int nth_rename);
@@ -152,6 +155,42 @@ START_TEST(test_legacy_post_commit_recovery_uses_encrypted_row_evidence)
     free(session_id);
     session_manager_free(sm);
 
+}
+END_TEST
+
+/* E3: migration_change_password allocates its path/row strings via
+ * asprintf, which the str_dup counter cannot reach — an OOM there used
+ * to be completely untestable. The shared asprintf shim
+ * (session_manager_test_set_asprintf_fail) now fails the Nth one; every
+ * failure must abort the migration with the old state intact. */
+START_TEST(test_migration_change_password_asprintf_failure_aborts_cleanly)
+{
+    for (int fail_at = 1; fail_at <= 3; fail_at++)
+    {
+        SessionManager *sm = session_manager_create(tmpdir, "old_pw");
+        ck_assert_ptr_nonnull(sm);
+        Session *s = session_manager_create_session(sm, "mig test");
+        ck_assert_ptr_nonnull(s);
+        char *session_id = str_dup(s->id);
+        ck_assert_ptr_nonnull(session_id);
+        session_free(s);
+
+        session_manager_test_set_asprintf_fail(fail_at);
+        int rc = migration_change_password(sm, "new_pw");
+        session_manager_test_set_asprintf_fail(-1);
+        ck_assert_int_eq(rc, -1);
+
+        /* old password still opens the store and the session survives */
+        session_manager_free(sm);
+        sm = session_manager_create(tmpdir, "old_pw");
+        ck_assert_ptr_nonnull(sm);
+        Session *loaded = session_manager_load_session_alloc(sm, session_id);
+        ck_assert_ptr_nonnull(loaded);
+        ck_assert_str_eq(loaded->title, "mig test");
+        session_free(loaded);
+        free(session_id);
+        session_manager_free(sm);
+    }
 }
 END_TEST
 
@@ -529,6 +568,47 @@ START_TEST(test_session_list_realloc_failures_are_safe)
 }
 END_TEST
 
+/* A6 regression: a token with a valid HMAC but corrupted ciphertext (bad
+ * AES padding) used to return success with the unwritten plaintext region
+ * (EVP_DecryptFinal_ex's failure ignored — the classic EVP trap, feeding
+ * garbage to session loaders). It must now fail cleanly: NULL output. */
+START_TEST(test_encryption_rejects_hmac_valid_bad_padding_token)
+{
+    unsigned char salt[16] = {1, 2, 3, 4, 5, 6, 7, 8,
+                              9, 10, 11, 12, 13, 14, 15, 16};
+    EncryptionKey key;
+    ck_assert_int_eq(encryption_key_derive("unit-test-pw", salt, sizeof(salt),
+                                           &key), 0);
+
+    const char *plain = "hello world";
+    int token_len = 0;
+    unsigned char *token = encryption_encrypt(
+        &key, (const unsigned char *)plain, (int)strlen(plain), &token_len);
+    ck_assert_ptr_nonnull(token);
+    ck_assert_int_gt(token_len, 1 + 8 + 16 + 32);
+
+    /* Corrupt one ciphertext byte. Token layout: version (1) | ts (8) |
+     * IV (16) | ciphertext | HMAC (32). */
+    int ct_off = 1 + 8 + 16;
+    token[ct_off] ^= 0xFF;
+
+    /* Re-sign the corrupted token so the HMAC stays valid: the key's low
+     * half signs (per encryption.h), and the HMAC covers everything up to
+     * the trailing 32 bytes. */
+    unsigned char hmac[32];
+    unsigned int hmac_len = sizeof(hmac);
+    HMAC(EVP_sha256(), key.key, 16, token, token_len - 32, hmac, &hmac_len);
+    ck_assert_int_eq((int)hmac_len, 32);
+    memcpy(token + token_len - 32, hmac, 32);
+
+    int out_len = 0;
+    unsigned char *dec = encryption_decrypt(&key, token, token_len, &out_len);
+    ck_assert_ptr_null(dec);
+    ck_assert_int_eq(out_len, 0);
+    free(token);
+}
+END_TEST
+
 /* Regression test for A7: user_memory table used to be created by ad-hoc
  * memory_table_init calls scattered across main.c and routes.c. build_system_prompt
  * (via memory_list_all) had no guarantee the table existed. After the fix,
@@ -546,7 +626,7 @@ START_TEST(test_user_memory_table_ready_after_sm_create)
     ck_assert_int_eq(memory_set(sm->db, "fact2", "value2"), 0);
 
     int count = 0;
-    MemoryFact *facts = memory_list_all(sm->db, &count);
+    MemoryFact *facts = memory_list_all(sm->db, &count, NULL);
     ck_assert_ptr_nonnull(facts);
     ck_assert_int_eq(count, 2);
     memory_facts_free(facts, count);
@@ -1545,6 +1625,69 @@ START_TEST(test_fork_allocation_failure_leaves_session_unchanged)
 }
 END_TEST
 
+/* The first four str_dup positions belong to load_session_locked (id,
+ * empty title, created_at, decrypted title) — failing them must abort the
+ * fork with a clean -1 before any fork state exists. */
+START_TEST(test_fork_early_allocation_failures_are_clean)
+{
+    for (int fail_at = 1; fail_at <= 4; fail_at++)
+    {
+        char *sid = NULL;
+        SessionManager *sm = branch_sm_create(tmpdir, &sid);
+        branch_add_msgs(sm, sid, "user", "q1", "assistant", "a1");
+        SessionManagerForkResult out = {0};
+        session_manager_test_set_alloc_fail(fail_at);
+        ck_assert_int_eq(session_manager_fork_branch(sm, sid, NULL, 0,
+                                                     "edited", &out), -1);
+        session_manager_test_set_alloc_fail(-1);
+        ck_assert_ptr_null(out.branch_id);
+        ck_assert_ptr_null(out.fork_message_id);
+        ck_assert_ptr_null(out.fork_group_id);
+        ck_assert_ptr_null(out.fork_message.content);
+        Session *v = session_manager_load_session_alloc(sm, sid);
+        ck_assert_ptr_nonnull(v);
+        ck_assert_int_eq(v->messages_count, 2);
+        session_free(v);
+        free(sid);
+        session_manager_free(sm);
+    }
+}
+END_TEST
+
+/* L5 regression: the fork-id mints (asprintf, unreachable by the str_dup
+ * counter) fail on the goto-cleanup path BEFORE message_copy initializes
+ * fork_copy — the cleanup's message_clear(&fork_copy) used to run on
+ * uninitialized stack memory (free of garbage pointers). Fail the message
+ * id mint (1) and the group mint (2); each must return -1 with *out
+ * untouched and no crash. */
+START_TEST(test_fork_mint_allocation_failures_are_clean)
+{
+    for (int fail_at = 1; fail_at <= 2; fail_at++)
+    {
+        char *sid = NULL;
+        SessionManager *sm = branch_sm_create(tmpdir, &sid);
+        branch_add_msgs(sm, sid, "user", "q1", "assistant", "a1");
+        SessionManagerForkResult out = {0};
+        session_manager_test_set_asprintf_fail(fail_at);
+        ck_assert_int_eq(session_manager_fork_branch(sm, sid, NULL, 0,
+                                                     "edited", &out), -1);
+        session_manager_test_set_asprintf_fail(-1);
+        ck_assert_ptr_null(out.branch_id);
+        ck_assert_ptr_null(out.fork_message_id);
+        ck_assert_ptr_null(out.fork_group_id);
+        ck_assert_ptr_null(out.fork_message.content);
+        /* disk untouched: still the original two-message chain */
+        Session *v = session_manager_load_session_alloc(sm, sid);
+        ck_assert_ptr_nonnull(v);
+        ck_assert_int_eq(v->messages_count, 2);
+        ck_assert_str_eq(v->messages[1].content, "a1");
+        session_free(v);
+        free(sid);
+        session_manager_free(sm);
+    }
+}
+END_TEST
+
 START_TEST(test_switch_away_and_back_preserves_branch_data)
 {
     /* Regression for the switch-back data-loss bug (found via live smoke):
@@ -1788,6 +1931,8 @@ Suite *session_mgr_suite(void)
                    test_password_change_rolls_back_on_malformed_oauth_row);
     tcase_add_test(tc_oauth,
                    test_legacy_post_commit_recovery_uses_encrypted_row_evidence);
+    tcase_add_test(tc_oauth,
+                   test_migration_change_password_asprintf_failure_aborts_cleanly);
     suite_add_tcase(s, tc_oauth);
 
     TCase *tc_crud = tcase_create("CRUD");
@@ -1801,6 +1946,7 @@ Suite *session_mgr_suite(void)
     tcase_add_test(tc_crud, test_empty_or_null_id_refused);
     tcase_add_test(tc_crud, test_session_list_alloc_fail_mid);
     tcase_add_test(tc_crud, test_session_list_realloc_failures_are_safe);
+    tcase_add_test(tc_crud, test_encryption_rejects_hmac_valid_bad_padding_token);
     tcase_add_test(tc_crud, test_import_rejects_duplicate_id_preserves_existing);
     tcase_add_test(tc_crud, test_create_creates_missing_parent_dirs);
     tcase_add_test(tc_crud,
@@ -1823,6 +1969,8 @@ Suite *session_mgr_suite(void)
     tcase_add_test(tc_branches, test_old_session_without_branches_reports_empty);
     tcase_add_test(tc_branches,
                    test_fork_allocation_failure_leaves_session_unchanged);
+    tcase_add_test(tc_branches, test_fork_early_allocation_failures_are_clean);
+    tcase_add_test(tc_branches, test_fork_mint_allocation_failures_are_clean);
     tcase_add_test(tc_branches,
                    test_switch_away_and_back_preserves_branch_data);
     tcase_add_test(tc_branches, test_refork_joins_existing_group);

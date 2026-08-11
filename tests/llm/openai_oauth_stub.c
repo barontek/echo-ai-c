@@ -1,5 +1,6 @@
 #include "llm/openai_oauth.h"
 
+/* openai_oauth_stub - unit tests for openai oauth stub. Depends on: check, the module under test. */
 int openai_oauth_get_access_token(OpenAIOAuth *auth, char **access_token,
                                   char **account_id)
 {

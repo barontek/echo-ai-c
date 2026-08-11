@@ -1,3 +1,4 @@
+/* fuzz_config - libFuzzer target for config parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for conf_load — the .conf file parser.
  *
  * Writes fuzz data to a temp file, parses it, exercises conf_get on a few

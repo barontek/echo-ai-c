@@ -7,6 +7,7 @@
 #include "safety/safety.h"
 #include "utils/string_utils.h"
 
+/* test_tool_delegate - delegate tool unit tests. Depends on: check, the module under test. */
 extern Tool *tool_delegate_create(SafetyConfig *safety);
 extern void tool_delegate_test_set_alloc_fail(int nth_allocation);
 extern void tool_delegate_test_set_realloc_fail(int nth_allocation);
@@ -254,6 +255,37 @@ START_TEST(test_delegate_alloc_fail_user_role)
 }
 END_TEST
 
+/* E5: the loop-phase commit sites (tool-result message str_dups, final
+ * content, assistant-message copies) were never fault-tested — only the
+ * entry phase (positions 4-7) was. Fail every loop-phase position of a
+ * scripted tool round-trip in turn: each failure must return a result
+ * (error or content) without crashing or corrupting state. The exact
+ * position of each site is brittle by construction (message_copy's field
+ * dups shift with the payload), which is why this is a sweep, not a
+ * point test. */
+START_TEST(test_delegate_loop_phase_alloc_failures_are_clean)
+{
+    for (int fail_at = 8; fail_at <= 26; fail_at++)
+    {
+        scripted_tool_mode = 1;
+        scripted_chat_count = 0;
+        scripted_tool_count = 0;
+        tool_delegate_test_set_alloc_fail(fail_at);
+        Tool *t = tool_delegate_create(NULL);
+        ck_assert_ptr_nonnull(t);
+
+        ToolResult *r = t->execute(t,
+            "{\"task\":\"use a tool\",\"iterations\":2}");
+        ck_assert_ptr_nonnull(r);
+        /* error or content — never a crash or an empty dangling result */
+        tool_result_free(r);
+        t->destroy(t);
+        tool_delegate_test_set_alloc_fail(-1);
+        scripted_tool_mode = 0;
+    }
+}
+END_TEST
+
 Suite *tool_delegate_suite(void)
 {
     Suite *s = suite_create("ToolDelegate");
@@ -269,6 +301,7 @@ Suite *tool_delegate_suite(void)
     tcase_add_test(tc_fault, test_delegate_alloc_fail_sys_role);
     tcase_add_test(tc_fault, test_delegate_alloc_fail_sys_content);
     tcase_add_test(tc_fault, test_delegate_alloc_fail_user_role);
+    tcase_add_test(tc_fault, test_delegate_loop_phase_alloc_failures_are_clean);
     tcase_add_test(tc_fault,
                    test_delegate_realloc_failure_does_not_commit_grown_capacity);
     suite_add_tcase(s, tc_fault);

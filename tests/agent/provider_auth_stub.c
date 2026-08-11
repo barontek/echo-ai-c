@@ -1,5 +1,6 @@
 #include "llm/provider.h"
 
+/* provider_auth_stub - unit tests for provider auth stub. Depends on: check, the module under test. */
 /* Agent unit tests provide their own get_provider mock. Keep the new OAuth
  * factory entry point delegated to that mock without linking the production
  * provider graph into every agent test. */

@@ -94,16 +94,16 @@ char *session_serialize_metadata_new(const Session *session);
 /**
  * session_deserialize_metadata - replace the metadata object from JSON
  * @session: session to mutate; must be non-NULL.
- * @json_str: JSON object string; must be non-NULL. Borrowed for the call
- *   duration.
+ * @json_str: JSON object string; NULL is accepted and leaves the prior
+ *   metadata untouched. Borrowed for the call duration.
  *
  * Deletes the prior metadata tree unconditionally, then parses @json_str.
  * On parse failure the metadata is reset to a fresh empty object so the
- * non-NULL invariant holds; on a NULL @json_str the prior metadata is left
- * untouched.
+ * non-NULL invariant holds.
  *
- * Return: 0 on success, -1 on NULL input or parse failure. Thread-safe; no
- * shared state.
+ * Return: 0 on success, -1 on NULL session or parse failure (or NULL
+ * json_str, which is not an error — see above). Thread-safe; no shared
+ * state.
  */
 int session_deserialize_metadata(Session *session, const char *json_str);
 
@@ -122,16 +122,16 @@ char *session_serialize_events_new(const Session *session);
 /**
  * session_deserialize_events - replace the events array from JSON
  * @session: session to mutate; must be non-NULL.
- * @json_str: JSON array string; must be non-NULL. Borrowed for the call
- *   duration.
+ * @json_str: JSON array string; NULL is accepted and leaves the prior
+ *   events untouched. Borrowed for the call duration.
  *
  * Deletes the prior events tree unconditionally, then parses @json_str.
  * On parse failure or non-array input the events are reset to a fresh
- * empty array so the non-NULL invariant holds; on a NULL @json_str the
- * prior events are left untouched.
+ * empty array so the non-NULL invariant holds.
  *
- * Return: 0 on success, -1 on NULL input or parse/type failure. Thread-safe;
- * no shared state.
+ * Return: 0 on success, -1 on NULL session or parse/type failure (or NULL
+ * json_str, which is not an error — see above). Thread-safe; no shared
+ * state.
  */
 int session_deserialize_events(Session *session, const char *json_str);
 

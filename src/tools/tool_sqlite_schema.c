@@ -37,7 +37,10 @@ static ToolResult *sqlite_schema_execute(Tool *self, const char *args_json)
         return tool_result_error("failed to query schema", "execution_error");
 
     cJSON *tables = cJSON_CreateArray();
-    if (!tables) { sqlite3_finalize(stmt); return tool_result_error("oom", "execution_error"); }
+    if (!tables) {
+        sqlite3_finalize(stmt);
+        return tool_result_error("oom", "execution_error");
+    }
 
     while (sqlite3_step(stmt) == SQLITE_ROW)
     {
@@ -115,7 +118,10 @@ Tool *tool_sqlite_schema_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     SQLiteSchemaCtx *ctx = calloc(1, sizeof(SQLiteSchemaCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("sqlite_schema");

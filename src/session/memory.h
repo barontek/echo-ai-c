@@ -47,12 +47,15 @@ int memory_set(sqlite3 *db, const char *key, const char *value);
  * memory_get_dup - fetch a value by key
  * @db: open sqlite3 connection; must be non-NULL.
  * @key: fact key; must be non-NULL, borrowed for the call duration.
+ * @is_error: optional out-param set to 1 when the store itself failed
+ *   (prepare/step error) as opposed to the key simply being absent;
+ *   NULL is accepted and the distinction is lost.
  *
  * Return: caller-owned str_dup of the stored value (free with free()), or
  * NULL when the key is absent, on NULL arguments, prepare failure, or
  * allocation failure. Thread-safe via caller's lock on the connection.
  */
-char *memory_get_dup(sqlite3 *db, const char *key);
+char *memory_get_dup(sqlite3 *db, const char *key, int *is_error);
 
 /**
  * memory_delete - remove a key/value pair
@@ -69,6 +72,9 @@ int memory_delete(sqlite3 *db, const char *key);
  * memory_list_all - fetch all facts, newest first
  * @db: open sqlite3 connection; must be non-NULL.
  * @count: out-param receiving the number of facts; must be non-NULL.
+ * @is_error: optional out-param set to 1 when the store itself failed
+ *   (prepare/step error) as opposed to there being no facts; NULL is
+ *   accepted and the distinction is lost.
  *
  * Rows are ordered by updated_at DESC. *count is set to 0 up front; on
  * success it holds the number of facts. On failure the facts gathered so
@@ -79,7 +85,7 @@ int memory_delete(sqlite3 *db, const char *key);
  * or NULL on NULL arguments, prepare failure, or any allocation failure.
  * Thread-safe via caller's lock on the connection.
  */
-MemoryFact *memory_list_all(sqlite3 *db, int *count);
+MemoryFact *memory_list_all(sqlite3 *db, int *count, int *is_error);
 
 /**
  * memory_facts_free - free a fact array returned by memory_list_all()

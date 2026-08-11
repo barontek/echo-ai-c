@@ -4,6 +4,7 @@
 #include <string.h>
 #include "config/config.h"
 
+/* test_config - unit tests for config. Depends on: check, the module under test. */
 static void write_conf(const char *path, const char *content)
 {
     FILE *fp = fopen(path, "w");

@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <errno.h>
 
 #ifdef NOTES_TEST
 #include <stdarg.h>
@@ -79,7 +80,8 @@ static const char *notes_dir_path(NotesCtx *ctx)
     if (asprintf(&path, "%s/.config/echo-ai/notes", home) >= 0)
     {
         ctx->notes_dir = path;
-        mkdir(path, 0755);
+        if (mkdir(path, 0755) != 0 && errno != EEXIST)
+            log_error("notes: mkdir failed", "path", path, "err", strerror(errno), NULL);
     }
     return ctx->notes_dir ? ctx->notes_dir : "/tmp/echo-notes";
 }
@@ -95,6 +97,138 @@ static int valid_note_name(const char *name)
             return 0;
     }
     return 1;
+}
+
+static ToolResult *notes_action_list(const char *ndir)
+{
+    DIR *dir = opendir(ndir);
+    if (!dir)
+    {
+        /* C9: "no notes" must mean the directory is empty, not that
+         * it could not be read. */
+        return tool_result_error("cannot read notes directory",
+                                 "execution_error");
+    }
+
+    cJSON *arr = cJSON_CreateArray();
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL)
+    {
+        if (str_ends_with(entry->d_name, ".md"))
+        {
+            char *dot = strrchr(entry->d_name, '.');
+            if (dot) *dot = '\0';
+            cJSON_AddItemToArray(arr, cJSON_CreateString(entry->d_name));
+            if (dot) *dot = '.';
+        }
+    }
+    closedir(dir);
+
+    char *result = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    ToolResult *tr = tool_result_create(result ? result : "(no notes)");
+    free(result);
+    return tr;
+}
+
+static ToolResult *notes_action_read(const char *ndir, const char *name,
+                                     size_t max_file_size)
+{
+    char *fpath = NULL;
+    if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
+        return tool_result_error("oom", "execution_error");
+
+    int fd = open(fpath, O_RDONLY | O_NOFOLLOW);
+    struct stat st;
+    if (fd < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
+    {
+        if (fd >= 0) close(fd);
+        free(fpath);
+        return tool_result_error("note not found", "file_not_found");
+    }
+
+    if (st.st_size > (long)max_file_size)
+    {
+        close(fd);
+        free(fpath);
+        return tool_result_error("note too large", "policy_denied");
+    }
+
+    FILE *f = fdopen(fd, "rb");
+    if (!f)
+    {
+        close(fd);
+        free(fpath);
+        return tool_result_error("cannot read note", "execution_error");
+    }
+
+    char *content = malloc((size_t)st.st_size + 1);
+    if (!content)
+    {
+        fclose(f);
+        free(fpath);
+        return tool_result_error("oom", "execution_error");
+    }
+
+    size_t read = fread(content, 1, (size_t)st.st_size, f);
+    fclose(f);
+    content[read] = '\0';
+    free(fpath);
+
+    ToolResult *tr = tool_result_create(content);
+    free(content);
+    return tr;
+}
+
+static ToolResult *notes_action_write(const char *ndir, const char *name,
+                                      const char *note_content,
+                                      size_t max_file_size)
+{
+    if (!note_content)
+        return tool_result_error("missing 'content' for write action",
+                                 "validation_error");
+    if (strlen(note_content) > max_file_size)
+        return tool_result_error("note too large", "policy_denied");
+
+    char *fpath = NULL;
+    if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
+        return tool_result_error("oom", "execution_error");
+
+    int fd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    FILE *f = fd >= 0 ? fdopen(fd, "w") : NULL;
+    if (!f)
+    {
+        if (fd >= 0) close(fd);
+        free(fpath);
+        return tool_result_error("cannot write note", "execution_error");
+    }
+
+    size_t content_len = strlen(note_content);
+    int write_failed = fwrite(note_content, 1, content_len, f) != content_len;
+    int close_failed = fclose(f) != 0;
+    if (write_failed || close_failed)
+    {
+        free(fpath);
+        return tool_result_error("cannot write note", "execution_error");
+    }
+    free(fpath);
+
+    return tool_result_create("Note written successfully.");
+}
+
+static ToolResult *notes_action_delete(const char *ndir, const char *name)
+{
+    char *fpath = NULL;
+    if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
+        return tool_result_error("oom", "execution_error");
+
+    int rc = unlink(fpath);
+    free(fpath);
+
+    if (rc != 0)
+        return tool_result_error("note not found or cannot delete",
+                                 "file_not_found");
+    return tool_result_create("Note deleted.");
 }
 
 static ToolResult *notes_execute(Tool *self, const char *args_json)
@@ -126,28 +260,7 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
     {
         free(action);
         cJSON_Delete(args);
-        DIR *dir = opendir(ndir);
-        if (!dir) return tool_result_create("(no notes)");
-
-        cJSON *arr = cJSON_CreateArray();
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL)
-        {
-            if (str_ends_with(entry->d_name, ".md"))
-            {
-                char *dot = strrchr(entry->d_name, '.');
-                if (dot) *dot = '\0';
-                cJSON_AddItemToArray(arr, cJSON_CreateString(entry->d_name));
-                if (dot) *dot = '.';
-            }
-        }
-        closedir(dir);
-
-        char *result = cJSON_PrintUnformatted(arr);
-        cJSON_Delete(arr);
-        ToolResult *tr = tool_result_create(result ? result : "(no notes)");
-        free(result);
-        return tr;
+        return notes_action_list(ndir);
     }
 
     char *name = NULL;
@@ -187,119 +300,30 @@ static ToolResult *notes_execute(Tool *self, const char *args_json)
         return tool_result_error("oom", "execution_error");
     }
 
+    ToolResult *tr = NULL;
     if (strcmp(action, "read") == 0)
     {
-        free(action);
-        char *fpath = NULL;
-        if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
-        {
-            free(name); free(note_content);
-            return tool_result_error("oom", "execution_error");
-        }
-
-        int fd = open(fpath, O_RDONLY | O_NOFOLLOW);
-        struct stat st;
-        if (fd < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
-        {
-            if (fd >= 0) close(fd);
-            free(fpath); free(name); free(note_content);
-            return tool_result_error("note not found", "file_not_found");
-        }
-
-        FILE *f = fdopen(fd, "rb");
-        if (!f)
-        {
-            close(fd);
-            free(fpath); free(name); free(note_content);
-            return tool_result_error("cannot read note", "execution_error");
-        }
-
-        if (st.st_size > (long)ctx->safety->max_file_size)
-        {
-            fclose(f); free(fpath); free(name); free(note_content);
-            return tool_result_error("note too large", "policy_denied");
-        }
-
-        char *content = malloc((size_t)st.st_size + 1);
-        if (!content)
-        {
-            fclose(f); free(fpath); free(name); free(note_content);
-            return tool_result_error("oom", "execution_error");
-        }
-
-        size_t read = fread(content, 1, (size_t)st.st_size, f);
-        fclose(f);
-        content[read] = '\0';
-        free(fpath);
-        free(name); free(note_content);
-
-        ToolResult *tr = tool_result_create(content);
-        free(content);
-        return tr;
+        tr = notes_action_read(ndir, name, (size_t)ctx->safety->max_file_size);
     }
     else if (strcmp(action, "write") == 0)
     {
-        free(action);
-        if (!note_content)
-        {
-            free(name);
-            return tool_result_error("missing 'content' for write action", "validation_error");
-        }
-        if (strlen(note_content) > ctx->safety->max_file_size)
-        {
-            free(name); free(note_content);
-            return tool_result_error("note too large", "policy_denied");
-        }
-
-        char *fpath = NULL;
-        if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
-        {
-            free(name); free(note_content);
-            return tool_result_error("oom", "execution_error");
-        }
-
-        int fd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
-        FILE *f = fd >= 0 ? fdopen(fd, "w") : NULL;
-        if (!f)
-        {
-            if (fd >= 0) close(fd);
-            free(fpath); free(name); free(note_content);
-            return tool_result_error("cannot write note", "execution_error");
-        }
-
-        size_t content_len = strlen(note_content);
-        int write_failed = fwrite(note_content, 1, content_len, f) != content_len;
-        int close_failed = fclose(f) != 0;
-        if (write_failed || close_failed)
-        {
-            free(fpath); free(name); free(note_content);
-            return tool_result_error("cannot write note", "execution_error");
-        }
-        free(fpath);
-        free(name); free(note_content);
-
-        return tool_result_create("Note written successfully.");
+        tr = notes_action_write(ndir, name, note_content,
+                                (size_t)ctx->safety->max_file_size);
     }
     else if (strcmp(action, "delete") == 0)
     {
-        free(action);
-        char *fpath = NULL;
-        if (asprintf(&fpath, "%s/%s.md", ndir, name) < 0)
-        {
-            free(name); free(note_content);
-            return tool_result_error("oom", "execution_error");
-        }
-
-        int rc = unlink(fpath);
-        free(fpath);
-        free(name); free(note_content);
-
-        if (rc != 0) return tool_result_error("note not found or cannot delete", "file_not_found");
-        return tool_result_create("Note deleted.");
+        tr = notes_action_delete(ndir, name);
+    }
+    else
+    {
+        tr = tool_result_error("unknown action (use list, read, write, delete)",
+                               "validation_error");
     }
 
-    free(action); free(name); free(note_content);
-    return tool_result_error("unknown action (use list, read, write, delete)", "validation_error");
+    free(action);
+    free(name);
+    free(note_content);
+    return tr;
 }
 
 static void notes_destroy(Tool *self)
@@ -328,7 +352,10 @@ Tool *tool_notes_create(SafetyConfig *safety)
     if (!t) return NULL;
 
     NotesCtx *ctx = calloc(1, sizeof(NotesCtx));
-    if (!ctx) { free(t); return NULL; }
+    if (!ctx) {
+        free(t);
+        return NULL;
+    }
     ctx->safety = safety;
 
     t->name = str_dup("notes");

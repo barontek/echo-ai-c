@@ -65,6 +65,7 @@ add_executable(test_write_file
     ../../src/safety/safety.c
     ../../src/config/config.c
     ../../src/change_tracker/change_tracker.c
+    ../../src/utils/logging.c
     ../../src/utils/string_utils.c
     test_write_file.c
 )
@@ -102,8 +103,10 @@ add_executable(test_replace_in_file
     ../../src/safety/safety.c
     ../../src/config/config.c
     ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
     test_replace_in_file.c
 )
+target_compile_definitions(test_replace_in_file PRIVATE REPLACE_IN_FILE_TEST=1)
 target_include_directories(test_replace_in_file PRIVATE ../../src)
 target_link_libraries(test_replace_in_file PRIVATE echo_ai_test_deps)
 add_test(NAME test_replace_in_file COMMAND test_replace_in_file)
@@ -274,6 +277,7 @@ add_executable(test_notes
     ../../src/safety/safety.c
     ../../src/config/config.c
     ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
     test_notes.c
 )
 target_compile_definitions(test_notes PRIVATE NOTES_TEST=1)

@@ -46,7 +46,7 @@ add_executable(test_agent_save
     provider_auth_stub.c
     test_agent_save.c
 )
-target_compile_definitions(test_agent_save PRIVATE AGENT_TEST=1)
+target_compile_definitions(test_agent_save PRIVATE AGENT_TEST=1 MESSAGE_TEST=1)
 target_include_directories(test_agent_save PRIVATE ../../src)
 target_link_libraries(test_agent_save PRIVATE echo_ai_test_deps)
 add_test(NAME test_agent_save COMMAND test_agent_save)

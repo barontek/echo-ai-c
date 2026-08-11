@@ -1,3 +1,4 @@
+/* fuzz_duckduckgo_html_extract - libFuzzer target for duckduckgo html extract parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for the DuckDuckGo results-page HTML extractor in
  * src/tools/search_duckduckgo.c (the real html_extract, exposed via
  * search_duckduckgo_test_extract under SEARCH_DUCKDUCKGO_TEST). Fuzzes

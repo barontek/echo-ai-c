@@ -373,9 +373,11 @@ int session_manager_delete_provider_oauth(SessionManager *sm,
  * @new_password: replacement password; must be non-NULL, borrowed for the
  *   call duration.
  *
- * Full contract in migration.h: 0 on success, -1 on failure (old state
- * restored), -2 when the DB was committed but verifier activation failed
- * (enc_key stays the new key; the next startup recovers via the marker).
+ * Full contract in migration.h.
+ *
+ * Return: 0 on success, -1 on failure (old state restored), -2 when the
+ * DB was committed but verifier activation failed (enc_key stays the new
+ * key; the next startup recovers via the marker).
  */
 int migration_change_password(SessionManager *sm, const char *new_password);
 
@@ -449,6 +451,20 @@ int session_manager_save_session_nolock(SessionManager *sm, Session *session);
  * Return: void. Not thread-safe; call before any concurrent use.
  */
 void session_manager_test_set_alloc_fail(int nth_allocation);
+
+/**
+ * session_manager_test_set_asprintf_fail - arm asprintf fault injection
+ * @nth: fail the Nth asprintf call (1-based) in session_branch.c, or -1
+ *   to disarm.
+ *
+ * Test-only hook: the branch id/group mints allocate via asprintf, which
+ * the str_dup counter cannot reach; failing them exercises the fork
+ * cleanup paths that run before message_copy initializes the fork copy.
+ * Only compiled with -DSESSION_MANAGER_TEST=1.
+ *
+ * Return: void. Not thread-safe; call before any concurrent use.
+ */
+void session_manager_test_set_asprintf_fail(int nth);
 
 /**
  * session_manager_test_set_realloc_fail - arm realloc fault injection

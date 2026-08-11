@@ -67,9 +67,13 @@ static int build_fernet_token(const unsigned char *aes_key, const unsigned char 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return -1;
 
-    int ciphertext_len = 0, len = 0;
+    int ciphertext_len = 0;
+    int len = 0;
     unsigned char *ciphertext = calloc(1, plaintext_len + 16);
-    if (!ciphertext) { EVP_CIPHER_CTX_free(ctx); return -1; }
+    if (!ciphertext) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
 
     EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, aes_key, iv);
     EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len);
@@ -88,7 +92,10 @@ static int build_fernet_token(const unsigned char *aes_key, const unsigned char 
 
     int token_size = 1 + 8 + IV_SIZE + ciphertext_len + HMAC_SIZE;
     unsigned char *token = malloc(token_size);
-    if (!token) { free(ciphertext); return -1; }
+    if (!token) {
+        free(ciphertext);
+        return -1;
+    }
 
     int pos = 0;
     token[pos++] = FERNET_VERSION;
@@ -136,13 +143,36 @@ static int decrypt_fernet_token(const unsigned char *aes_key, const unsigned cha
     if (!ctx) return -1;
 
     unsigned char *plaintext = malloc(ciphertext_len + 16);
-    if (!plaintext) { EVP_CIPHER_CTX_free(ctx); return -1; }
+    if (!plaintext) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
 
-    int plaintext_len = 0, len = 0;
-    EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, aes_key, iv);
-    EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len);
+    /* Every EVP call is checked: DecryptFinal_ex fails on bad padding, and
+     * on failure the plaintext region beyond the bytes DecryptUpdate wrote
+     * is unwritten — handing that to callers (which NUL-terminate and
+     * return it) is the classic EVP trap. Error => no output at all. */
+    int plaintext_len = 0;
+    int len = 0;
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, aes_key, iv) != 1)
+    {
+        EVP_CIPHER_CTX_free(ctx);
+        free(plaintext);
+        return -1;
+    }
+    if (EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len) != 1)
+    {
+        EVP_CIPHER_CTX_free(ctx);
+        free(plaintext);
+        return -1;
+    }
     plaintext_len = len;
-    EVP_DecryptFinal_ex(ctx, plaintext + len, &len);
+    if (EVP_DecryptFinal_ex(ctx, plaintext + len, &len) != 1)
+    {
+        EVP_CIPHER_CTX_free(ctx);
+        free(plaintext);
+        return -1;
+    }
     plaintext_len += len;
     EVP_CIPHER_CTX_free(ctx);
 
@@ -286,7 +316,10 @@ int encryption_create_verifier(const EncryptionKey *key, const char *path)
     if (!token) return -1;
 
     FILE *f = fopen(path, "wbx");
-    if (!f) { free(token); return -1; }
+    if (!f) {
+        free(token);
+        return -1;
+    }
 
     int rc = -1;
     if (fwrite(token, 1, out_len, f) == (size_t)out_len)
@@ -304,14 +337,23 @@ int encryption_check_verifier(const EncryptionKey *key, const char *path)
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     rewind(f);
-    if (fsize <= 0 || fsize > 4096) { fclose(f); return -1; }
+    if (fsize <= 0 || fsize > 4096) {
+        fclose(f);
+        return -1;
+    }
 
     unsigned char *data = malloc((size_t)fsize);
-    if (!data) { fclose(f); return -1; }
+    if (!data) {
+        fclose(f);
+        return -1;
+    }
 
     size_t read = fread(data, 1, (size_t)fsize, f);
     fclose(f);
-    if (read != (size_t)fsize) { free(data); return -1; }
+    if (read != (size_t)fsize) {
+        free(data);
+        return -1;
+    }
 
     int out_len = 0;
     unsigned char *dec = encryption_decrypt(key, data, (int)read, &out_len);

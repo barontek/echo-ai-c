@@ -3,6 +3,7 @@
 #include <string.h>
 #include "agent/message.h"
 
+/* test_openai_compatible - unit tests for openai compatible. Depends on: check, the module under test. */
 LLMResponse *openai_compatible_test_parse_response(const char *raw);
 
 LLMResponse *openai_compatible_test_parse_stream_alloc(

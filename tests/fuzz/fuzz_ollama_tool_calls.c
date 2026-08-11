@@ -1,3 +1,4 @@
+/* fuzz_ollama_tool_calls - libFuzzer target for ollama tool calls parsing. Depends on: check, the module under test. */
 /* libFuzzer harness for parse_stream_tool_calls — the JSON tool_calls
  * parser that processes LLM streaming output. Compiles the REAL
  * src/llm/ollama.c under OLLAMA_TEST and drives it through
