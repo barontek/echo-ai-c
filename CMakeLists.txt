@@ -99,6 +99,8 @@ add_executable(echo-ai
     src/utils/metrics.c
     src/change_tracker/change_tracker.c
     src/server/server.c
+    src/server/serve_static.c
+    src/server/http_parse.c
     src/server/websocket.c
     src/server/routes/routes.c
     src/server/routes/routes_auth.c

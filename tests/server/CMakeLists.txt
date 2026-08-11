@@ -8,6 +8,8 @@ add_test(NAME test_middleware COMMAND test_middleware)
 
 add_executable(test_server
     ../../src/server/server.c
+    ../../src/server/serve_static.c
+    ../../src/server/http_parse.c
     ../../src/utils/string_utils.c
     test_server.c
 )
