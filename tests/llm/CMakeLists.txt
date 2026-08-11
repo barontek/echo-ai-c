@@ -1,5 +1,6 @@
 add_executable(test_ollama_tool_calls
     ../../src/llm/ollama.c
+    curl_stub.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
@@ -12,6 +13,7 @@ add_test(NAME test_ollama_tool_calls COMMAND test_ollama_tool_calls)
 
 add_executable(test_ollama
     ../../src/llm/ollama.c
+    curl_stub.c
     ../../src/agent/message.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
