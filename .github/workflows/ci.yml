@@ -38,6 +38,14 @@ jobs:
     - name: test
       run: ctest --test-dir build -V
 
+    # File-size audit (AGENTS.md "Code style — File size"): non-blocking
+    # report. src/main.c is currently the only file over the band and is
+    # deferred by design (FILE_LENGTH_COMPLIANCE_PLAN.md N3); the step
+    # flips to blocking when the audit is clean.
+    - name: file-length audit
+      continue-on-error: true
+      run: scripts/check-file-lengths.sh
+
   # Release build with sanitizers still on (AGENTS.md build-flag contract:
   # sanitizers stay on in CI even for release test runs). Also exercises
   # -D_FORTIFY_SOURCE=2 under -Werror, which Debug never sees.

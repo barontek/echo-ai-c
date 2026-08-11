@@ -467,16 +467,16 @@ Status key: [x] done · [~] partial/deferred with reason. Evidence: docs/verific
 | E13 vague test names | [x] | 13 renames |
 | E14 multi-behavior tests | [x] | string ×2 + openai refresh split; session_manager 3 large integration tests [~] defer |
 | E15 flat TCases | [x] | html_extract split into 5 TCases; web_fetch/config/server [~] defer |
-| E16 oversized test files | [~] | defer: split products already exist; E15 shrunk the worst |
+| E16 oversized test files | [x] | executed 2026-08-12 by FILE_LENGTH_COMPLIANCE_PLAN.md (T1-T4): test_routes_ws -> 5 binaries + helpers, test_session_manager -> 4 binaries + fixture, test_routes_session_handlers -> 4 binaries, test_routes_general -> 2 binaries; auth/ollama/openai/safety near-limit files also split (N6-N9) |
 | E17 untyped ck_assert | [x] | NULL/strcmp converted; strstr blocked by check 0.15.2 (no ck_assert_str_contains) |
 | E18 file/area renames | [~] | defer: churns CI config; documented |
-| E19 Branches TCase split | [~] | defer with E16 |
+| E19 Branches TCase split | [x] | executed 2026-08-12: Branches TCase -> tests/session/test_session_branch.c (FILE_LENGTH_COMPLIANCE_PLAN.md T2) |
 | E20 internals pinning | [~] | defer: mirrors ARE the harness contract (documented in test files) |
 | F1 long functions | [~] | notes_execute split as pattern (266→120); remaining 50+ defer (F3 table exists) |
-| F2 file-level splits | [~] | defer: openai_oauth/html_extract/session_manager splits (large, risky) |
+| F2 file-level splits | [x] | executed 2026-08-12 by FILE_LENGTH_COMPLIANCE_PLAN.md (S1-S6, N1-N5): openai_oauth -> 6 units, openai -> 3 units + internal header, session_manager -> 4 units + internal header, html_extract -> 6 units + internal header, routes_ws -> 3 units + internal header, agent -> 5 units + internal header, openai_compatible/server/ollama/session_branch also split |
 | F3 nesting depth | [~] | defer with F1 |
 | F4 WHY comments | [x] | websocket RFC6455/opcodes/mask + grep/list_dir truncation markers |
-| F5 descriptive scope | [~] | defer with F2 |
+| F5 descriptive scope | [x] | resolved by F2's splits (agent/session_manager/server/routes_general headers rewritten); main.c deferred with documented rationale (entry point + two REPL frontends, FILE_LENGTH_COMPLIANCE_PLAN.md N3) |
 | G1 debug tooling | [x] | scripts/debug-check.sh + make check-debug/valgrind |
 | G2 per-fix evidence + Valgrind | [x] | docs/verification/2026-08-11_fix_evidence.md; Valgrind 0 on 7 suites |
 | G3 remediation-plan hygiene | [x] | ID_MAPPING.md; §5.7 verified (E2) |
