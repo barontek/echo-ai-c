@@ -16,16 +16,19 @@ target_include_directories(test_routes_session PRIVATE ../../src)
 target_link_libraries(test_routes_session PRIVATE echo_ai_test_deps)
 add_test(NAME test_routes_session COMMAND test_routes_session)
 
-add_executable(test_routes_session_handlers
-    ../../src/server/routes/routes_session.c
-    ../../src/utils/string_utils.c
-    ../../src/utils/logging.c
-    test_routes_session_handlers.c
-)
-target_compile_definitions(test_routes_session_handlers PRIVATE ROUTES_SESSION_ALLOC_TEST=1)
-target_include_directories(test_routes_session_handlers PRIVATE ../../src)
-target_link_libraries(test_routes_session_handlers PRIVATE echo_ai_test_deps)
-add_test(NAME test_routes_session_handlers COMMAND test_routes_session_handlers)
+foreach(sh_unit handlers get mutate import)
+    add_executable(test_routes_session_${sh_unit}
+        ../../src/server/routes/routes_session.c
+        ../../src/utils/string_utils.c
+        ../../src/utils/logging.c
+        test_routes_session_fixture.c
+        test_routes_session_${sh_unit}.c
+    )
+    target_compile_definitions(test_routes_session_${sh_unit} PRIVATE ROUTES_SESSION_ALLOC_TEST=1)
+    target_include_directories(test_routes_session_${sh_unit} PRIVATE ../../src)
+    target_link_libraries(test_routes_session_${sh_unit} PRIVATE echo_ai_test_deps)
+    add_test(NAME test_routes_session_${sh_unit} COMMAND test_routes_session_${sh_unit})
+endforeach()
 
 add_executable(test_routes_general
     ../../src/server/routes/routes_general.c
