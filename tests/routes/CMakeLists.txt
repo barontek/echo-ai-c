@@ -67,18 +67,21 @@ target_include_directories(test_routes_chat PRIVATE ../../src)
 target_link_libraries(test_routes_chat PRIVATE echo_ai_test_deps)
 add_test(NAME test_routes_chat COMMAND test_routes_chat)
 
-add_executable(test_routes_ws
-    ../../src/server/routes/routes_ws.c
-    ../../src/server/routes/routes_ws_chat.c
-    ../../src/server/routes/routes_ws_handlers.c
-    ../../src/server/routes/routes_ws_callbacks.c
-    ../../src/server/routes/routes.c
-    ../../src/config/config.c
-    ../../src/utils/string_utils.c
-    ../../src/llm/factory.c
-    test_routes_ws.c
-)
-target_include_directories(test_routes_ws PRIVATE ../../src)
-target_compile_definitions(test_routes_ws PRIVATE ROUTES_WS_TEST ROUTES_TEST)
-target_link_libraries(test_routes_ws PRIVATE echo_ai_test_deps)
-add_test(NAME test_routes_ws COMMAND test_routes_ws)
+foreach(ws_unit callbacks queue message provider fork)
+    add_executable(test_routes_ws_${ws_unit}
+        ../../src/server/routes/routes_ws.c
+        ../../src/server/routes/routes_ws_chat.c
+        ../../src/server/routes/routes_ws_handlers.c
+        ../../src/server/routes/routes_ws_callbacks.c
+        ../../src/server/routes/routes.c
+        ../../src/config/config.c
+        ../../src/utils/string_utils.c
+        ../../src/llm/factory.c
+        test_routes_ws_helpers.c
+        test_routes_ws_${ws_unit}.c
+    )
+    target_include_directories(test_routes_ws_${ws_unit} PRIVATE ../../src)
+    target_compile_definitions(test_routes_ws_${ws_unit} PRIVATE ROUTES_WS_TEST ROUTES_TEST)
+    target_link_libraries(test_routes_ws_${ws_unit} PRIVATE echo_ai_test_deps)
+    add_test(NAME test_routes_ws_${ws_unit} COMMAND test_routes_ws_${ws_unit})
+endforeach()
