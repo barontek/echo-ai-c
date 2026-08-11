@@ -32,6 +32,11 @@ add_executable(echo-ai
     src/utils/json.c
     src/agent/message.c
     src/agent/agent.c
+    src/agent/agent_prompt.c
+    src/agent/agent_tools.c
+    src/agent/agent_title.c
+    src/agent/agent_summarize.c
+    src/agent/agent_run.c
     src/agent/context.c
     src/llm/ollama.c
     src/llm/openai.c

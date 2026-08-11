@@ -34,6 +34,11 @@ add_test(NAME test_safety COMMAND test_safety)
 
 add_executable(test_agent_save
     ../../src/agent/agent.c
+    ../../src/agent/agent_prompt.c
+    ../../src/agent/agent_tools.c
+    ../../src/agent/agent_title.c
+    ../../src/agent/agent_summarize.c
+    ../../src/agent/agent_run.c
     ../../src/agent/message.c
     ../../src/session/session_manager.c
     ../../src/session/session_db.c
@@ -57,6 +62,11 @@ add_test(NAME test_agent_save COMMAND test_agent_save)
 
 add_executable(test_agent_provider
     ../../src/agent/agent.c
+    ../../src/agent/agent_prompt.c
+    ../../src/agent/agent_tools.c
+    ../../src/agent/agent_title.c
+    ../../src/agent/agent_summarize.c
+    ../../src/agent/agent_run.c
     ../../src/agent/message.c
     ../../src/session/session_manager.c
     ../../src/session/session_db.c
