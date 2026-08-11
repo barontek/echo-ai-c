@@ -21,6 +21,12 @@ add_executable(echo-ai
     src/config/config.c
     src/utils/string_utils.c
     src/utils/html_extract.c
+    src/utils/html_unicode.c
+    src/utils/html_entities.c
+    src/utils/html_tags.c
+    src/utils/html_outbuf.c
+    src/utils/html_writer.c
+    src/utils/html_assembly.c
     src/utils/http_client.c
     src/utils/logging.c
     src/utils/json.c

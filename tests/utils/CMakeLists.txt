@@ -22,7 +22,7 @@ target_include_directories(test_http_client PRIVATE ../../src)
 target_link_libraries(test_http_client PRIVATE echo_ai_test_deps)
 add_test(NAME test_http_client COMMAND test_http_client)
 
-add_executable(test_html_extract ../../src/utils/html_extract.c ../../src/utils/string_utils.c test_html_extract.c)
+add_executable(test_html_extract ../../src/utils/html_extract.c ../../src/utils/html_unicode.c ../../src/utils/html_entities.c ../../src/utils/html_tags.c ../../src/utils/html_outbuf.c ../../src/utils/html_writer.c ../../src/utils/html_assembly.c ../../src/utils/string_utils.c test_html_extract.c)
 target_compile_definitions(test_html_extract PRIVATE HTML_EXTRACT_TEST=1)
 target_include_directories(test_html_extract PRIVATE ../../src)
 target_link_libraries(test_html_extract PRIVATE echo_ai_test_deps)

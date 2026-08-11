@@ -95,6 +95,18 @@ if(HAS_LIBFUZZER)
     # fuzz_html_extract — exercises html_extract_text with fuzzed raw HTML
     add_executable(fuzz_html_extract
         ../src/utils/html_extract.c
+        ../src/utils/html_unicode.c
+        ../src/utils/html_entities.c
+        ../src/utils/html_tags.c
+        ../src/utils/html_outbuf.c
+        ../src/utils/html_writer.c
+        ../src/utils/html_assembly.c
+        ../src/utils/html_unicode.c
+        ../src/utils/html_entities.c
+        ../src/utils/html_tags.c
+        ../src/utils/html_outbuf.c
+        ../src/utils/html_writer.c
+        ../src/utils/html_assembly.c
         ../src/utils/string_utils.c
         fuzz/fuzz_html_extract.c
     )

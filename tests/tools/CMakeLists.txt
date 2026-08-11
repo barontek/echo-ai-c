@@ -318,6 +318,12 @@ add_executable(test_web_fetch
     ../../src/utils/http_client.c
     ../../src/utils/string_utils.c
     ../../src/utils/html_extract.c
+    ../../src/utils/html_unicode.c
+    ../../src/utils/html_entities.c
+    ../../src/utils/html_tags.c
+    ../../src/utils/html_outbuf.c
+    ../../src/utils/html_writer.c
+    ../../src/utils/html_assembly.c
     test_web_fetch.c
 )
 target_compile_definitions(test_web_fetch PRIVATE WEB_FETCH_TEST=1)
