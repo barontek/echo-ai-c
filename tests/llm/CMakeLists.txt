@@ -74,6 +74,21 @@ target_include_directories(test_openai PRIVATE ../../src)
 target_link_libraries(test_openai PRIVATE echo_ai_test_deps)
 add_test(NAME test_openai COMMAND test_openai)
 
+add_executable(test_openai_stream
+    ../../src/llm/openai.c
+    ../../src/llm/openai_request.c
+    ../../src/llm/openai_stream.c
+    ../../src/llm/openai_response.c
+    ../../src/utils/http_client.c
+    ../../src/agent/message.c
+    ../../src/utils/string_utils.c
+    test_openai_stream.c
+)
+target_compile_definitions(test_openai_stream PRIVATE OPENAI_TEST=1)
+target_include_directories(test_openai_stream PRIVATE ../../src)
+target_link_libraries(test_openai_stream PRIVATE echo_ai_test_deps)
+add_test(NAME test_openai_stream COMMAND test_openai_stream)
+
 add_executable(test_openai_oauth
     ../../src/llm/openai_oauth.c
     ../../src/llm/oauth_codec.c
