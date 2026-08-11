@@ -101,6 +101,9 @@ add_executable(echo-ai
     src/server/routes/routes_chat.c
     src/server/routes/routes_general.c
     src/server/routes/routes_ws.c
+    src/server/routes/routes_ws_chat.c
+    src/server/routes/routes_ws_handlers.c
+    src/server/routes/routes_ws_callbacks.c
     src/server/middleware.c
 )
 

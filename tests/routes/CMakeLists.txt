@@ -69,6 +69,9 @@ add_test(NAME test_routes_chat COMMAND test_routes_chat)
 
 add_executable(test_routes_ws
     ../../src/server/routes/routes_ws.c
+    ../../src/server/routes/routes_ws_chat.c
+    ../../src/server/routes/routes_ws_handlers.c
+    ../../src/server/routes/routes_ws_callbacks.c
     ../../src/server/routes/routes.c
     ../../src/config/config.c
     ../../src/utils/string_utils.c
