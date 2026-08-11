@@ -32,6 +32,16 @@ target_include_directories(test_safety PRIVATE ../../src)
 target_link_libraries(test_safety PRIVATE echo_ai_test_deps)
 add_test(NAME test_safety COMMAND test_safety)
 
+add_executable(test_safety_conf
+    ../../src/safety/safety.c
+    ../../src/config/config.c
+    ../../src/utils/string_utils.c
+    test_safety_conf.c
+)
+target_include_directories(test_safety_conf PRIVATE ../../src)
+target_link_libraries(test_safety_conf PRIVATE echo_ai_test_deps)
+add_test(NAME test_safety_conf COMMAND test_safety_conf)
+
 add_executable(test_agent_save
     ../../src/agent/agent.c
     ../../src/agent/agent_prompt.c
