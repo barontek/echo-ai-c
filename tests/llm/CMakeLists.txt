@@ -66,6 +66,12 @@ add_test(NAME test_openai COMMAND test_openai)
 
 add_executable(test_openai_oauth
     ../../src/llm/openai_oauth.c
+    ../../src/llm/oauth_codec.c
+    ../../src/llm/oauth_jwt.c
+    ../../src/llm/oauth_vault.c
+    ../../src/llm/oauth_http.c
+    ../../src/llm/oauth_callback.c
+    ../../src/llm/oauth_device.c
     ../../src/utils/http_client.c
     test_openai_oauth.c
 )
