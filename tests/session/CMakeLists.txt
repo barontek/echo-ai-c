@@ -11,7 +11,8 @@ add_test(NAME test_memory COMMAND test_memory)
 
 foreach(sm_unit manager crud oauth branch)
     if(sm_unit STREQUAL "branch")
-        set(SM_BRANCH_SRC ../../src/session/session_branch.c)
+        set(SM_BRANCH_SRC ../../src/session/session_branch.c
+                           ../../src/session/session_branch_info.c)
     else()
         set(SM_BRANCH_SRC)
     endif()
