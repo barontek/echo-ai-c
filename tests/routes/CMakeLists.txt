@@ -30,16 +30,19 @@ foreach(sh_unit handlers get mutate import)
     add_test(NAME test_routes_session_${sh_unit} COMMAND test_routes_session_${sh_unit})
 endforeach()
 
-add_executable(test_routes_general
-    ../../src/server/routes/routes_general.c
-    ../../src/config/config.c
-    ../../src/utils/string_utils.c
-    openai_oauth_stub.c
-    test_routes_general.c
-)
-target_include_directories(test_routes_general PRIVATE ../../src)
-target_link_libraries(test_routes_general PRIVATE echo_ai_test_deps)
-add_test(NAME test_routes_general COMMAND test_routes_general)
+foreach(gen_unit general models)
+    add_executable(test_routes_general_${gen_unit}
+        ../../src/server/routes/routes_general.c
+        ../../src/config/config.c
+        ../../src/utils/string_utils.c
+        openai_oauth_stub.c
+        test_routes_general_fixture.c
+        test_routes_${gen_unit}.c
+    )
+    target_include_directories(test_routes_general_${gen_unit} PRIVATE ../../src)
+    target_link_libraries(test_routes_general_${gen_unit} PRIVATE echo_ai_test_deps)
+    add_test(NAME test_routes_general_${gen_unit} COMMAND test_routes_general_${gen_unit})
+endforeach()
 
 add_executable(test_routes_auth
     ../../src/server/routes/routes_auth.c
