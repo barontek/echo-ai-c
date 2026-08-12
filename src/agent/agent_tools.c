@@ -49,7 +49,7 @@ int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
             err_msg->tool_call_id = str_dup(calls[i].id ? calls[i].id : "");
             err_msg->tool_name = str_dup(tname);
             err_msg->error_category = str_dup("tool_not_found");
-            if (agent_append_message(agent, err_msg) == 0)
+            if (agent_append_message(agent, err_msg) >= 0)
                 free(err_msg); /* struct only: fields moved into the array */
             else
             {
@@ -81,7 +81,7 @@ int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
                 err_msg->tool_call_id = str_dup(calls[i].id ? calls[i].id : "");
                 err_msg->tool_name = str_dup(tname);
                 err_msg->error_category = str_dup("denied");
-                if (agent_append_message(agent, err_msg) == 0)
+                if (agent_append_message(agent, err_msg) >= 0)
                     free(err_msg); /* struct only: fields moved into array */
                 else
                 {
@@ -162,7 +162,7 @@ int execute_tool_calls(Agent *agent, ToolCall *calls, int count)
             tool_msg->content = err_content;
         }
 
-        if (agent_append_message(agent, tool_msg) == 0)
+        if (agent_append_message(agent, tool_msg) >= 0)
             free(tool_msg); /* struct only: fields moved into the array */
         else
         {

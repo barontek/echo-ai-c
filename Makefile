@@ -16,8 +16,11 @@ debug:
 	$(CMAKE) -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug
 	$(CMAKE) --build $(BUILD_DIR)
 
+# Sanitizers default to ON in CMakeLists for CI use; `make release` is the
+# production-binary path, so it opts out. CI runs release-with-sanitizers by
+# calling cmake directly with -DENABLE_SANITIZERS=ON, so this is safe.
 release:
-	$(CMAKE) -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release
+	$(CMAKE) -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release -DENABLE_SANITIZERS=OFF
 	$(CMAKE) --build $(BUILD_DIR)
 
 clean: frontend-clean

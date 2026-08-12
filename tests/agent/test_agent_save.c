@@ -7,6 +7,7 @@
 #include <sqlite3.h>
 #include "agent/agent.h"
 #include "agent/message.h"
+#include "agent/agent_internal.h"
 #include "session/session_manager.h"
 #include "session/memory.h"
 #include "tools/tool.h"
@@ -370,6 +371,48 @@ START_TEST(test_execute_tool_calls_message_oom_is_handled)
 }
 END_TEST
 
+/* 2026-08-12 crash regression: execute_tool_calls read agent_append_message's
+ * return value (the append INDEX) as a success flag, so any tool message
+ * landing at a non-zero index hit the "OOM" branch and message_free'd the
+ * struct while the array still referenced its fields — teardown then
+ * double-freed (Abort trap in message_clear, "pointer being freed was not
+ * allocated"). The executor must treat every index >= 0 as success; this
+ * test fails on the old code with a use-after-free on the field reads. */
+START_TEST(test_execute_tool_calls_nonzero_index_is_not_failure)
+{
+    Agent agent;
+    memset(&agent, 0, sizeof(agent));
+    Tool *tool = make_stub_tool();
+    stub_registry_tool = tool;
+
+    /* Prime the array so the tool message lands at idx=1, not idx=0. */
+    Message *first = message_create("user", "prime the array");
+    ck_assert_ptr_nonnull(first);
+    ck_assert_int_ge(agent_append_message(&agent, first), 0);
+    free(first); /* struct only: fields moved into the array */
+
+    ToolCall *calls = calloc(1, sizeof(ToolCall));
+    ck_assert_ptr_nonnull(calls);
+    calls[0].id = str_dup("call_1");
+    calls[0].name = str_dup("fake");
+    calls[0].arguments = str_dup("{}");
+
+    ck_assert_int_eq(agent_test_execute_tool_calls(&agent, calls, 1), 0);
+    ck_assert_int_eq(agent.messages_count, 2);
+    /* The tool message must still own its fields — the old code freed them
+     * via the misread "failure" branch. */
+    ck_assert_str_eq(agent.messages[1].role, "tool");
+    ck_assert_str_eq(agent.messages[1].content, "tool output text");
+    ck_assert_str_eq(agent.messages[1].tool_name, "fake");
+    ck_assert_str_eq(agent.messages[1].tool_call_id, "call_1");
+
+    message_free_all(agent.messages, agent.messages_count);
+    free_calls(calls, 1);
+    stub_registry_tool = NULL;
+    stub_tool_destroy(tool);
+}
+END_TEST
+
 Suite *agent_suite(void)
 {
     Suite *s = suite_create("Agent");
@@ -379,6 +422,7 @@ Suite *agent_suite(void)
     tcase_add_test(tc, test_execute_tool_calls_appends_tool_result);
     tcase_add_test(tc, test_execute_tool_calls_append_oom_keeps_count);
     tcase_add_test(tc, test_execute_tool_calls_message_oom_is_handled);
+    tcase_add_test(tc, test_execute_tool_calls_nonzero_index_is_not_failure);
     suite_add_tcase(s, tc);
     return s;
 }
