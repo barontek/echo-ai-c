@@ -47,6 +47,8 @@ run-web: frontend-build debug
 run-cli: debug
 	$(BUILD_DIR)/echo-ai --cli --config $(CONFIG)
 
+run-tui: run-cli
+
 # echo-ai behind a Caddy TLS proxy (see deploy/Caddyfile). Needs `caddy`
 # on PATH (nix develop on Nix; `apt install caddy` / `brew install caddy`
 # elsewhere). Ctrl-C stops both processes.

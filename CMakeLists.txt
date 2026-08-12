@@ -15,6 +15,13 @@ pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
 pkg_check_modules(OPENSSL REQUIRED IMPORTED_TARGET openssl)
 pkg_check_modules(CJSON REQUIRED IMPORTED_TARGET libcjson)
+# TUI rendering. notcurses splits its API across notcurses-core (planes,
+# input, stop) and notcurses (init/render plus the multimedia stubs); the
+# pkg-config "notcurses" file carries both. On nix the package is built
+# with -DUSE_MULTIMEDIA=none -DUSE_CXX=off (see flake.nix), so no ffmpeg
+# code is loaded; on Homebrew/apt the stock libnotcurses links ffmpeg,
+# which is inert because no media API is ever called.
+pkg_check_modules(NOTCURSES REQUIRED IMPORTED_TARGET notcurses)
 
 add_executable(echo-ai
     src/main.c
@@ -98,6 +105,14 @@ add_executable(echo-ai
     src/utils/circuit_breaker.c
     src/utils/callbacks.c
     src/utils/metrics.c
+    src/tui/tui_events.c
+    src/tui/tui_theme.c
+    src/tui/tui_input.c
+    src/tui/tui_chat.c
+    src/tui/tui_dialogs.c
+    src/tui/tui_stream.c
+    src/tui/tui_worker.c
+    src/tui/tui.c
     src/change_tracker/change_tracker.c
     src/server/server.c
     src/server/serve_static.c
@@ -122,6 +137,7 @@ target_link_libraries(echo-ai PRIVATE
     PkgConfig::SQLITE3
     PkgConfig::OPENSSL
     PkgConfig::CJSON
+    PkgConfig::NOTCURSES
     m
 )
 

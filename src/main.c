@@ -26,14 +26,15 @@
 #include "session/encryption.h"
 #include "session/memory.h"
 #include "change_tracker/change_tracker.h"
+#include "tui/tui.h"
 #include "server/server.h"
 
 static void print_usage(const char *prog)
 {
     printf("Usage: %s [OPTIONS]\n", prog);
     printf("Options:\n");
-    printf("  --cli        Interactive REPL with rich-rendered chat\n");
-    printf("  --chat       Lightweight interactive chat\n");
+    printf("  --cli        Interactive TUI (notcurses-based chat)\n");
+    printf("  --chat       Lightweight line-based chat (piped input ok)\n");
     printf("  --web        HTTP server on port 8080 (default)\n");
     printf("  --config PATH  Path to config file\n");
     printf("  --debug        Enable debug-level logging\n");
@@ -168,22 +169,37 @@ static SessionManager *init_session_manager(Conf *conf)
     return sm;
 }
 
-static SessionManager *g_session_manager = NULL;
 static int run_openai_device_login(OpenAIOAuth *auth);
 
-static void run_chat(Conf *conf)
+/*
+ * RuntimeCtx - result of the shared bootstrap sequence (setup_runtime).
+ * Owns agent, openai_auth, and safety; cfg_copy aliases Conf strings for
+ * web mode's AgentConfig copy. Caller must release with teardown_runtime().
+ */
+typedef struct {
+    Agent *agent;
+    OpenAIOAuth *openai_auth;
+    SafetyConfig *safety;
+    AgentConfig cfg_copy;
+    int registry_failed;
+} RuntimeCtx;
+
+static RuntimeCtx *setup_runtime(Conf *conf)
 {
-    SafetyConfig *safety = load_safety_config(conf);
-    if (!safety) {
+    RuntimeCtx *rt = calloc(1, sizeof(RuntimeCtx));
+    if (!rt) return NULL;
+
+    rt->safety = load_safety_config(conf);
+    if (!rt->safety)
+    {
         log_error("failed to load safety config", NULL);
-        return;
+        free(rt);
+        return NULL;
     }
 
-    {
-        int reg_failed = registry_init(safety);
-        if (reg_failed > 0)
-            log_error("tool registry partially initialized", "failed_count", NULL);
-    }
+    rt->registry_failed = registry_init(rt->safety);
+    if (rt->registry_failed > 0)
+        log_error("tool registry partially initialized", "failed_count", NULL);
 
     {
         const char *enabled = conf_get(conf, "tools.enabled");
@@ -191,44 +207,81 @@ static void run_chat(Conf *conf)
             log_error("failed to enable tools from config", "names", enabled, NULL);
     }
 
-    const char *sp_name = conf_get(conf, "search.provider");
-    if (sp_name)
     {
-        const char *api_key = conf_get(conf, "search.api_key");
-        SearchProvider *sp = search_provider_create(sp_name, api_key);
-        if (sp) registry_set_search_provider(sp);
+        const char *sp_name = conf_get(conf, "search.provider");
+        if (sp_name)
+        {
+            const char *api_key = conf_get(conf, "search.api_key");
+            SearchProvider *sp = search_provider_create(sp_name, api_key);
+            if (sp) registry_set_search_provider(sp);
+        }
     }
 
-    OpenAIOAuth *openai_auth = openai_oauth_create();
-    if (!openai_auth) {
+    rt->openai_auth = openai_oauth_create();
+    if (!rt->openai_auth)
+    {
         registry_destroy();
-        safety_config_free(safety);
-        return;
+        safety_config_free(rt->safety);
+        free(rt);
+        return NULL;
     }
-    registry_set_openai_oauth(openai_auth);
+    registry_set_openai_oauth(rt->openai_auth);
+
     AgentConfig *cfg = load_agent_config(conf);
-    if (cfg) cfg->openai_auth = openai_auth;
-    if (!cfg) {
+    if (cfg) cfg->openai_auth = rt->openai_auth;
+    if (!cfg)
+    {
         log_error("failed to load agent config", NULL);
-        openai_oauth_destroy(openai_auth);
+        openai_oauth_destroy(rt->openai_auth);
         registry_destroy();
-        safety_config_free(safety);
-        return;
+        safety_config_free(rt->safety);
+        free(rt);
+        return NULL;
     }
 
-    Agent *agent = agent_create(cfg);
-    if (!agent) {
+    rt->agent = agent_create(cfg);
+    if (!rt->agent)
+    {
         log_error("failed to create agent", NULL);
         free(cfg);
-        openai_oauth_destroy(openai_auth);
+        openai_oauth_destroy(rt->openai_auth);
         registry_destroy();
-        safety_config_free(safety);
-        return;
+        safety_config_free(rt->safety);
+        free(rt);
+        return NULL;
     }
-    agent_set_safety(agent, safety);
+    agent_set_safety(rt->agent, rt->safety);
+
+    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
+                                  cfg->num_ctx, cfg->keep_alive_secs,
+                                  cfg->temperature, cfg->timeout, cfg->max_iterations);
+
+    /* Inner strings alias Conf strings which outlive every mode's run */
+    rt->cfg_copy = *cfg;
+    free(cfg);
+    return rt;
+}
+
+static void teardown_runtime(RuntimeCtx *rt)
+{
+    if (!rt) return;
+    agent_destroy(rt->agent);
+    openai_oauth_destroy(rt->openai_auth);
+    registry_destroy();
+    safety_config_free(rt->safety);
+    free(rt);
+}
+
+static void run_chat(Conf *conf)
+{
+    RuntimeCtx *rt = setup_runtime(conf);
+    if (!rt) return;
+
+    Agent *agent = rt->agent;
+    OpenAIOAuth *openai_auth = rt->openai_auth;
 
     SessionManager *sm = NULL;
-    if (strcmp(cfg->provider, "openai") == 0)
+    if (strcmp(rt->cfg_copy.provider, "openai") == 0)
     {
         sm = init_session_manager(conf);
         if (sm)
@@ -239,11 +292,6 @@ static void run_chat(Conf *conf)
                 log_error("failed to load stored OpenAI credentials", NULL);
         }
     }
-
-    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
-                                  cfg->num_ctx, cfg->keep_alive_secs,
-                                  cfg->temperature, cfg->timeout, cfg->max_iterations);
-    free(cfg);
 
     printf("Echo AI -- Chat mode (type '/exit' to quit)\n");
     printf("Model: %s\n", agent->model);
@@ -293,30 +341,11 @@ static void run_chat(Conf *conf)
     }
 
     free(line);
-    agent_destroy(agent);
-    openai_oauth_destroy(openai_auth);
-    registry_set_session_manager(NULL);
+    if (sm) registry_set_session_manager(NULL);
     session_manager_free(sm);
-    registry_destroy();
-    safety_config_free(safety);
+    teardown_runtime(rt);
 }
 
-static void print_cli_help(void)
-{
-    printf("Commands:\n");
-    printf("  /exit           Quit the REPL\n");
-    printf("  /new            Reset conversation\n");
-    printf("  /save <name>    Save current session\n");
-    printf("  /load <id>      Load a session by ID\n");
-    printf("  /model <name>   Switch model\n");
-    printf("  /undo           Undo last file change\n");
-    printf("  /redo           Redo last undone file change\n");
-    printf("  /clear          Clear the screen\n");
-    printf("  /sessions       List saved sessions\n");
-    printf("  /openai-login    Sign in to OpenAI using a device code\n");
-    printf("  /openai-logout   Remove stored OpenAI credentials\n");
-    printf("  /help           Show this message\n");
-}
 
 static int run_openai_device_login(OpenAIOAuth *auth)
 {
@@ -351,365 +380,172 @@ static int run_openai_device_login(OpenAIOAuth *auth)
     return -1;
 }
 
-static void run_cli(Conf *conf)
+typedef struct {
+    Conf *conf;
+    OpenAIOAuth *oauth;
+    SafetyConfig *safety;
+    SessionManager *sm;
+} TuiFactoryCtx;
+
+static Agent *tui_agent_factory(void *userdata)
 {
-    SafetyConfig *safety = load_safety_config(conf);
-    if (!safety) {
-        log_error("failed to load safety config", NULL);
-        return;
-    }
-
+    TuiFactoryCtx *fc = userdata;
+    AgentConfig *cfg = load_agent_config(fc->conf);
+    if (cfg) cfg->openai_auth = fc->oauth;
+    if (!cfg)
     {
-        int reg_failed = registry_init(safety);
-        if (reg_failed > 0)
-            log_error("tool registry partially initialized", "failed_count", NULL);
-    }
-
-    {
-        const char *enabled = conf_get(conf, "tools.enabled");
-        if (enabled && registry_set_enabled(enabled) != 0)
-            log_error("failed to enable tools from config", "names", enabled, NULL);
-    }
-
-    {
-        const char *sp_name = conf_get(conf, "search.provider");
-        if (sp_name)
-        {
-            const char *api_key = conf_get(conf, "search.api_key");
-            SearchProvider *sp = search_provider_create(sp_name, api_key);
-            if (sp) registry_set_search_provider(sp);
-        }
-    }
-
-    OpenAIOAuth *openai_auth = openai_oauth_create();
-    if (!openai_auth) {
-        registry_destroy();
-        safety_config_free(safety);
-        return;
-    }
-    registry_set_openai_oauth(openai_auth);
-    AgentConfig *cfg = load_agent_config(conf);
-    if (cfg) cfg->openai_auth = openai_auth;
-    if (!cfg) {
         log_error("failed to load agent config", NULL);
-        openai_oauth_destroy(openai_auth);
-        registry_destroy();
-        safety_config_free(safety);
-        return;
+        return NULL;
     }
-
     Agent *agent = agent_create(cfg);
-    if (!agent) {
-        log_error("failed to create agent", NULL);
-        free(cfg);
-        openai_oauth_destroy(openai_auth);
-        registry_destroy();
-        safety_config_free(safety);
-        return;
-    }
-    agent_set_safety(agent, safety);
-
-    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
-                                  cfg->num_ctx, cfg->keep_alive_secs,
-                                  cfg->temperature, cfg->timeout, cfg->max_iterations);
-
-    g_session_manager = init_session_manager(conf);
-    if (g_session_manager)
-    {
-        registry_set_session_manager(g_session_manager);
-        agent_set_session_manager(agent, g_session_manager);
-        if (openai_oauth_attach_session(openai_auth, g_session_manager) != 0)
-            log_error("failed to load stored OpenAI credentials", NULL);
-        log_info("session manager ready", NULL);
-    }
-
-    ChangeTracker *ct = ct_create();
-
     free(cfg);
-
-    printf("Echo AI -- CLI mode (type '/help' for commands)\n");
-    printf("Model: %s\n", agent->model);
-    printf("Tools: %d registered\n", registry_count());
-    if (g_session_manager)
-        printf("Session: %s\n\n", agent->session_id ? agent->session_id : "(none)");
-    else
-        printf("Session: disabled\n\n");
-
-    char *line = NULL;
-    size_t line_cap = 0;
-
-    while (1)
+    if (!agent)
     {
-        printf("> ");
-        fflush(stdout);
-
-        ssize_t len = getline(&line, &line_cap, stdin);
-        if (len < 0) break;
-
-        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-
-        if (strcmp(line, "/exit") == 0 || strcmp(line, "/quit") == 0) break;
-
-        if (strcmp(line, "/new") == 0)
-        {
-            agent_destroy(agent);
-            AgentConfig *new_cfg = load_agent_config(conf);
-            if (new_cfg)
-            {
-                new_cfg->openai_auth = openai_auth;
-                agent = agent_create(new_cfg);
-                if (agent && g_session_manager)
-                {
-                    agent_set_session_manager(agent, g_session_manager);
-                }
-                free(new_cfg);
-            }
-            if (!agent) {
-                log_error("failed to recreate agent", NULL);
-                break;
-            }
-            printf("Session reset.\n\n");
-            continue;
-        }
-
-        if (strcmp(line, "/help") == 0)
-        {
-            print_cli_help();
-            printf("\n");
-            continue;
-        }
-
-        if (strcmp(line, "/openai-login") == 0)
-        {
-            if (!g_session_manager)
-                printf("OpenAI login requires encrypted session storage.\n\n");
-            else
-                (void)run_openai_device_login(openai_auth);
-            continue;
-        }
-
-        if (strcmp(line, "/openai-logout") == 0)
-        {
-            if (openai_oauth_logout(openai_auth) == 0)
-                printf("OpenAI signed out.\n\n");
-            else
-                printf("OpenAI sign-out failed.\n\n");
-            continue;
-        }
-
-        if (strcmp(line, "/clear") == 0)
-        {
-            printf("\033[2J\033[H");
-            continue;
-        }
-
-        if (strcmp(line, "/undo") == 0)
-        {
-            int rc = ct_undo(ct);
-            if (rc < 0)
-                printf("Nothing to undo (or the restore write failed).\n\n");
-            else
-                printf("Undone (%d bytes restored).\n\n", rc);
-            continue;
-        }
-
-        if (strcmp(line, "/redo") == 0)
-        {
-            int rc = ct_redo(ct);
-            if (rc < 0)
-                printf("Nothing to redo (or the restore write failed).\n\n");
-            else
-                printf("Redone (%d bytes written).\n\n", rc);
-            continue;
-        }
-
-        if (strncmp(line, "/save ", 6) == 0)
-        {
-            if (!g_session_manager)
-            {
-                printf("Session persistence disabled.\n\n");
-                continue;
-            }
-            const char *name = line + 6;
-            if (name[0] == '\0')
-            {
-                printf("Usage: /save <name>\n\n");
-                continue;
-            }
-            Session *s = session_manager_load_session_alloc(g_session_manager, agent->session_id);
-            if (s)
-            {
-                free(s->title);
-                s->title = str_dup(name);
-                if (session_manager_save_session(g_session_manager, s) == 0)
-                    printf("Session saved as '%s'.\n\n", name);
-                else
-                    printf("Failed to save session.\n\n");
-                session_free(s);
-            }
-            else
-                printf("No active session to save.\n\n");
-            continue;
-        }
-
-        if (strncmp(line, "/load ", 6) == 0)
-        {
-            if (!g_session_manager)
-            {
-                printf("Session persistence disabled.\n\n");
-                continue;
-            }
-            const char *sid = line + 6;
-            if (sid[0] == '\0')
-            {
-                printf("Usage: /load <id>\n\n");
-                continue;
-            }
-            Session *s = session_manager_load_session_alloc(g_session_manager, sid);
-            if (!s)
-            {
-                printf("Session '%s' not found.\n\n", sid);
-                continue;
-            }
-            free(agent->session_id);
-            agent->session_id = str_dup(sid);
-            printf("Loaded session: %s (%s)\n\n", s->title, sid);
-            session_free(s);
-            continue;
-        }
-
-        if (strncmp(line, "/model ", 7) == 0)
-        {
-            const char *model = line + 7;
-            if (model[0] == '\0')
-            {
-                printf("Current model: %s\n\n", agent->model);
-                continue;
-            }
-            free(agent->model);
-            agent->model = str_dup(model);
-            printf("Switched to model: %s\n\n", model);
-            continue;
-        }
-
-        if (strcmp(line, "/sessions") == 0)
-        {
-            if (!g_session_manager)
-            {
-                printf("Session persistence disabled.\n\n");
-                continue;
-            }
-            SessionList *list = session_manager_list_sessions(g_session_manager);
-            if (!list)
-            {
-                printf("No sessions found.\n\n");
-                continue;
-            }
-            printf("Sessions (%d):\n", list->count);
-            for (int i = 0; i < list->count; i++)
-            {
-                printf("  %s | %s | %s\n",
-                       list->ids[i], list->titles[i], list->created_ats[i]);
-            }
-            printf("\n");
-            session_list_free(list);
-            continue;
-        }
-
-        if (line[0] == '\0') continue;
-
-        printf("\n");
-        LLMResponse *resp = agent_run_new(agent, line);
-
-        if (resp && resp->content)
-        {
-            printf("%s\n\n", resp->content);
-        }
-        else if (resp)
-        {
-            printf("[no text response]\n\n");
-        }
-        else
-        {
-            printf("[error getting response]\n\n");
-        }
-
-        llm_response_free(resp);
+        log_error("failed to create agent", NULL);
+        return NULL;
     }
-
-    free(line);
-    ct_destroy(ct);
-    agent_destroy(agent);
-    openai_oauth_destroy(openai_auth);
-    if (g_session_manager) session_manager_free(g_session_manager);
-    registry_destroy();
-    safety_config_free(safety);
+    agent_set_safety(agent, fc->safety);
+    if (fc->sm) agent_set_session_manager(agent, fc->sm);
+    return agent;
 }
 
-static void run_web(Conf *conf, const char *config_path)
+static void run_tui(Conf *conf)
 {
-    SafetyConfig *safety = load_safety_config(conf);
-    if (!safety) {
-        log_error("failed to load safety config", NULL);
+    RuntimeCtx *rt = setup_runtime(conf);
+    if (!rt) return;
+
+    const char *style = conf_get(conf, "tui.style");
+    const char *density = conf_get(conf, "tui.density");
+    const char *accent = conf_get(conf, "tui.accent");
+
+    TuiEvents *evs = tui_events_init(1024);
+    TuiEvents *jobs = tui_events_init(64);
+    if (!evs || !jobs)
+    {
+        log_error("tui: event rings unavailable", NULL);
+        tui_events_destroy(evs);
+        tui_events_destroy(jobs);
+        teardown_runtime(rt);
         return;
     }
 
+    char *data_dir = NULL;
+    const char *home = getenv("HOME");
+    if (home && asprintf(&data_dir, "%s/.config/echo-ai", home) >= 0)
+        (void)mkdir(data_dir, 0700);
+
+    TuiFactoryCtx fctx = {.conf = conf, .oauth = rt->openai_auth,
+                          .safety = rt->safety, .sm = NULL};
+    TuiAppCtx actx;
+    memset(&actx, 0, sizeof(actx));
+    actx.agent = rt->agent;
+    actx.evs = evs;
+    actx.jobs = jobs;
+    actx.oauth = rt->openai_auth;
+    actx.safety = rt->safety;
+    actx.conf = conf;
+    actx.ct = ct_create();
+    actx.agent_factory = tui_agent_factory;
+    actx.agent_factory_userdata = &fctx;
+    actx.model = rt->agent->model;
+    actx.provider = rt->cfg_copy.provider;
+    actx.session_id = rt->agent->session_id;
+    actx.tool_count = registry_count();
+    actx.style = style;
+    actx.density = density;
+    actx.accent = accent;
+
+    TuiApp *app = tui_app_create(&actx);
+    if (!app)
     {
-        int reg_failed = registry_init(safety);
-        if (reg_failed > 0)
-            log_error("tool registry partially initialized", "failed_count", NULL);
+        log_error("tui: app init failed", NULL);
+        ct_destroy(actx.ct);
+        tui_events_destroy(evs);
+        tui_events_destroy(jobs);
+        teardown_runtime(rt);
+        free(data_dir);
+        return;
     }
 
+    SessionManager *sm = NULL;
+    int password_cancelled = 0;
+    if (data_dir)
     {
-        const char *enabled = conf_get(conf, "tools.enabled");
-        if (enabled && registry_set_enabled(enabled) != 0)
-            log_error("failed to enable tools from config", "names", enabled, NULL);
-    }
-
-    {
-        const char *sp_name = conf_get(conf, "search.provider");
-        if (sp_name)
+        const char *enabled = conf_get(conf, "session.enabled");
+        int session_enabled = !enabled || strcmp(enabled, "false") != 0;
+        if (session_enabled)
         {
-            const char *api_key = conf_get(conf, "search.api_key");
-            SearchProvider *sp = search_provider_create(sp_name, api_key);
-            if (sp) registry_set_search_provider(sp);
+            /* Unlock loop: wrong passwords retry with visible feedback,
+             * Esc/empty aborts startup cleanly. */
+            while (sm == NULL && !password_cancelled)
+            {
+                char *password = encryption_resolve_password_alloc();
+                if (!password)
+                {
+                    const char *prompt = encryption_first_run_detect(data_dir)
+                        ? "Create a database password: "
+                        : "Enter database password: ";
+                    password = tui_app_prompt_password(app, prompt);
+                }
+                if (!password)
+                {
+                    password_cancelled = 1;
+                    break;
+                }
+                SessionManagerCreateResult result = SESSION_MANAGER_CREATE_OK;
+                sm = session_manager_create_ex(data_dir, password, &result);
+                size_t pw_len = strlen(password);
+                memset(password, 0, pw_len);
+                free(password);
+                if (sm) break;
+                if (result == SESSION_MANAGER_CREATE_AUTH_FAILED)
+                {
+                    (void)tui_app_notice(app, "Wrong password",
+                                         "The database password did not match. Press any key to try again.");
+                    continue;
+                }
+                log_error("failed to create session manager", NULL);
+                (void)tui_app_notice(app, "Unlock failed",
+                                     "Could not open the session store. Press any key to exit.");
+                password_cancelled = 1;
+            }
+            if (sm)
+            {
+                fctx.sm = sm;
+                if (openai_oauth_attach_session(rt->openai_auth, sm) != 0)
+                    log_error("failed to load stored OpenAI credentials", NULL);
+                log_info("session manager ready", NULL);
+            }
         }
     }
-
-    OpenAIOAuth *openai_auth = openai_oauth_create();
-    if (!openai_auth) {
-        registry_destroy();
-        safety_config_free(safety);
-        return;
-    }
-    registry_set_openai_oauth(openai_auth);
-    AgentConfig *cfg = load_agent_config(conf);
-    if (cfg) cfg->openai_auth = openai_auth;
-    if (!cfg) {
-        log_error("failed to load agent config", NULL);
-        openai_oauth_destroy(openai_auth);
-        registry_destroy();
-        safety_config_free(safety);
+    if (password_cancelled)
+    {
+        tui_app_destroy(app);
+        ct_destroy(actx.ct);
+        tui_events_destroy(evs);
+        tui_events_destroy(jobs);
+        teardown_runtime(rt);
+        free(data_dir);
         return;
     }
 
-    Agent *agent = agent_create(cfg);
-    if (!agent) {
-        log_error("failed to create agent", NULL);
-        free(cfg);
-        openai_oauth_destroy(openai_auth);
-        registry_destroy();
-        safety_config_free(safety);
-        return;
-    }
-    agent_set_safety(agent, safety);
+    (void)tui_app_run(app, sm);
 
-    registry_set_delegate_config(cfg->provider, cfg->base_url, cfg->api_token, cfg->model,
-                                  cfg->num_ctx, cfg->keep_alive_secs,
-                                  cfg->temperature, cfg->timeout, cfg->max_iterations);
-    /* D2: copy before freeing cfg; assign to ctx later once it's declared. */
-    AgentConfig cfg_copy = *cfg;
-    free(cfg);
+    tui_app_destroy(app);
+    if (sm) session_manager_free(sm);
+    ct_destroy(actx.ct);
+    tui_events_destroy(evs);
+    tui_events_destroy(jobs);
+    teardown_runtime(rt);
+    free(data_dir);
+}
+static void run_web(Conf *conf, const char *config_path)
+{
+    RuntimeCtx *rt = setup_runtime(conf);
+    if (!rt) return;
+
+    Agent *agent = rt->agent;
+    OpenAIOAuth *openai_auth = rt->openai_auth;
 
     const char *session_enabled_str = conf_get(conf, "session.enabled");
     int session_enabled = !session_enabled_str || strcmp(session_enabled_str, "false") != 0;
@@ -749,12 +585,12 @@ static void run_web(Conf *conf, const char *config_path)
     }
 
     /* D2: inner string pointers alias Conf strings which outlive the server */
-    ctx.agent_cfg = cfg_copy;
+    ctx.agent_cfg = rt->cfg_copy;
     ctx.config_path = str_dup(config_path);
     ctx.agent = agent;
     ctx.openai_oauth = openai_auth;
     ctx.sm = NULL;
-    ctx.safety = safety;
+    ctx.safety = rt->safety;
     ctx.conf = (Conf *)conf;
     ctx.port = port;
     {
@@ -784,11 +620,8 @@ static void run_web(Conf *conf, const char *config_path)
     rate_limiter_destroy(ctx.rate_limiter);
     metrics_destroy(ctx.metrics);
     ct_destroy(ctx.change_tracker);
-    agent_destroy(agent);
-    openai_oauth_destroy(openai_auth);
     if (ctx.sm) session_manager_free(ctx.sm);
-    registry_destroy();
-    safety_config_free(safety);
+    teardown_runtime(rt);
 }
 
 int main(int argc, char *argv[])
@@ -843,7 +676,14 @@ int main(int argc, char *argv[])
     switch (mode)
     {
     case MODE_CLI:
-        run_cli(conf);
+        /* TUI mode owns the terminal; piped input is the --chat REPL's
+         * job (AGENTS.md decision 7: no silent fallback). */
+        if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
+        {
+            log_error("--cli requires an interactive terminal; use --chat for piped input", NULL);
+            return 1;
+        }
+        run_tui(conf);
         break;
     case MODE_CHAT:
         run_chat(conf);

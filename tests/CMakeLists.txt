@@ -22,6 +22,7 @@ add_subdirectory(tools)
 add_subdirectory(routes)
 add_subdirectory(server)
 add_subdirectory(llm)
+add_subdirectory(tui)
 
 # --- Fuzz targets (libFuzzer) ---
 # Section 6.3 of AGENTS.md requires fuzz targets for any function parsing
