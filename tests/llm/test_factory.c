@@ -120,6 +120,36 @@ START_TEST(test_get_provider_opencode_zen_accepts_effort)
 }
 END_TEST
 
+START_TEST(test_get_provider_opencode_go_returns_valid_provider)
+{
+    /* Go is the OpenAI-compatible client at the go gateway: constructible
+     * with or without a token, and the base_url defaults to the go
+     * endpoint rather than openai_compatible's localhost. */
+    LLMProvider *p = get_provider("opencode_go", "model", NULL, "go-test-1", 0, 0, NULL);
+    ck_assert_ptr_ne(p, NULL);
+    ck_assert(p->chat != NULL);
+    ck_assert(p->chat_streaming != NULL);
+    ck_assert(p->destroy != NULL);
+    p->destroy(p);
+
+    p = get_provider("opencode_go", "model", NULL, NULL, 0, 0, NULL);
+    ck_assert_ptr_ne(p, NULL);
+    p->destroy(p);
+}
+END_TEST
+
+START_TEST(test_get_provider_opencode_go_accepts_effort)
+{
+    LLMProvider *p = get_provider("opencode_go", "model", NULL, "go-test-1",
+                                  0, 0, "none");
+    ck_assert_ptr_ne(p, NULL);
+    p->destroy(p);
+    /* openai-only value stays rejected for go. */
+    p = get_provider("opencode_go", "model", NULL, "go-test-1", 0, 0, "xhigh");
+    ck_assert_ptr_null(p);
+}
+END_TEST
+
 START_TEST(test_get_provider_unknown_returns_null)
 {
     LLMProvider *p = get_provider("unknown_provider", "model", "url", NULL, 0, 0, NULL);
@@ -152,6 +182,7 @@ START_TEST(test_provider_default_base_url_known_providers)
                      "https://chatgpt.com/backend-api/codex/responses");
     ck_assert_str_eq(provider_default_base_url("openai_compatible"), "http://localhost:1234");
     ck_assert_str_eq(provider_default_base_url("opencode_zen"), "https://opencode.ai/zen/v1");
+    ck_assert_str_eq(provider_default_base_url("opencode_go"), "https://opencode.ai/zen/go/v1");
 }
 END_TEST
 
@@ -173,6 +204,7 @@ START_TEST(test_provider_supports_effort_lists)
     ck_assert_int_eq(provider_supports_effort("openai_compatible"), 1);
     ck_assert_int_eq(provider_supports_effort("ollama"), 1);
     ck_assert_int_eq(provider_supports_effort("opencode_zen"), 1);
+    ck_assert_int_eq(provider_supports_effort("opencode_go"), 1);
 }
 END_TEST
 
@@ -257,6 +289,8 @@ Suite *factory_suite(void)
     tcase_add_test(tc, test_get_provider_opencode_zen_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_opencode_zen_without_token_returns_valid_provider);
     tcase_add_test(tc, test_get_provider_opencode_zen_accepts_effort);
+    tcase_add_test(tc, test_get_provider_opencode_go_returns_valid_provider);
+    tcase_add_test(tc, test_get_provider_opencode_go_accepts_effort);
     tcase_add_test(tc, test_get_provider_unknown_returns_null);
     tcase_add_test(tc, test_get_provider_empty_name_returns_null);
     tcase_add_test(tc, test_get_provider_anthropic_not_implemented);

@@ -14,6 +14,20 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+
+        # TUI rendering library. The stock nixpkgs build links ffmpeg
+        # (multimedia) and builds C++ bindings; neither is used by echo-ai,
+        # which only links libnotcurses-core, so both are switched off here
+        # (-DUSE_MULTIMEDIA=none -DUSE_CXX=off in notcurses terms). The nix
+        # override maps to the former flag; the cmakeFlags append provides
+        # the latter. Deps (ncurses/libunistring/libdeflate) are listed in
+        # buildInputs so pkg-config can resolve notcurses-core.pc's
+        # Requires chain inside the dev shell.
+        notcurses-tui =
+          (pkgs.notcurses.override { multimediaSupport = false; })
+          .overrideAttrs (final: prev: {
+            cmakeFlags = prev.cmakeFlags ++ [ "-DUSE_CXX=off" ];
+          });
       in
       {
         devShells.default = pkgs.mkShell {
@@ -28,6 +42,10 @@
             sqlite
             openssl
             cjson
+            notcurses-tui
+            ncurses
+            libunistring
+            libdeflate
             check
             valgrind
             gcovr
@@ -42,7 +60,7 @@
           shellHook = ''
             echo "Echo AI dev environment ready"
             echo "  cmake:  $(cmake --version | head -1)"
-            echo "  deps:   libuv curl sqlite openssl cjson check"
+            echo "  deps:   libuv curl sqlite openssl cjson check notcurses"
             echo "  node:   $(node --version 2>/dev/null || echo 'not found')"
           '';
         };

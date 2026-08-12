@@ -115,6 +115,13 @@ base_url = http://localhost:1234
 # issued at https://opencode.ai/auth; otherwise the service rejects with 401.
 base_url = https://opencode.ai/zen/v1
 
+[opencode_go]
+# OpenCode Go: OpenAI-compatible gateway at opencode.ai (models served
+# through the Go tier, e.g. deepseek-v4-flash). Set
+# agent.provider = opencode_go to use it. Shares the "opencode" token
+# with opencode_zen.
+base_url = https://opencode.ai/zen/go/v1
+
 [safety]
 # Restrict file operations to this directory (default: current dir)
 workspace = ./
@@ -162,10 +169,18 @@ api_key = your-api-key-here
 # Format: provider_name = token
 # The token is sent as a Bearer Authorization header by compatible clients.
 # The openai provider is OAuth-only and must not be configured here.
-# opencode = your-opencode-key  (shared by opencode_zen and any future
-#                                 OpenCode-branded provider, e.g. OpenCode Go)
+# opencode = your-opencode-key  (shared by opencode_zen and opencode_go)
 # anthropic = your-anthropic-api-key
 
 [server]
 # HTTP server port (default: 8080)
 port = 8080
+
+[tui]
+# Terminal UI appearance (used by --cli mode)
+# style = dark | light | highcontrast | none (plain monochrome)
+style = dark
+# density = compact | spacious
+density = compact
+# accent = RRGGBB hex (optional; overrides the preset accent)
+# accent = 7aa2f7

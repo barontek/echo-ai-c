@@ -62,6 +62,17 @@ LLMProvider *get_provider_with_auth(const char *name, const char *model,
         return opencode_zen_provider_create(base_url, api_token, effort);
     }
 
+    if (strcmp(name, "opencode_go") == 0)
+    {
+        /* OpenCode Go gateway: OpenAI-compatible, same shape as Zen but a
+         * different endpoint; keep the default here (like the zen wrapper
+         * keeps its own) so a NULL base_url never falls back to the
+         * openai_compatible localhost default. */
+        return openai_compatible_provider_create(
+            base_url ? base_url : "https://opencode.ai/zen/go/v1",
+            api_token, effort);
+    }
+
     return NULL;
 }
 
@@ -70,6 +81,7 @@ static const char *const AVAILABLE_PROVIDERS[] = {
     "openai",
     "openai_compatible",
     "opencode_zen",
+    "opencode_go",
 };
 
 const char *const *provider_names_available(int *count)
@@ -90,6 +102,8 @@ const char *provider_default_base_url(const char *name)
         return "http://localhost:1234";
     if (strcmp(name, "opencode_zen") == 0)
         return "https://opencode.ai/zen/v1";
+    if (strcmp(name, "opencode_go") == 0)
+        return "https://opencode.ai/zen/go/v1";
     return NULL;
 }
 
@@ -102,8 +116,10 @@ int provider_supports_effort(const char *name)
         return 1;
     if (strcmp(name, "ollama") == 0)
         return 1;
-    /* Zen is the OpenAI-compatible client, so it takes the same set. */
+    /* Zen/Go are the OpenAI-compatible client, so they take the same set. */
     if (strcmp(name, "opencode_zen") == 0)
+        return 1;
+    if (strcmp(name, "opencode_go") == 0)
         return 1;
     return 0;
 }
@@ -131,9 +147,11 @@ const char *const *provider_effort_options(const char *name)
         return OPENAI_COMPAT_EFFORT_OPTIONS;
     if (strcmp(name, "ollama") == 0)
         return OLLAMA_EFFORT_OPTIONS;
-    /* Zen is the OpenAI-compatible client; it validates through
+    /* Zen/Go are the OpenAI-compatible client; they validate through
      * openai_compatible_reasoning_effort_valid, so reuse its list. */
     if (strcmp(name, "opencode_zen") == 0)
+        return OPENAI_COMPAT_EFFORT_OPTIONS;
+    if (strcmp(name, "opencode_go") == 0)
         return OPENAI_COMPAT_EFFORT_OPTIONS;
     return NULL;
 }

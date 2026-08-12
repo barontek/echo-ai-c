@@ -254,9 +254,10 @@ const char *conf_provider_token(const Conf *conf, const char *provider)
 {
     if (!conf || !provider) return NULL;
 
-    /* OpenCode Zen and any future OpenCode-branded provider (OpenCode Go)
-     * share one token, so the key in [providers] is "opencode". */
-    const char *key_name = strcmp(provider, "opencode_zen") == 0
+    /* OpenCode Zen and OpenCode Go share one token, so the key in
+     * [providers] is "opencode". */
+    const char *key_name = (strcmp(provider, "opencode_zen") == 0 ||
+                            strcmp(provider, "opencode_go") == 0)
                                ? "opencode" : provider;
 
     char key[96];
