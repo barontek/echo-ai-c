@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <curl/curl.h>
 
@@ -267,6 +268,44 @@ START_TEST(test_retry_times_out_keeps_body)
 }
 END_TEST
 
+START_TEST(test_retry_early_eof_still_waits_real_deadline)
+{
+    /* Regression for the parallel-suite flake: a child that closes its
+     * stdout (here via exec >/dev/null) puts the pipe at EOF while the
+     * child is still running, so poll() returns POLLIN instantly. The old
+     * flat "elapsed += 100" accounting then burned the whole 1s deadline
+     * budget in microseconds and returned before the child was even
+     * reaped. The deadline is wall-clock time: this retry must take ~1s,
+     * not ~1ms — the 900ms bound has a 100x margin over the old behavior. */
+    char path[256];
+    snprintf(path, sizeof(path), "%s/curl-impersonate-chrome", test_dir);
+    FILE *f = fopen(path, "w");
+    if (!f) abort();
+    fprintf(f, "#!/bin/sh\nexec >/dev/null\nsleep 5\n");
+    fclose(f);
+    chmod(path, 0755);
+    set_path_to_test_dir();
+
+    char *body = strdup("Title: Just a moment...\n");
+    char *ctype = strdup("text/html");
+    char *orig = body;
+    size_t len = strlen(body);
+    struct timespec t0, tn;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int replaced = web_fetch_test_retry_challenge(
+        &body, &len, 100000, &ctype,
+        "https://www.example.com/route", "curl-impersonate-chrome", NULL, 1);
+    clock_gettime(CLOCK_MONOTONIC, &tn);
+    long elapsed_ms = (tn.tv_sec - t0.tv_sec) * 1000L +
+                      (tn.tv_nsec - t0.tv_nsec) / 1000000L;
+    ck_assert_int_eq(replaced, 0);
+    ck_assert_ptr_eq(body, orig);
+    ck_assert_int_ge((int)elapsed_ms, 900);
+    free(body);
+    free(ctype);
+}
+END_TEST
+
 START_TEST(test_retry_size_limit_keeps_body)
 {
     /* 5000 bytes of output against a 100-byte cap must be refused. */
@@ -404,6 +443,7 @@ static Suite *web_fetch_suite(void)
     tcase_add_test(tc, test_retry_without_binary_keeps_body);
     tcase_add_test(tc, test_retry_binary_failure_keeps_body);
     tcase_add_test(tc, test_retry_times_out_keeps_body);
+    tcase_add_test(tc, test_retry_early_eof_still_waits_real_deadline);
     tcase_add_test(tc, test_retry_size_limit_keeps_body);
     tcase_add_test(tc, test_socket_cb_flags_private_address);
     tcase_add_test(tc, test_socket_cb_accepts_public_address);

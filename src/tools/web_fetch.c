@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <curl/curl.h>
 
@@ -167,9 +168,14 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
 
     HttpBuffer buf = {.limit = limit};
     int deadline_ms = timeout_s > 0 ? timeout_s * 1000 : 30000;
-    int elapsed_ms = 0;
     int status = 0;
     char chunk[8192];
+    /* Deadline measured on the wall clock, not an iteration counter: once
+     * the child closes its write end, poll() returns POLLIN instantly and
+     * a flat "elapsed += 100" would burn the whole budget in milliseconds
+     * while the child is merely finishing its exit. */
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (;;)
     {
@@ -177,6 +183,10 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
         if (r == pid) break;                 /* child exited, drain below */
         if (r < 0 && errno != EINTR) break;
 
+        struct timespec tn;
+        clock_gettime(CLOCK_MONOTONIC, &tn);
+        int elapsed_ms = (int)((tn.tv_sec - t0.tv_sec) * 1000 +
+                               (tn.tv_nsec - t0.tv_nsec) / 1000000);
         if (elapsed_ms >= deadline_ms)
         {
             kill(pid, SIGKILL);
@@ -196,10 +206,6 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
             close(out_pipe[0]);
             return NULL;
         }
-        if (pr == 0) {
-            elapsed_ms += 100;
-            continue;
-        }
         ssize_t n = read(out_pipe[0], chunk, sizeof(chunk));
         if (n > 0)
         {
@@ -212,7 +218,6 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
                 return NULL;
             }
         }
-        elapsed_ms += 100;
     }
 
     for (;;)

@@ -127,3 +127,49 @@ Environment facts: NixOS dev shell, gcc 15.2.0, ASan+UBSan enabled, 20 cores
 - src/tools/web_fetch.c:128-269 (the retry/impersonator path)
 - docs/verification/test_web_fetch_parallel_flake.md (evidence record)
 - .github/workflows/ci.yml (CI runs ctest -V, which will show this flake)
+
+---
+
+## RESOLVED 2026-08-12 — root cause and fix
+
+**Root cause: the deadline in `fetch_via_impersonator` was counted in flat
+`elapsed_ms += 100` iterations, not wall time.** After the child closes its
+write end (its exit path), the pipe is at EOF and `poll()` returns POLLIN
+*instantly* on every iteration. The counter then burns the whole 10 000 ms
+budget in ~1-5 ms of wall time and the "timeout" fires while the child is
+still finishing its exit. Measured: `deadline: elapsed=10000 wall=0s
+it_tout=0 it_read=1 it_eof=99` — 99 instant-EOF iterations, zero poll
+timeouts, deadline fired in under a second of wall time.
+
+**Why it only failed under full parallel load:** the trigger is the child's
+fd-close → zombie gap (the part of its exit after closing stdout but before
+`waitpid(WNOHANG)` can reap it) taking a few ms instead of µs — under 20
+concurrent ASan binaries the child gets descheduled mid-exit. That delay is
+harmless with a real clock but catastrophic with the broken counter. In
+isolation the child's exit is faster than one loop iteration, so the loop
+never sees the EOF window. The 10 s deadline is not the problem: it is
+irrelevant with the broken accounting (setting it to 60 s changes nothing).
+
+Evidence collected (temporary instrumentation, all reverted):
+- `waitpid(pid, WNOHANG)` returned 0 (alive) 100× while the child was a
+  zombie all along: `/proc/<pid>/stat` showed state R, vsize=0, rss=0,
+  exe=ENOENT; `kill(SIGKILL)` succeeded and the blocking `waitpid` reaped it
+  instantly (waitms=0) with status 0x0 (clean exit).
+- The healthy sleep-child (fds open) poll-timed out normally: it_tout=10,
+  wall=1s, elapsed=1000 — the counter is accurate only while poll actually
+  waits.
+- SIGCHLD disposition was SIG_DFL (0x0) — no auto-reap involved.
+
+**Fix (src/tools/web_fetch.c):** deadline now measured with
+`clock_gettime(CLOCK_MONOTONIC)` per loop iteration; the flat `+= 100`
+counter and the `pr == 0` branch are gone.
+
+**Regression test:** `test_retry_early_eof_still_waits_real_deadline` — a
+fake binary that closes its stdout (`exec >/dev/null`) before `sleep 5`,
+timeout_s=1. Asserts the retry takes ≥ 900 ms (real deadline, 100× margin).
+Fails on the old code (`(int)elapsed_ms == 4`) and passes on the new.
+
+**Verification:** fail→pass demonstrated per AGENTS.md (stash/rebuild/run).
+Full parallel suite: 0 failures in 15 consecutive `ctest -j$(nproc)` runs
+(was ~2/3 failure rate); isolated repeat 5/5 clean; ASan/UBSan clean.
+
