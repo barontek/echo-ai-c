@@ -11,6 +11,7 @@
  */
 
 #define _GNU_SOURCE
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -33,7 +34,7 @@ struct TuiEvents {
     TuiEvent **ring;
     size_t capacity;
     size_t head; /* next slot to pop */
-    size_t count;
+    _Atomic size_t count; /* read lock-free by tui_events_empty() */
     pthread_mutex_t lock;
     pthread_cond_t not_empty;
     pthread_cond_t not_full;
@@ -81,7 +82,7 @@ TuiEvents *tui_events_init(size_t capacity)
     }
     evs->capacity = capacity;
     evs->head = 0;
-    evs->count = 0;
+    atomic_store(&evs->count, 0);
     evs->wake_fds[0] = -1;
     evs->wake_fds[1] = -1;
 
@@ -136,7 +137,7 @@ TuiEvents *tui_events_init(size_t capacity)
 void tui_events_destroy(TuiEvents *evs)
 {
     if (!evs) return;
-    for (size_t i = 0; i < evs->count; i++)
+    for (size_t i = 0; i < atomic_load(&evs->count); i++)
     {
         size_t idx = (evs->head + i) % evs->capacity;
         tui_event_free(evs->ring[idx]);
@@ -175,10 +176,10 @@ TuiEvent *tui_events_push(TuiEvents *evs, TuiEventType type,
     }
 
     pthread_mutex_lock(&evs->lock);
-    while (evs->count == evs->capacity)
+    while (atomic_load(&evs->count) == evs->capacity)
         pthread_cond_wait(&evs->not_full, &evs->lock);
-    evs->ring[(evs->head + evs->count) % evs->capacity] = ev;
-    evs->count++;
+    evs->ring[(evs->head + atomic_load(&evs->count)) % evs->capacity] = ev;
+    atomic_fetch_add(&evs->count, 1);
     pthread_cond_signal(&evs->not_empty);
     pthread_mutex_unlock(&evs->lock);
 
@@ -191,14 +192,14 @@ TuiEvent *tui_events_push(TuiEvents *evs, TuiEventType type,
 TuiEvent *tui_events_pop(TuiEvents *evs)
 {
     pthread_mutex_lock(&evs->lock);
-    if (evs->count == 0)
+    if (atomic_load(&evs->count) == 0)
     {
         pthread_mutex_unlock(&evs->lock);
         return NULL;
     }
     TuiEvent *ev = evs->ring[evs->head];
     evs->head = (evs->head + 1) % evs->capacity;
-    evs->count--;
+    atomic_fetch_sub(&evs->count, 1);
     pthread_cond_signal(&evs->not_full);
     pthread_mutex_unlock(&evs->lock);
     return ev;
@@ -207,11 +208,11 @@ TuiEvent *tui_events_pop(TuiEvents *evs)
 TuiEvent *tui_events_pop_blocking(TuiEvents *evs)
 {
     pthread_mutex_lock(&evs->lock);
-    while (evs->count == 0)
+    while (atomic_load(&evs->count) == 0)
         pthread_cond_wait(&evs->not_empty, &evs->lock);
     TuiEvent *ev = evs->ring[evs->head];
     evs->head = (evs->head + 1) % evs->capacity;
-    evs->count--;
+    atomic_fetch_sub(&evs->count, 1);
     pthread_cond_signal(&evs->not_full);
     pthread_mutex_unlock(&evs->lock);
     return ev;
@@ -272,6 +273,6 @@ void tui_events_drain_wake(TuiEvents *evs)
 
 int tui_events_empty(const TuiEvents *evs)
 {
-    return evs->count == 0;
+    return evs ? atomic_load(&evs->count) == 0 : 1;
 }
 

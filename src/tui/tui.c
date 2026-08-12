@@ -84,7 +84,6 @@ static size_t utf8_width(const char *s, size_t n)
     return w;
 }
 
-/* Repeat a UTF-8 EGC into out (returns bytes written, excluding NUL). */
 /* ---- signal handling: graceful exit on SIGINT/SIGTERM ---- */
 
 static volatile sig_atomic_t g_sig_quit = 0;
@@ -214,6 +213,25 @@ static int layout_planes(TuiApp *app)
     return 0;
 }
 
+/* Blocking-modal loops (password/notice) run before the main loop and
+ * must handle a too-small terminal the same way app_loop does: wait for
+ * a resize instead of rendering into NULL planes. Returns 0 when a
+ * resize arrived, -1 on EOF or Ctrl-C (app->quit set). */
+static int wait_for_terminal(TuiApp *app)
+{
+    ncinput ni;
+    uint32_t rc;
+    while ((rc = notcurses_get_nblock(app->nc, &ni)) != 0 && rc != UINT32_MAX)
+    {
+        if (ni.evtype == NCTYPE_RELEASE) continue; /* kitty prot. */
+        if (ni.id == NCKEY_RESIZE) return 0;
+        if (ni.id == 3u) { app->quit = 1; return -1; } /* Ctrl-C aborts */
+    }
+    if (rc == UINT32_MAX) { app->quit = 1; return -1; } /* EOF: terminal gone */
+    check_signals(app);
+    return app->quit ? -1 : 0;
+}
+
 /* ---- rendering helpers ---- */
 
 /* notcurses 3.0.17 has no REVERSE/DIM styles; simulate them with color:
@@ -300,6 +318,9 @@ static void render_chat(TuiApp *app)
 
     size_t virtual_line = 0;
     size_t drawn = 0;
+    /* One scratch segment for the whole pass (strip_markers output is
+     * never longer than its input line); marker stripping happens per
+     * drawn line. */
     char *seg = malloc(cw * 4 + 1);
     if (!seg) return;
     for (size_t b = 0; b < tui_chat_block_count(app->chat) && drawn < (size_t)rows; b++)
@@ -307,15 +328,9 @@ static void render_chat(TuiApp *app)
         TuiBlockKind bk = tui_chat_block_kind(app->chat, b);
         TuiRole role = kind_role(bk);
         const char *text = tui_chat_block_text(app->chat, b);
-        size_t lines = tui_chat_wrap(text, cw, NULL, 0);
-        size_t *starts = malloc((lines + 1) * sizeof(size_t));
-        if (!starts)
-        {
-            free(seg);
-            return;
-        }
-        (void)tui_chat_wrap(text, cw, starts, lines + 1);
-        starts[lines] = strlen(text);
+        size_t lines = 0;
+        const size_t *starts = tui_chat_block_line_starts(app->chat, b, cw,
+                                                          &lines);
 
         /* Long tool blocks collapse to the threshold with a marker row
          * that the click handler toggles. Only TOOL blocks ever get the
@@ -365,12 +380,14 @@ static void render_chat(TuiApp *app)
                         (void)ncplane_putnstr(p, 1,
                                               sp[app->frame % frames]);
                 }
-                else
+                else if (starts)
                 {
                     size_t s = starts[l];
                     size_t e = starts[l + 1];
                     if (e > s)
                     {
+                        size_t cap = cw * 4;
+                        if (e - s > cap) e = s + cap; /* pathological combining-mark runs */
                         size_t seg_len = strip_markers(text + s, e - s, seg);
                         (void)ncplane_putnstr(p, seg_len, seg);
                     }
@@ -407,7 +424,6 @@ static void render_chat(TuiApp *app)
         virtual_line++;
         if (virtual_line >= top && drawn < (size_t)rows)
             drawn++;
-        free(starts);
     }
     free(seg);
 }
@@ -429,17 +445,28 @@ static void render_status(TuiApp *app)
                      app->title ? app->title : "",
                      app->title ? ")" : "",
                      app->ctx.tool_count);
+    /* snprintf returns the would-be length on truncation: clamping keeps
+     * the chained writes inside the buffer (titles come from the model
+     * and are unbounded). */
+    if (n < 0) return;
+    if ((size_t)n >= sizeof(line))
+        n = (int)sizeof(line) - 1;
     if (tui_worker_busy(app->worker))
     {
         size_t frames = 0;
         const char *const *sp = tui_theme_spinner_frames(app->theme, &frames);
-        if (frames > 0 && n >= 0)
+        if (frames > 0)
             n += snprintf(line + n, sizeof(line) - (size_t)n, " %s",
                           sp[app->frame % frames]);
     }
-    if (app->status_msg && app->status_msg[0] && n >= 0)
+    if (n < 0) return;
+    if ((size_t)n >= sizeof(line))
+        n = (int)sizeof(line) - 1;
+    if (app->status_msg && app->status_msg[0])
         n += snprintf(line + n, sizeof(line) - (size_t)n, "  [%s]", app->status_msg);
     if (n < 0) return;
+    if ((size_t)n >= sizeof(line))
+        n = (int)sizeof(line) - 1;
     (void)ncplane_putnstr(p, (size_t)n, line);
 }
 
@@ -457,7 +484,10 @@ static void render_tools(TuiApp *app)
 
     char line[256];
     int n = snprintf(line, sizeof(line), "%s: running...", app->active_tool);
-    if (tui_worker_busy(app->worker) && n >= 0)
+    if (n < 0) return;
+    if ((size_t)n >= sizeof(line))
+        n = (int)sizeof(line) - 1; /* truncated: keep chained writes in bounds */
+    if (tui_worker_busy(app->worker))
     {
         size_t frames = 0;
         const char *const *sp = tui_theme_spinner_frames(app->theme, &frames);
@@ -466,6 +496,8 @@ static void render_tools(TuiApp *app)
                           sp[app->frame % frames]);
     }
     if (n < 0) return;
+    if ((size_t)n >= sizeof(line))
+        n = (int)sizeof(line) - 1;
     size_t len = (size_t)n;
     if (len > (size_t)cols - 1) len = (size_t)cols - 1;
     (void)ncplane_putnstr(p, len, line);
@@ -533,12 +565,19 @@ static void render_prompt_bar(TuiApp *app)
     int n = snprintf(line, sizeof(line), " allow %s?",
                      tui_modal_title(app->modal));
     const char *body = tui_modal_body(app->modal);
-    if (body && n >= 0)
-        n += snprintf(line + n, sizeof(line) - (size_t)n, "  %s", body);
-    if (n >= 0)
-        n += snprintf(line + n, sizeof(line) - (size_t)n,
-                      "   \xE2\x80\x94 y allow \xE2\x80\xA2 n deny");
     if (n < 0) return;
+    if ((size_t)n >= sizeof(line))
+        n = (int)sizeof(line) - 1; /* truncated: keep chained writes in bounds */
+    if (body)
+        n += snprintf(line + n, sizeof(line) - (size_t)n, "  %s", body);
+    if (n < 0) return;
+    if ((size_t)n >= sizeof(line))
+        n = (int)sizeof(line) - 1;
+    n += snprintf(line + n, sizeof(line) - (size_t)n,
+                  "   \xE2\x80\x94 y allow \xE2\x80\xA2 n deny");
+    if (n < 0) return;
+    if ((size_t)n >= sizeof(line))
+        n = (int)sizeof(line) - 1;
     size_t len = (size_t)n;
     if (len > (size_t)cols - 1) len = (size_t)cols - 1;
     (void)ncplane_putnstr(p, len, line);
@@ -743,8 +782,15 @@ static void handle_event(TuiApp *app, TuiEvent *ev)
     case TUI_EV_APPROVAL:
         /* Round-trip ownership: the worker waits on the event's condvar
          * and frees it after the answer, so handle_event must NOT free.
-         * If the modal cannot open, answer NULL to unblock the worker. */
-        if (!app->modal)
+         * If the modal cannot open (another dialog is up, e.g.
+         * confirm-quit after Ctrl-C answered an ask_user), answer NULL
+         * to unblock the worker — a dropped event would leave it waiting
+         * forever and hang the quit path in pthread_join. */
+        if (app->modal)
+        {
+            (void)tui_event_answer(ev, NULL, 0);
+            return; /* worker frees the event */
+        }
         {
             TuiModalKind kind = ev->type == TUI_EV_ASK_USER
                                     ? TUI_MODAL_ASK_USER : TUI_MODAL_APPROVAL;
@@ -802,8 +848,17 @@ static void slash_save(TuiApp *app, const char *name)
         chat_notice(app, "No active session to save.");
         return;
     }
+    /* Duplicate before freeing the old title: on allocation failure the
+     * session keeps its current title instead of losing it to NULL. */
+    char *title_copy = str_dup(name);
+    if (!title_copy)
+    {
+        session_free(s);
+        chat_notice(app, "Failed to save session.");
+        return;
+    }
     free(s->title);
-    s->title = str_dup(name);
+    s->title = title_copy;
     if (session_manager_save_session(app->ctx.sm, s) == 0)
         chat_notice(app, "Session saved.");
     else
@@ -946,8 +1001,8 @@ static void handle_click(TuiApp *app, const ncinput *ni)
         {
             if (tui_chat_block_kind(app->chat, b) == TUI_BLOCK_TOOL)
             {
-                size_t full = tui_chat_wrap(tui_chat_block_text(app->chat, b),
-                                            cw, NULL, 0);
+                size_t full = 0;
+                (void)tui_chat_block_line_starts(app->chat, b, cw, &full);
                 if (full > TUI_CHAT_COLLAPSE_THRESHOLD)
                     (void)tui_chat_toggle_collapse(app->chat, b, cw);
             }
@@ -1027,7 +1082,24 @@ static void handle_key(TuiApp *app, const ncinput *ni)
         return;
     }
     if (id == NCKEY_ENTER) { submit_line(app); return; }
-    if (id == NCKEY_BACKSPACE) { (void)tui_input_backspace(app->input); return; }
+    if (id == NCKEY_BACKSPACE)
+    {
+        tui_input_reset_history_walk(app->input); /* editing ends the walk */
+        (void)tui_input_backspace(app->input);
+        return;
+    }
+    if (id == NCKEY_DEL)
+    {
+        tui_input_reset_history_walk(app->input);
+        (void)tui_input_delete(app->input);
+        return;
+    }
+    if (id == 23) /* Ctrl-W: delete the word before the cursor */
+    {
+        tui_input_reset_history_walk(app->input);
+        (void)tui_input_delete_word(app->input);
+        return;
+    }
     if (id == NCKEY_LEFT) { tui_input_move(app->input, -1); return; }
     if (id == NCKEY_RIGHT) { tui_input_move(app->input, 1); return; }
     if (id == NCKEY_HOME) { tui_input_home(app->input); return; }
@@ -1046,7 +1118,9 @@ static void handle_key(TuiApp *app, const ncinput *ni)
     {
         unsigned rows, cols;
         ncplane_dim_yx(app->chat_plane, &rows, &cols);
-        size_t max_top = tui_chat_view_clamp(app->chat, cols, rows, SIZE_MAX);
+        /* Clamp with the same wrap width the renderer uses */
+        size_t cw = cols >= 6 ? (size_t)cols - 3 : (size_t)cols;
+        size_t max_top = tui_chat_view_clamp(app->chat, cw, rows, SIZE_MAX);
         app->chat_top += 5;
         if (app->chat_top >= max_top)
         {
@@ -1079,6 +1153,7 @@ static void handle_key(TuiApp *app, const ncinput *ni)
     }
     if (id >= 32u && id < 0x110000u)
     {
+        tui_input_reset_history_walk(app->input); /* typing ends the walk */
         (void)tui_input_insert(app->input, ni->utf8[0] ? ni->utf8 : "");
     }
 }
@@ -1167,6 +1242,13 @@ TuiApp *tui_app_create(const TuiAppCtx *ctx)
     if (!app->theme || !app->chat || !app->input)
         goto fail;
 
+    /* freopen(NULL, ...) is undefined: fail instead when neither the
+     * caller nor HOME provided a log path. */
+    if (!app->log_path)
+    {
+        log_error("tui: no stderr log path (HOME unset?)", NULL);
+        goto fail;
+    }
     if (redirect_stderr(app->log_path) != 0)
         goto fail;
 
@@ -1210,7 +1292,13 @@ char *tui_app_prompt_password(TuiApp *app, const char *prompt)
     {
         check_signals(app);
         if (app->quit) break;
-        (void)layout_planes(app);
+        if (layout_planes(app) != 0)
+        {
+            /* Terminal too small: skip rendering (planes are NULL) and
+             * wait for a resize before re-offering the prompt. */
+            if (wait_for_terminal(app) != 0) break;
+            continue;
+        }
         ncinput ni;
         uint32_t rc;
         while ((rc = notcurses_get_nblock(app->nc, &ni)) != 0 && rc != UINT32_MAX)
@@ -1253,7 +1341,13 @@ int tui_app_notice(TuiApp *app, const char *title, const char *body)
     {
         check_signals(app);
         if (app->quit) break;
-        (void)layout_planes(app);
+        if (layout_planes(app) != 0)
+        {
+            /* Terminal too small: skip rendering (planes are NULL) and
+             * wait for a resize before re-offering the notice. */
+            if (wait_for_terminal(app) != 0) break;
+            continue;
+        }
         ncinput ni;
         uint32_t rc;
         while ((rc = notcurses_get_nblock(app->nc, &ni)) != 0 && rc != UINT32_MAX)

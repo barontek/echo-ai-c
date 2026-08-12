@@ -32,7 +32,6 @@ typedef enum {
     TUI_EV_SESSION,     /* text = session id (minted on first save) */
     TUI_EV_STATUS,      /* text = status-line message (job results, notices) */
     TUI_EV_JOB,         /* UI -> worker: text = job name, extra = argument */
-    TUI_EV_CANCEL_ACK,  /* worker confirms it noticed cancellation */
     TUI_EV_QUIT         /* worker teardown signal (no payload) */
 } TuiEventType;
 
@@ -79,9 +78,9 @@ void tui_events_destroy(TuiEvents *evs);
  * tui_events_push - copy text/extra into a new event and enqueue it
  * @evs: ring to push onto; must be non-NULL.
  * @type: event kind.
- * @text: payload string, borrowed for the duration of the call; NULL
- *   leaves the field empty.
- * @extra: secondary payload string, borrowed; NULL allowed.
+ * @text: payload string, borrowed for the duration of the call; NULL is
+ *   stored as the empty string (ev->text is never NULL after a push).
+ * @extra: secondary payload string, borrowed; NULL leaves the field NULL.
  *
  * Blocks while the ring is full. On allocation failure every previously
  * copied field is freed, nothing is enqueued, and NULL is returned — the
@@ -182,8 +181,10 @@ void tui_events_drain_wake(TuiEvents *evs);
  * tui_events_empty - is the ring empty?
  * @evs: ring; non-NULL.
  *
- * Return: 1 when empty, 0 otherwise. Lock-free by design; used by tests
- * and the UI loop for idle detection, never for synchronization.
+ * Return: 1 when empty, 0 otherwise. Reads the count atomically, so it is
+ * safe to call concurrently with pushes/pops; the answer may be stale by
+ * the time the caller acts on it, so it is used for idle detection and
+ * tests, never for synchronization.
  */
 int tui_events_empty(const TuiEvents *evs);
 

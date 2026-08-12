@@ -32,6 +32,14 @@ typedef enum {
 
 typedef struct TuiChat TuiChat;
 
+/*
+ * Wrap caching contract: the block accessors below (render lines, line
+ * starts, collapse state) may compute and cache wrap offsets inside the
+ * chat, invalidated automatically when the block's text changes or the
+ * requested width differs. They therefore require a mutable chat and are
+ * single-threaded (the UI thread), like every other chat operation.
+ */
+
 /**
  * tui_chat_create - allocate an empty scrollback
  *
@@ -188,7 +196,7 @@ const char *tui_chat_block_title(const TuiChat *chat, size_t idx);
  *
  * Return: 1 when the renderer draws the block truncated.
  */
-int tui_chat_block_effective_collapsed(const TuiChat *chat, size_t idx,
+int tui_chat_block_effective_collapsed(TuiChat *chat, size_t idx,
                                        size_t width);
 
 /**
@@ -203,8 +211,28 @@ int tui_chat_block_effective_collapsed(const TuiChat *chat, size_t idx,
  *
  * Return: visible line count (header and marker included).
  */
-size_t tui_chat_block_render_lines(const TuiChat *chat, size_t idx,
-                                   size_t width);
+size_t tui_chat_block_render_lines(TuiChat *chat, size_t idx, size_t width);
+
+/**
+ * tui_chat_block_line_starts - cached wrap offsets for one block
+ * @chat: scrollback; non-NULL.
+ * @idx: block index.
+ * @width: line width in columns; must be >= 1.
+ * @lines: out-param receiving the wrapped line count (never NULL).
+ *
+ * Returns the byte offset of each wrapped line's start (line 0 starts at
+ * offset 0, and one extra entry holds the text length), cached inside the
+ * block: repeated calls at the same width reuse the array, and any text
+ * change or width change recomputes it. On allocation failure falls back
+ * to returning the line count only (starts = NULL); rendering must then
+ * skip the content rows but keep the line math.
+ *
+ * Return: borrowed offsets array (owned by the chat, valid until the
+ *   block's text changes or a different width is queried), or NULL on
+ *   allocation failure.
+ */
+const size_t *tui_chat_block_line_starts(TuiChat *chat, size_t idx,
+                                         size_t width, size_t *lines);
 
 /**
  * tui_chat_toggle_collapse - flip a tool block between expanded/collapsed
@@ -223,15 +251,19 @@ int tui_chat_toggle_collapse(TuiChat *chat, size_t idx, size_t width);
 
 /**
  * tui_chat_wrap - greedy word wrap of one text into line-start offsets
- * @text: NUL-terminated input; non-NULL.
- * @width: line width in columns; must be >= 1.
+ * @text: NUL-terminated UTF-8 input; non-NULL.
+ * @width: line width in display columns; must be >= 1 (a lone codepoint
+ *   wider than the line is placed anyway, overflowing the line).
  * @line_starts: caller-owned array receiving byte offsets of each line
  *   start; line 0 always starts at offset 0. May be NULL when @cap is 0.
  * @cap: capacity of @line_starts.
  *
- * Words longer than @width break mid-word (no overflow). '\n' is a hard
- * break. Runs of spaces collapse at line starts; spaces otherwise count
- * toward the line width.
+ * Column widths come from a built-in, locale-independent table (CJK,
+ * Hangul, emoji blocks are 2 columns; combining marks and variation
+ * selectors are 0; wcwidth(3) is unusable here because it returns -1 in
+ * the C locale). Words longer than @width break mid-word at codepoint
+ * boundaries (no overflow). '\n' is a hard break. Runs of spaces collapse
+ * at line starts; spaces otherwise count toward the line width.
  *
  * Return: total number of lines. When the return exceeds @cap, only the
  *   first @cap offsets were written and the caller should allocate
@@ -251,7 +283,7 @@ size_t tui_chat_wrap(const char *text, size_t width,
  *
  * Return: total line count (>= 1 for an empty scrollback: one blank line).
  */
-size_t tui_chat_total_lines(const TuiChat *chat, size_t width);
+size_t tui_chat_total_lines(TuiChat *chat, size_t width);
 
 /**
  * tui_chat_view_clamp - clamp a scroll offset to a viewport
@@ -263,7 +295,7 @@ size_t tui_chat_total_lines(const TuiChat *chat, size_t width);
  * Return: clamped top line in [0, max(0, total - visible)]. The renderer
  *   calls this on every scroll input and resize.
  */
-size_t tui_chat_view_clamp(const TuiChat *chat, size_t width,
+size_t tui_chat_view_clamp(TuiChat *chat, size_t width,
                            size_t visible, size_t top);
 
 #endif /* ECHO_TUI_CHAT_H */

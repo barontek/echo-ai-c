@@ -52,7 +52,8 @@ typedef struct {
  * start the worker or the session manager.
  *
  * Return: caller-owned TuiApp, or NULL on failure (terminal state is
- *   already restored). Release with tui_app_destroy().
+ *   already restored). Fails when no log path can be derived (log_path
+ *   NULL and HOME unset). Release with tui_app_destroy().
  */
 TuiApp *tui_app_create(const TuiAppCtx *ctx);
 

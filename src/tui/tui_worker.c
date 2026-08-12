@@ -31,8 +31,21 @@ struct TuiWorker {
 
 typedef struct {
     TuiWorker *w;
-    int in_think;
+    TuiStreamClassifier *cls; /* NULL when the classifier could not be
+                               * allocated: everything ships as content */
 } StreamCtx;
+
+static void push_part(TuiWorker *w, const TuiStreamPart *part)
+{
+    if (part->len == 0) return;
+    char *text = strndup(part->start, part->len);
+    if (!text) return;
+    (void)tui_events_push(w->ctx.evs,
+                          part->kind == TUI_STREAM_PART_THINK
+                              ? TUI_EV_THINK : TUI_EV_CHUNK,
+                          text, NULL);
+    free(text);
+}
 
 static void stream_on_chunk(const char *chunk, void *userdata)
 {
@@ -40,24 +53,19 @@ static void stream_on_chunk(const char *chunk, void *userdata)
     TuiWorker *w = sc->w;
     if (!chunk) return;
 
-    /* The classifier strips markers and separator whitespace, so marker
-     * deltas like "<think>\n" or "\n</think>\n\n" emit nothing and only
-     * flip the state; stored blocks stay clean. */
-    TuiStreamPart parts[2];
-    int out_think = sc->in_think;
-    int n = tui_stream_split(chunk, sc->in_think, parts, &out_think);
-    sc->in_think = out_think;
-
-    for (int i = 0; i < n; i++)
+    TuiStreamPart parts[4];
+    if (sc->cls)
     {
-        char *text = strndup(parts[i].start, parts[i].len);
-        if (!text) continue;
-        (void)tui_events_push(w->ctx.evs,
-                              parts[i].kind == TUI_STREAM_PART_THINK
-                                  ? TUI_EV_THINK : TUI_EV_CHUNK,
-                              text, NULL);
-        free(text);
+        int n = tui_stream_classifier_feed(sc->cls, chunk, parts, 4);
+        for (int i = 0; i < n; i++)
+            push_part(w, &parts[i]);
+        return;
     }
+    /* Degraded: no classification, ship the raw chunk as content */
+    parts[0].kind = TUI_STREAM_PART_CONTENT;
+    parts[0].start = chunk;
+    parts[0].len = strlen(chunk);
+    push_part(w, &parts[0]);
 }
 
 /* ---- agent callbacks ---- */
@@ -120,15 +128,27 @@ static void job_run(TuiWorker *w, const char *input)
     if (!input || input[0] == '\0') return;
 
     atomic_store(&w->busy, 1);
-    StreamCtx sc = {.w = w, .in_think = 0};
+    StreamCtx sc = {.w = w, .cls = tui_stream_classifier_create()};
 
     LLMResponse *resp = agent_run_streaming_new(w->ctx.agent, input,
                                                 stream_on_chunk, &sc);
     atomic_store(&w->busy, 0);
 
+    /* Flush a carried marker prefix that never resolved, then release
+     * the classifier before the event that seals the run. */
+    if (sc.cls)
+    {
+        TuiStreamPart tail;
+        if (tui_stream_classifier_flush(sc.cls, &tail) > 0)
+            push_part(w, &tail);
+        tui_stream_classifier_destroy(sc.cls);
+    }
+
     if (resp && resp->content)
     {
-        (void)tui_events_push(w->ctx.evs, TUI_EV_RUN_DONE, resp->content, NULL);
+        /* The chunks already streamed into the UI; RUN_DONE carries no
+         * payload, it only seals the open block. */
+        (void)tui_events_push(w->ctx.evs, TUI_EV_RUN_DONE, NULL, NULL);
     }
     else
     {
@@ -184,8 +204,18 @@ static void job_load(TuiWorker *w, const char *session_id)
                               "Session not found.", NULL);
         return;
     }
+    /* Duplicate before freeing the old id: on allocation failure the
+     * agent must keep its current session id, not lose it. */
+    char *id_copy = str_dup(session_id);
+    if (!id_copy)
+    {
+        session_free(s);
+        (void)tui_events_push(w->ctx.evs, TUI_EV_STATUS,
+                              "Failed to load session.", NULL);
+        return;
+    }
     free(w->ctx.agent->session_id);
-    w->ctx.agent->session_id = str_dup(session_id);
+    w->ctx.agent->session_id = id_copy;
     char msg[256];
     snprintf(msg, sizeof(msg), "Loaded session: %s", s->title);
     session_free(s);
@@ -266,6 +296,31 @@ void tui_worker_destroy(TuiWorker *w)
     if (w->thread_started)
     {
         if (atomic_load(&w->busy)) agent_cancel(w->ctx.agent);
+
+        /* Drain queued jobs so a cancelled run is never followed by a
+         * queued "run" job: agent_run_streaming_new() resets the cancel
+         * flag, so the worker would otherwise execute full runs after
+         * quit while the UI thread sits in pthread_join() and no longer
+         * drains the event ring — a long run then blocks forever in
+         * tui_events_push(). */
+        TuiEvent *j;
+        while ((j = tui_events_pop(w->ctx.jobs)) != NULL)
+            tui_event_free(j);
+
+        /* Answer any round-trip events still queued (the UI closed its
+         * modal at quit and stopped popping). They stay worker-owned —
+         * the worker frees them once its wait returns — so they must not
+         * be freed here. This also unblocks a worker stuck waiting on a
+         * condvar that no one else will ever signal. */
+        TuiEvent *ev;
+        while ((ev = tui_events_pop(w->ctx.evs)) != NULL)
+        {
+            if (ev->round_trip)
+                (void)tui_event_answer(ev, NULL, 0);
+            else
+                tui_event_free(ev);
+        }
+
         TuiEvent *q = tui_events_push(w->ctx.jobs, TUI_EV_QUIT, NULL, NULL);
         if (!q)
         {

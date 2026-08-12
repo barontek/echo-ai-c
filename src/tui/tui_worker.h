@@ -52,10 +52,11 @@ TuiWorker *tui_worker_create(const TuiWorkerCtx *ctx);
  * tui_worker_destroy - stop the worker thread and release it
  * @w: worker to release, or NULL (no-op).
  *
- * Cancels any in-flight run, waits for the run loop to reach a job
- * boundary, pushes the quit event, joins the thread, and destroys the
- * agent. Pending round-trip events must not exist when this runs (the UI
- * answers or cancels outstanding modals first).
+ * Cancels any in-flight run, discards all queued jobs (a queued "run"
+ * would reset the cancel flag and execute in full after quit), answers
+ * any still-queued round-trip events so the worker can never block on an
+ * unanswered prompt, pushes the quit event, joins the thread, and
+ * destroys the agent.
  *
  * Return: void.
  */
@@ -68,11 +69,14 @@ void tui_worker_destroy(TuiWorker *w);
  *   "load" (arg = session id), "model" (arg = model name).
  * @arg: job argument, borrowed; NULL allowed.
  *
- * Jobs are refused while a run is in flight (returns -2); the UI shows
- * the refusal in the status line. "run" with an empty arg is ignored.
+ * "run" jobs queue even while a run is in flight (type-ahead); they
+ * execute in order once the current run ends. All other jobs are refused
+ * while busy (returns -2); the UI shows the refusal in the status line.
+ * "run" with an empty arg is ignored. Jobs still queued at shutdown are
+ * discarded by tui_worker_destroy().
  *
  * Return: 0 on success, -1 on allocation failure (nothing queued), -2
- *   while a run is in flight.
+ *   when a non-run job is refused while a run is in flight.
  */
 int tui_worker_submit(TuiWorker *w, const char *job, const char *arg);
 

@@ -445,6 +445,10 @@ static void run_tui(Conf *conf)
     actx.safety = rt->safety;
     actx.conf = conf;
     actx.ct = ct_create();
+    /* Web mode does this too: without it the write_file tool never
+     * snapshots, so /undo and /redo would always report "Nothing to
+     * undo" in the TUI. */
+    registry_set_change_tracker(actx.ct);
     actx.agent_factory = tui_agent_factory;
     actx.agent_factory_userdata = &fctx;
     actx.model = rt->agent->model;

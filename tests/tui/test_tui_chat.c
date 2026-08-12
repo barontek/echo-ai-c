@@ -219,6 +219,108 @@ START_TEST(test_wrap_cap_is_respected)
 }
 END_TEST
 
+/* Locale-independent column widths: CJK chars are 2 columns, combining
+ * marks 0 — regressions for the byte-counting wrapper that wrapped CJK
+ * lines at a third of the width. */
+START_TEST(test_wrap_counts_display_columns)
+{
+    size_t starts[8] = {0};
+    /* width 4: two CJK chars (2 cols each) fit on one line, the third wraps */
+    size_t n = tui_chat_wrap("\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD", 4,
+                             starts, 8);
+    ck_assert_int_eq(n, 2);
+    ck_assert_int_eq(starts[0], 0);
+    ck_assert_int_eq(starts[1], 6); /* third char starts a new line */
+}
+END_TEST
+
+START_TEST(test_wrap_combining_marks_are_zero_width)
+{
+    /* "e" + U+0301 (combining acute) + "x": 2 columns total */
+    size_t n = tui_chat_wrap("e\xCC\x81x", 2, NULL, 0);
+    ck_assert_int_eq(n, 1);
+    /* width 1 forces x to wrap after the e+mark cluster */
+    size_t starts[4] = {0};
+    n = tui_chat_wrap("e\xCC\x81x", 1, starts, 4);
+    ck_assert_int_eq(n, 2);
+    ck_assert_int_eq(starts[1], 3);
+}
+END_TEST
+
+START_TEST(test_wrap_lone_wide_codepoint_never_loops)
+{
+    /* A codepoint wider than the line is placed anyway (regression for
+     * the infinite loop the byte-based wrapper could not hit) */
+    size_t starts[8] = {0};
+    size_t n = tui_chat_wrap("\xE4\xB8\xAD\xE4\xB8\xAD", 1, starts, 8);
+    ck_assert_int_eq(n, 2); /* one char per line, no stall */
+    ck_assert_int_eq(starts[0], 0);
+    ck_assert_int_eq(starts[1], 3);
+}
+END_TEST
+
+START_TEST(test_wrap_wide_word_moves_whole_word)
+{
+    /* width 6: "ab" (2) + space (1) leaves 3 cols; a 2-col CJK char does
+     * not fit, so it moves to its own line */
+    size_t starts[4] = {0};
+    size_t n = tui_chat_wrap("ab \xE4\xB8\xAD\xE4\xB8\xAD", 6, starts, 4);
+    ck_assert_int_eq(n, 2);
+    ck_assert_int_eq(starts[1], 3);
+}
+END_TEST
+
+/* ---- wrap cache ---- */
+
+START_TEST(test_line_starts_cache_reuses_and_invalidates)
+{
+    ck_assert_int_eq(tui_chat_begin_stream(chat, TUI_BLOCK_ASSISTANT), 0);
+    ck_assert_int_eq(tui_chat_stream_append(chat, "one two three"), 0);
+    tui_chat_end_stream(chat);
+
+    size_t lines = 0;
+    const size_t *s1 = tui_chat_block_line_starts(chat, 0, 5, &lines);
+    ck_assert_ptr_nonnull(s1);
+    ck_assert_int_eq(lines, 3);
+    ck_assert_int_eq(s1[0], 0);
+    ck_assert_int_eq(s1[1], 4);
+    ck_assert_int_eq(s1[2], 8);
+    ck_assert_int_eq(s1[3], 13); /* sentinel = text length */
+
+    /* same width: cached array is reused (same pointer) */
+    const size_t *s2 = tui_chat_block_line_starts(chat, 0, 5, &lines);
+    ck_assert_ptr_eq(s1, s2);
+
+    /* different width: recomputed */
+    const size_t *s3 = tui_chat_block_line_starts(chat, 0, 2, &lines);
+    ck_assert_ptr_nonnull(s3);
+    ck_assert_int_gt(lines, 3);
+
+    /* text mutation invalidates: begin a pending tool block, cache its
+     * empty wrap, then fill the result and check the rewrap */
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), 0);
+    (void)tui_chat_block_line_starts(chat, 1, 5, &lines);
+    ck_assert_int_eq(lines, 1); /* empty text = one line */
+    ck_assert_int_eq(tui_chat_tool_finish(chat, "bash", "one two three"), 0);
+    const size_t *s4 = tui_chat_block_line_starts(chat, 1, 5, &lines);
+    ck_assert_ptr_nonnull(s4);
+    ck_assert_int_eq(lines, 3);
+    ck_assert_int_eq(s4[1], 4);
+    ck_assert_int_eq(s4[2], 8);
+}
+END_TEST
+
+START_TEST(test_render_lines_uses_cached_wrap)
+{
+    /* render_lines must agree with the cache (marker math depends on it) */
+    ck_assert_int_eq(tui_chat_begin_user(chat, "one two three four five"), 0);
+    size_t lines = 0;
+    (void)tui_chat_block_line_starts(chat, 0, 5, &lines);
+    ck_assert_int_gt(lines, 1);
+    ck_assert_int_eq(tui_chat_block_render_lines(chat, 0, 5), 1 + lines);
+}
+END_TEST
+
 /* ---- total lines + viewport ---- */
 
 START_TEST(test_total_lines_with_separators)
@@ -508,9 +610,15 @@ static Suite *suite(void)
     tcase_add_test(tc_wrap, test_wrap_long_word_after_short_word);
     tcase_add_test(tc_wrap, test_wrap_space_overflow_starts_new_line);
     tcase_add_test(tc_wrap, test_wrap_cap_is_respected);
+    tcase_add_test(tc_wrap, test_wrap_counts_display_columns);
+    tcase_add_test(tc_wrap, test_wrap_combining_marks_are_zero_width);
+    tcase_add_test(tc_wrap, test_wrap_lone_wide_codepoint_never_loops);
+    tcase_add_test(tc_wrap, test_wrap_wide_word_moves_whole_word);
     tcase_add_test(tc_wrap, test_total_lines_with_separators);
     tcase_add_test(tc_wrap, test_total_lines_empty_is_one);
     tcase_add_test(tc_wrap, test_view_clamp_bounds);
+    tcase_add_test(tc_wrap, test_line_starts_cache_reuses_and_invalidates);
+    tcase_add_test(tc_wrap, test_render_lines_uses_cached_wrap);
     suite_add_tcase(s, tc_wrap);
 
     TCase *tc_fault = tcase_create("fault_injection");
