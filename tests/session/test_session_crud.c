@@ -293,10 +293,15 @@ START_TEST(test_encryption_rejects_hmac_valid_bad_padding_token)
     ck_assert_ptr_nonnull(token);
     ck_assert_int_gt(token_len, 1 + 8 + 16 + 32);
 
-    /* Corrupt one ciphertext byte. Token layout: version (1) | ts (8) |
-     * IV (16) | ciphertext | HMAC (32). */
-    int ct_off = 1 + 8 + 16;
-    token[ct_off] ^= 0xFF;
+    /* Corrupt the last IV byte. The IV XORs into the first plaintext
+     * block one-to-one (no ciphertext avalanche), so the final padding
+     * byte becomes 0x05 ^ 0xFF = 0xFA — invalid PKCS7 padding with
+     * certainty. Corrupting a ciphertext byte instead avalanches the
+     * whole block, leaving the padding valid ~0.4% of the time
+     * (sum of (1/256)^n over n = 1..16), which made this test flaky.
+     * Token layout: version (1) | ts (8) | IV (16) | ciphertext | HMAC (32). */
+    int iv_off = 1 + 8 + 16 - 1;
+    token[iv_off] ^= 0xFF;
 
     /* Re-sign the corrupted token so the HMAC stays valid: the key's low
      * half signs (per encryption.h), and the HMAC covers everything up to
