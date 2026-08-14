@@ -27,6 +27,13 @@
           (pkgs.notcurses.override { multimediaSupport = false; })
           .overrideAttrs (final: prev: {
             cmakeFlags = prev.cmakeFlags ++ [ "-DUSE_CXX=off" ];
+            # notcurses installs a malloc'd alternate signal stack on its
+            # input thread unless built with USE_ASAN (see unixsig.c). Under
+            # ASan, that stack makes the thread's teardown abort in
+            # __sanitizer::UnsetAlternateSignalStack (munmap fails), so every
+            # TUI quit exits 1. Skipping the altstack is what notcurses
+            # itself recommends for ASan builds, and it is inert otherwise.
+            NIX_CFLAGS_COMPILE = (prev.NIX_CFLAGS_COMPILE or "") + " -DUSE_ASAN";
           });
       in
       {

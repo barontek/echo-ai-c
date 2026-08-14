@@ -20,7 +20,8 @@
 
 typedef struct TuiApp TuiApp;
 
-/* Borrowed pointers; all must outlive the app. */
+/* Borrowed pointers, except ctx.agent: it is handed to the worker by
+ * tui_app_run (destroyed there on a clean run — see tui_app_run). */
 typedef struct {
     Agent *agent;
     TuiEvents *evs;    /* worker -> UI ring */
@@ -40,6 +41,9 @@ typedef struct {
     const char *style;    /* [tui] config values, may be NULL */
     const char *density;
     const char *accent;
+    int transparent;      /* 1: leave the terminal background unpainted
+                           * (for transparency/blur terminals like kitty);
+                           * the status bar and modal backdrop stay opaque */
 } TuiAppCtx;
 
 /**
@@ -91,6 +95,11 @@ int tui_app_notice(TuiApp *app, const char *title, const char *body);
  * Starts the worker thread, renders the layout, and pumps: poll the two
  * event wake fds, drain events into the chat model/status/tool panel,
  * dispatch keys, redraw. Blocks until quit.
+ *
+ * Ownership: on success the worker has taken ownership of ctx.agent and
+ * destroyed it (the /new command replaces it mid-run), so the caller must
+ * not free it afterwards. On failure (worker never started) ctx.agent is
+ * untouched and still caller-owned.
  *
  * Return: 0 on a clean user quit, non-zero on a fatal error.
  */

@@ -417,6 +417,7 @@ static void run_tui(Conf *conf)
     const char *style = conf_get(conf, "tui.style");
     const char *density = conf_get(conf, "tui.density");
     const char *accent = conf_get(conf, "tui.accent");
+    const char *transparent = conf_get(conf, "tui.transparent");
 
     TuiEvents *evs = tui_events_init(1024);
     TuiEvents *jobs = tui_events_init(64);
@@ -458,6 +459,7 @@ static void run_tui(Conf *conf)
     actx.style = style;
     actx.density = density;
     actx.accent = accent;
+    actx.transparent = transparent && strcmp(transparent, "true") == 0;
 
     TuiApp *app = tui_app_create(&actx);
     if (!app)
@@ -533,9 +535,21 @@ static void run_tui(Conf *conf)
         return;
     }
 
-    (void)tui_app_run(app, sm);
+    int tui_rc = tui_app_run(app, sm);
+    if (tui_rc == 0)
+    {
+        /* The worker took ownership of the agent (tui_worker_destroy
+         * frees it, and /new replaces it mid-run), so the runtime must
+         * not destroy it again. On a run failure (worker never started)
+         * the runtime still owns it. */
+        rt->agent = NULL;
+    }
 
     tui_app_destroy(app);
+    /* The terminal is restored by now: bid farewell on a clean quit so
+     * the shell sees it after the app closes. */
+    if (tui_rc == 0)
+        printf("Goodbye from Echo AI!\n");
     if (sm) session_manager_free(sm);
     ct_destroy(actx.ct);
     tui_events_destroy(evs);
@@ -685,6 +699,8 @@ int main(int argc, char *argv[])
         if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
         {
             log_error("--cli requires an interactive terminal; use --chat for piped input", NULL);
+            conf_free(conf);
+            log_cleanup();
             return 1;
         }
         run_tui(conf);

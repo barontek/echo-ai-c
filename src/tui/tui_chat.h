@@ -273,6 +273,20 @@ size_t tui_chat_wrap(const char *text, size_t width,
                      size_t *line_starts, size_t cap);
 
 /**
+ * tui_chat_display_width - display columns of a UTF-8 byte range
+ * @s: NUL-terminated UTF-8 input; non-NULL.
+ * @len: byte length to measure (may stop before the NUL).
+ *
+ * Uses the same locale-independent per-codepoint width table as
+ * tui_chat_wrap (CJK/emoji = 2, combining marks = 0). Exposed so the
+ * markdown table renderer pads cells to the columns the chat pane
+ * actually counts.
+ *
+ * Return: display width in columns. Never fails.
+ */
+size_t tui_chat_display_width(const char *s, size_t len);
+
+/**
  * tui_chat_total_lines - total wrapped line count across all blocks
  * @chat: scrollback; non-NULL.
  * @width: line width in columns; must be >= 1.

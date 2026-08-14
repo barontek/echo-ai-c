@@ -70,3 +70,14 @@ add_executable(test_tui_stream
 target_include_directories(test_tui_stream PRIVATE ../../src)
 target_link_libraries(test_tui_stream PRIVATE echo_ai_test_deps)
 add_test(NAME test_tui_stream COMMAND test_tui_stream)
+
+# --- markdown (inline runs, line kinds, table geometry) ---
+add_executable(test_markdown
+    test_markdown.c
+    ../../src/tui/markdown.c
+    ../../src/tui/tui_chat.c
+    ../../src/utils/string_utils.c
+)
+target_include_directories(test_markdown PRIVATE ../../src)
+target_link_libraries(test_markdown PRIVATE echo_ai_test_deps)
+add_test(NAME test_markdown COMMAND test_markdown)

@@ -413,6 +413,38 @@ START_TEST(test_execute_tool_calls_nonzero_index_is_not_failure)
 }
 END_TEST
 
+/* 2026-08-14 leak regression: agent_run_streaming_new appended the user
+ * message and never freed the caller-owned struct shell (agent_append_message
+ * copies the struct; the doc contract says the caller frees it, as
+ * execute_tool_calls does). Every run leaked sizeof(Message) bytes, which
+ * LeakSanitizer flagged at TUI quit (exit code 1). The old code fails this
+ * test under LSAN: the user message shell is unreachable after the run. */
+START_TEST(test_run_streaming_frees_user_message_shell)
+{
+    Agent agent;
+    memset(&agent, 0, sizeof(agent));
+    agent.provider = get_provider("test", "m", "http://localhost", NULL,
+                                  0, 0, NULL);
+    ck_assert_ptr_nonnull(agent.provider);
+    agent.max_iterations = 1;
+    agent.max_context_messages = 100;
+    agent.max_context_chars = 100000;
+
+    /* The mock provider always fails, so the run appends the user message
+     * (plus the injected system prompt) and ends without an assistant
+     * message — exactly the path that leaked. */
+    LLMResponse *resp = agent_run_streaming_new(&agent, "hello", NULL, NULL);
+    ck_assert_ptr_null(resp);
+    ck_assert_int_eq(agent.messages_count, 2);
+    ck_assert_str_eq(agent.messages[0].role, "system");
+    ck_assert_str_eq(agent.messages[1].role, "user");
+    ck_assert_str_eq(agent.messages[1].content, "hello");
+
+    message_free_all(agent.messages, agent.messages_count);
+    agent.provider->destroy(agent.provider);
+}
+END_TEST
+
 Suite *agent_suite(void)
 {
     Suite *s = suite_create("Agent");
@@ -423,6 +455,7 @@ Suite *agent_suite(void)
     tcase_add_test(tc, test_execute_tool_calls_append_oom_keeps_count);
     tcase_add_test(tc, test_execute_tool_calls_message_oom_is_handled);
     tcase_add_test(tc, test_execute_tool_calls_nonzero_index_is_not_failure);
+    tcase_add_test(tc, test_run_streaming_frees_user_message_shell);
     suite_add_tcase(s, tc);
     return s;
 }

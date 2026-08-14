@@ -25,6 +25,7 @@
 #include "tui_input.h"
 #include "tui_dialogs.h"
 #include "tui_worker.h"
+#include "markdown.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 #include "../tools/registry.h"
@@ -42,6 +43,7 @@ struct TuiApp {
     struct ncplane *modal_plane;
     struct ncplane *backdrop_plane;
     TuiTheme *theme;
+    int transparent; /* 1: never paint the base background (see-through) */
     TuiChat *chat;
     TuiInput *input;
     TuiModal *modal;
@@ -213,6 +215,76 @@ static int layout_planes(TuiApp *app)
     return 0;
 }
 
+/* notcurses normalizes ctrl+letter to the uppercased letter with the
+ * CTRL modifier (legacy control bytes like 0x03 are remapped the same
+ * way, and the kitty keyboard protocol reports them identically), so
+ * control bindings must match the letter + modifier — a raw control
+ * code check is dead code on every terminal. */
+static int key_is_ctrl(const ncinput *ni, uint32_t letter)
+{
+    return ni->id == letter &&
+           (ni->modifiers & NCKEY_MOD_CTRL) != 0;
+}
+
+/* Render a ucs32 codepoint as UTF-8 into out (room for 4 bytes). */
+static size_t cp_to_utf8(uint32_t cp, char *out)
+{
+    if (cp < 0x80)
+    {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800)
+    {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000)
+    {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/* Text a key event should insert. Under the kitty keyboard protocol the
+ * event id is the base key (shift applied) and modifier-produced
+ * characters (AltGr layouts, dead keys, IME) arrive in eff_text —
+ * prefer it when it differs from the id. */
+static size_t ncinput_text(const ncinput *ni, char *out, size_t cap)
+{
+    if (ni->eff_text[0] != 0 &&
+        (ni->eff_text[0] != ni->id || ni->id < 0x20))
+    {
+        size_t o = 0;
+        for (unsigned i = 0;
+             i < NCINPUT_MAX_EFF_TEXT_CODEPOINTS && ni->eff_text[i] != 0; i++)
+        {
+            if (o + 4 >= cap) break; /* keep room for the NUL */
+            o += cp_to_utf8(ni->eff_text[i], out + o);
+        }
+        out[o] = '\0';
+        if (o > 0) return o;
+    }
+    return strlcpy(out, ni->utf8, cap);
+}
+
+/* First codepoint a key event types (for single-character consumers
+ * like the modal dispatch). */
+static int ncinput_cp(const ncinput *ni)
+{
+    if (ni->eff_text[0] != 0 && ni->eff_text[0] != ni->id)
+        return (int)ni->eff_text[0];
+    return (int)ni->id;
+}
+
 /* Blocking-modal loops (password/notice) run before the main loop and
  * must handle a too-small terminal the same way app_loop does: wait for
  * a resize instead of rendering into NULL planes. Returns 0 when a
@@ -225,7 +297,7 @@ static int wait_for_terminal(TuiApp *app)
     {
         if (ni.evtype == NCTYPE_RELEASE) continue; /* kitty prot. */
         if (ni.id == NCKEY_RESIZE) return 0;
-        if (ni.id == 3u) { app->quit = 1; return -1; } /* Ctrl-C aborts */
+        if (key_is_ctrl(&ni, 'C')) { app->quit = 1; return -1; } /* Ctrl-C aborts */
     }
     if (rc == UINT32_MAX) { app->quit = 1; return -1; } /* EOF: terminal gone */
     check_signals(app);
@@ -236,7 +308,11 @@ static int wait_for_terminal(TuiApp *app)
 
 /* notcurses 3.0.17 has no REVERSE/DIM styles; simulate them with color:
  * REVERSE swaps fg/bg, DIM mixes the fg toward the background. The status
- * bar role inverts onto its own accent background. */
+ * bar role inverts onto its own accent background. In transparent mode
+ * the base background is never painted (the plane stays see-through so
+ * kitty's transparency/blur shows), but the status bar's accent field,
+ * the error highlight, and the modal backdrop keep their opaque
+ * backgrounds — they are design elements, not text backdrops. */
 static void plane_color(TuiApp *app, struct ncplane *p, TuiRole role)
 {
     uint32_t fg = tui_theme_color(app->theme, role);
@@ -253,7 +329,12 @@ static void plane_color(TuiApp *app, struct ncplane *p, TuiRole role)
     if (bits & TUI_STYLE_DIM)
         fg = tui_theme_mix(fg, bg, 60);
     (void)ncplane_set_fg_rgb8(p, (fg >> 16) & 0xff, (fg >> 8) & 0xff, fg & 0xff);
-    (void)ncplane_set_bg_rgb8(p, (bg >> 16) & 0xff, (bg >> 8) & 0xff, bg & 0xff);
+    if (!app->transparent || role == TUI_ROLE_STATUS_FG ||
+        role == TUI_ROLE_ERROR)
+    {
+        (void)ncplane_set_bg_rgb8(p, (bg >> 16) & 0xff,
+                                  (bg >> 8) & 0xff, bg & 0xff);
+    }
 
     unsigned bits2 = bits;
     unsigned ncstyle = 0;
@@ -302,6 +383,107 @@ static const char *kind_label(TuiBlockKind kind)
     }
 }
 
+/* ---- markdown-aware line rendering ---- */
+
+static int markdown_kind(TuiBlockKind kind)
+{
+    return kind == TUI_BLOCK_USER || kind == TUI_BLOCK_ASSISTANT ||
+           kind == TUI_BLOCK_THINK;
+}
+
+/* Map MdStyle bits onto a notcurses style + fg (bg stays as the block
+ * role's — see-through in transparent mode). Resets leftover styles. */
+static void md_apply(TuiApp *app, struct ncplane *p, TuiRole role,
+                     unsigned bits)
+{
+    uint32_t fg = tui_theme_color(app->theme, role);
+    unsigned ncstyle = 0;
+    if (bits & MD_STYLE_BOLD) ncstyle |= NCSTYLE_BOLD;
+    if (bits & MD_STYLE_ITALIC) ncstyle |= NCSTYLE_ITALIC;
+    if (bits & MD_STYLE_STRIKE) ncstyle |= NCSTYLE_STRUCK;
+    if (bits & MD_STYLE_LINK) ncstyle |= NCSTYLE_UNDERLINE;
+    if (bits & MD_STYLE_CODE)
+        fg = tui_theme_color(app->theme, TUI_ROLE_TOOL_RESULT);
+    if (bits & MD_STYLE_HEADING)
+    {
+        fg = tui_theme_color(app->theme, TUI_ROLE_ACCENT);
+        ncstyle |= NCSTYLE_BOLD;
+    }
+    if (bits & MD_STYLE_DIM)
+        fg = tui_theme_mix(fg, tui_theme_color(app->theme, TUI_ROLE_BASE_BG), 60);
+    (void)ncplane_set_fg_rgb8(p, (fg >> 16) & 0xff, (fg >> 8) & 0xff, fg & 0xff);
+    (void)ncplane_set_styles(p, ncstyle);
+}
+
+/* Horizontal rule: a dim line of box-drawing fills the content width. */
+static void put_hr(TuiApp *app, struct ncplane *p, TuiRole role,
+                   char *buf, size_t bufcap, size_t cw)
+{
+    md_apply(app, p, role, MD_STYLE_DIM);
+    size_t o = 0;
+    while (o + 3 < bufcap && o < cw * 3)
+    {
+        buf[o++] = '\xE2';
+        buf[o++] = '\x94';
+        buf[o++] = '\x80';
+    }
+    buf[o] = '\0';
+    (void)ncplane_putstr(p, buf);
+}
+
+/* One content line with markdown applied (the rail and cursor are
+ * already set up; the cursor sits at col 2). Line-level kinds set a
+ * whole-line style; inline runs refine it run by run. */
+static void put_markdown_line(TuiApp *app, struct ncplane *p, TuiRole role,
+                              const char *seg, size_t seg_len, MdLineKind lk,
+                              int in_fence, MdRun *runs, size_t run_cap)
+{
+    if (in_fence && lk != MD_LINE_CODE_FENCE)
+    {
+        /* fenced code is literal: nothing inside it is a delimiter */
+        md_apply(app, p, role, MD_STYLE_CODE);
+        (void)ncplane_putnstr(p, seg_len, seg);
+        return;
+    }
+    unsigned line_bits = 0;
+    if (lk == MD_LINE_HEADING) line_bits |= MD_STYLE_HEADING;
+    else if (lk == MD_LINE_QUOTE || lk == MD_LINE_CODE_FENCE)
+        line_bits |= MD_STYLE_DIM;
+
+    /* Headings consume their whole marker (indent, hashes, one space)
+     * like CommonMark does; only the heading text is drawn. */
+    const char *base = seg;
+    size_t base_len = seg_len;
+    if (lk == MD_LINE_HEADING)
+    {
+        size_t skip = 0;
+        while (skip < base_len && base[skip] == ' ') skip++;
+        while (skip < base_len && base[skip] == '#') skip++;
+        if (skip < base_len && base[skip] == ' ') skip++;
+        if (skip >= base_len) return; /* bare "#": an empty heading */
+        base += skip;
+        base_len -= skip;
+    }
+
+    size_t n = md_parse_inline(base, base_len, runs, run_cap);
+    if (n == 0)
+    {
+        md_apply(app, p, role, line_bits);
+        (void)ncplane_putnstr(p, base_len, base);
+        return;
+    }
+    for (size_t i = 0; i < n; i++)
+    {
+        size_t start = runs[i].start;
+        size_t len = runs[i].len;
+        if (start >= base_len) continue;
+        if (start + len > base_len) len = base_len - start;
+        md_apply(app, p, role, line_bits | runs[i].style);
+        (void)ncplane_putnstr(p, len, base + start);
+    }
+    (void)ncplane_set_styles(p, 0); /* leave no style on the plane */
+}
+
 static void render_chat(TuiApp *app)
 {
     struct ncplane *p = app->chat_plane;
@@ -322,7 +504,15 @@ static void render_chat(TuiApp *app)
      * never longer than its input line); marker stripping happens per
      * drawn line. */
     char *seg = malloc(cw * 4 + 1);
-    if (!seg) return;
+    char *row_buf = malloc(cw * 8 + 1);
+    MdRun *runs = malloc((cw * 4 + 2) * sizeof(MdRun));
+    if (!seg || !row_buf || !runs)
+    {
+        free(seg);
+        free(row_buf);
+        free(runs);
+        return;
+    }
     for (size_t b = 0; b < tui_chat_block_count(app->chat) && drawn < (size_t)rows; b++)
     {
         TuiBlockKind bk = tui_chat_block_kind(app->chat, b);
@@ -363,8 +553,94 @@ static void render_chat(TuiApp *app)
          * in place of content while its tool runs. */
         int pending = (bk == TUI_BLOCK_TOOL && text[0] == '\0');
 
+        /* Markdown (headings, emphasis, tables, code fences) applies to
+         * message text, not to tool results or errors. Fence state is
+         * per-block and recomputed every frame: the chat model is
+         * re-rendered in full, so no state survives between frames. */
+        int markdown_block = markdown_kind(bk);
+        int fence = 0;
         for (size_t l = 0; l < content; l++)
         {
+            size_t seg_len = 0;
+            MdLineKind lk = MD_LINE_PLAIN;
+            MdTable *tbl = NULL;
+            size_t tbl_rows = 0;
+            if (starts)
+            {
+                size_t s = starts[l];
+                size_t e = starts[l + 1];
+                if (e > s)
+                {
+                    size_t cap = cw * 4;
+                    if (e - s > cap) e = s + cap; /* pathological combining-mark runs */
+                    seg_len = strip_markers(text + s, e - s, seg);
+                }
+                if (markdown_block && !pending)
+                {
+                    lk = md_line_kind(seg, seg_len);
+                    if (lk == MD_LINE_CODE_FENCE)
+                        fence = !fence;
+                    /* A row only starts a table when the next line is a
+                     * separator; a lone row renders as plain text. */
+                    if (lk == MD_LINE_TABLE_ROW && !fence &&
+                        l + 1 < content)
+                    {
+                        size_t s2 = starts[l + 1];
+                        size_t e2 = starts[l + 2];
+                        size_t slen = 0;
+                        if (e2 > s2)
+                        {
+                            size_t cap2 = cw * 4;
+                            if (e2 - s2 > cap2) e2 = s2 + cap2;
+                            slen = strip_markers(text + s2, e2 - s2, row_buf);
+                        }
+                        if (md_line_kind(row_buf, slen) == MD_LINE_TABLE_SEP)
+                            tbl = md_table_scan(text, starts, content, l,
+                                                &tbl_rows);
+                    }
+                }
+            }
+
+            if (tbl)
+            {
+                /* Render every row (padded to the column widths), then
+                 * consume the separator as a blank line; the outer loop
+                 * must skip both so scroll math stays exact. */
+                for (size_t r = 0; r < tbl_rows; r++)
+                {
+                    /* rows are non-contiguous: the separator at l + 1
+                     * sits between the first row and the rest */
+                    size_t rline = (r == 0) ? l : l + r + 1;
+                    if (virtual_line >= top && drawn < (size_t)rows)
+                    {
+                        size_t rs = starts[rline];
+                        size_t re = starts[rline + 1];
+                        size_t rlen = 0;
+                        if (re > rs)
+                        {
+                            size_t cap3 = cw * 4;
+                            if (re - rs > cap3) re = rs + cap3;
+                            rlen = strip_markers(text + rs, re - rs, seg);
+                        }
+                        (void)ncplane_cursor_move_yx(p, (int)drawn, 0);
+                        plane_color(app, p, role);
+                        (void)ncplane_putstr(p, "\xE2\x94\x82"); /* │ */
+                        (void)ncplane_cursor_move_yx(p, (int)drawn, 2);
+                        size_t n = md_table_render_row(row_buf, cw * 8 + 1,
+                                                       seg, rlen, tbl);
+                        (void)ncplane_putnstr(p, n, row_buf);
+                        drawn++;
+                    }
+                    virtual_line++;
+                }
+                virtual_line++;
+                if (virtual_line >= top && drawn < (size_t)rows)
+                    drawn++;
+                md_table_free(tbl);
+                l += tbl_rows; /* the loop's l++ clears the separator too */
+                continue;
+            }
+
             if (virtual_line >= top && drawn < (size_t)rows)
             {
                 (void)ncplane_cursor_move_yx(p, (int)drawn, 0);
@@ -382,15 +658,13 @@ static void render_chat(TuiApp *app)
                 }
                 else if (starts)
                 {
-                    size_t s = starts[l];
-                    size_t e = starts[l + 1];
-                    if (e > s)
-                    {
-                        size_t cap = cw * 4;
-                        if (e - s > cap) e = s + cap; /* pathological combining-mark runs */
-                        size_t seg_len = strip_markers(text + s, e - s, seg);
+                    if (markdown_block && lk == MD_LINE_HR && !fence)
+                        put_hr(app, p, role, row_buf, cw * 8 + 1, cw);
+                    else if (markdown_block)
+                        put_markdown_line(app, p, role, seg, seg_len, lk,
+                                          fence, runs, cw * 4 + 2);
+                    else
                         (void)ncplane_putnstr(p, seg_len, seg);
-                    }
                 }
                 drawn++;
             }
@@ -426,6 +700,8 @@ static void render_chat(TuiApp *app)
             drawn++;
     }
     free(seg);
+    free(row_buf);
+    free(runs);
 }
 
 static void render_status(TuiApp *app)
@@ -629,8 +905,18 @@ static void render_modal(TuiApp *app)
     struct ncplane *p = app->modal_plane;
     ncplane_erase(p);
 
-    /* Title bar: accent background, dark text */
-    plane_color(app, p, TUI_ROLE_STATUS_FG);
+    /* Title bar: accent background, dark text. In transparent mode the
+     * modal blends with the terminal: accent text, no background. */
+    if (app->transparent)
+    {
+        uint32_t accent = tui_theme_color(app->theme, TUI_ROLE_ACCENT);
+        (void)ncplane_set_fg_rgb8(p, (accent >> 16) & 0xff,
+                                  (accent >> 8) & 0xff, accent & 0xff);
+    }
+    else
+    {
+        plane_color(app, p, TUI_ROLE_STATUS_FG);
+    }
     (void)ncplane_set_styles(p, NCSTYLE_BOLD);
     const char *title = tui_modal_title(app->modal);
     size_t tn = strlen(title);
@@ -1048,7 +1334,7 @@ static void handle_key(TuiApp *app, const ncinput *ni)
     {
         /* Ctrl-C always quits: cancel the pending modal (answering its
          * event so the worker never hangs) and offer the quit dialog. */
-        if (id == 3)
+        if (key_is_ctrl(ni, 'C'))
         {
             close_modal(app, 1);
             app->modal = tui_modal_open(TUI_MODAL_CONFIRM_QUIT,
@@ -1059,7 +1345,7 @@ static void handle_key(TuiApp *app, const ncinput *ni)
         if (id == NCKEY_ENTER) key = 10;
         else if (id == NCKEY_ESC) key = 27;
         else if (id == NCKEY_BACKSPACE) key = 127;
-        else if (id < 0x110000u && id >= 32u) key = (int)id;
+        else if (id < 0x110000u && id >= 32u) key = ncinput_cp(ni);
         if (key >= 0)
         {
             TuiModalAction action = tui_modal_dispatch_key(app->modal, key);
@@ -1094,7 +1380,7 @@ static void handle_key(TuiApp *app, const ncinput *ni)
         (void)tui_input_delete(app->input);
         return;
     }
-    if (id == 23) /* Ctrl-W: delete the word before the cursor */
+    if (key_is_ctrl(ni, 'W')) /* Ctrl-W: delete the word before the cursor */
     {
         tui_input_reset_history_walk(app->input);
         (void)tui_input_delete_word(app->input);
@@ -1133,7 +1419,7 @@ static void handle_key(TuiApp *app, const ncinput *ni)
         }
         return;
     }
-    if (id == 3) /* Ctrl-C */
+    if (key_is_ctrl(ni, 'C')) /* Ctrl-C */
     {
         app->modal = tui_modal_open(TUI_MODAL_CONFIRM_QUIT,
                                     "Quit?", "Press y to quit, any other key to cancel.", NULL);
@@ -1144,17 +1430,25 @@ static void handle_key(TuiApp *app, const ncinput *ni)
         handle_click(app, ni);
         return;
     }
-    if (id == 12) /* Ctrl-L */
+    if (key_is_ctrl(ni, 'L')) /* Ctrl-L */
     {
         tui_chat_destroy(app->chat);
         app->chat = tui_chat_create();
         app->chat_top = 0;
         return;
     }
-    if (id >= 32u && id < 0x110000u)
+    /* Any printable key types, including modifier combos like AltGr
+     * (reported as ctrl+alt) that produce characters on some layouts;
+     * the ctrl bindings above already consumed Ctrl-C/W/L. Pure text
+     * events (IME/dead keys report key 0 with the text in eff_text)
+     * insert through the effective-text path. */
+    if ((id >= 32u && id < 0x110000u) ||
+        (ni->eff_text[0] != 0 && ni->eff_text[0] != ni->id))
     {
+        char buf[24];
+        size_t n = ncinput_text(ni, buf, sizeof(buf));
         tui_input_reset_history_walk(app->input); /* typing ends the walk */
-        (void)tui_input_insert(app->input, ni->utf8[0] ? ni->utf8 : "");
+        (void)tui_input_insert(app->input, n > 0 ? buf : "");
     }
 }
 
@@ -1180,7 +1474,7 @@ static int app_loop(TuiApp *app)
             while ((rc = notcurses_get_nblock(app->nc, &ni)) != 0 && rc != UINT32_MAX)
             {
                 if (ni.evtype == NCTYPE_RELEASE) continue; /* kitty prot. */
-                if (ni.id == NCKEY_RESIZE || ni.id == 3u) break;
+                if (ni.id == NCKEY_RESIZE || key_is_ctrl(&ni, 'C')) break;
             }
             if (rc == UINT32_MAX) { app->quit = 1; break; } /* EOF: terminal gone */
             check_signals(app);
@@ -1237,6 +1531,7 @@ TuiApp *tui_app_create(const TuiAppCtx *ctx)
     app->log_path = ctx->log_path ? str_dup(ctx->log_path) : default_log_path();
 
     app->theme = tui_theme_create(ctx->style, ctx->density, ctx->accent);
+    app->transparent = ctx->transparent;
     app->chat = tui_chat_create();
     app->input = tui_input_create(32);
     if (!app->theme || !app->chat || !app->input)
@@ -1308,7 +1603,7 @@ char *tui_app_prompt_password(TuiApp *app, const char *prompt)
             if (ni.id == NCKEY_ENTER) key = 10;
             else if (ni.id == NCKEY_ESC) key = 27;
             else if (ni.id == NCKEY_BACKSPACE) key = 127;
-            else if (ni.id < 0x110000u && ni.id >= 32u) key = (int)ni.id;
+            else if (ni.id < 0x110000u && ni.id >= 32u) key = ncinput_cp(&ni);
             if (key < 0) continue;
             TuiModalAction action = tui_modal_dispatch_key(app->modal, key);
             if (action == TUI_MODAL_ACTION_ANSWERED)
@@ -1405,6 +1700,12 @@ int tui_app_run(TuiApp *app, SessionManager *sm)
      * finish first): say so instead of freezing on a stale frame. */
     close_modal(app, 1);
     set_status_msg(app, "Quitting \xE2\x80\xA6");
+    /* Farewell in the chat pane so the final frame says goodbye before
+     * the terminal is restored (best-effort: allocation failures just
+     * skip the block). */
+    (void)tui_chat_begin_stream(app->chat, TUI_BLOCK_ASSISTANT);
+    (void)tui_chat_stream_append(app->chat, "Goodbye! See you next time.");
+    (void)tui_chat_end_stream(app->chat);
     render_all(app);
 
     tui_worker_destroy(app->worker);

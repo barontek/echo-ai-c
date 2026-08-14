@@ -224,7 +224,13 @@ static LLMResponse *agent_run_loop(Agent *agent,
                 resp->tool_calls = NULL; /* ownership transferred */
                 resp->tool_calls_count = 0;
             }
-            agent_append_message(agent, assistant_msg);
+            if (agent_append_message(agent, assistant_msg) >= 0)
+                free(assistant_msg); /* struct only: fields moved into the array */
+            else
+            {
+                log_error("agent_run: OOM appending assistant message", NULL);
+                message_free(assistant_msg);
+            }
             agent_save_session(agent);
         }
 
@@ -256,7 +262,13 @@ LLMResponse *agent_run_new(Agent *agent, const char *user_input)
         free(run_id);
         return NULL;
     }
-    agent_append_message(agent, user_msg);
+    if (agent_append_message(agent, user_msg) >= 0)
+        free(user_msg); /* struct only: fields moved into the array */
+    else
+    {
+        log_error("agent_run: OOM appending user message", NULL);
+        message_free(user_msg);
+    }
     agent_save_session(agent);
 
     for (int iter = 0; iter < agent->max_iterations; iter++)
@@ -312,7 +324,13 @@ LLMResponse *agent_run_new(Agent *agent, const char *user_input)
                 resp->tool_calls = NULL; /* ownership transferred */
                 resp->tool_calls_count = 0;
             }
-            agent_append_message(agent, assistant_msg);
+            if (agent_append_message(agent, assistant_msg) >= 0)
+                free(assistant_msg); /* struct only: fields moved into the array */
+            else
+            {
+                log_error("agent_run: OOM appending assistant message", NULL);
+                message_free(assistant_msg);
+            }
             agent_save_session(agent);
         }
 
@@ -345,7 +363,13 @@ LLMResponse *agent_run_streaming_new(Agent *agent, const char *user_input,
 
     Message *user_msg = message_create("user", user_input);
     if (!user_msg) return NULL;
-    agent_append_message(agent, user_msg);
+    if (agent_append_message(agent, user_msg) >= 0)
+        free(user_msg); /* struct only: fields moved into the array */
+    else
+    {
+        log_error("agent_run: OOM appending user message", NULL);
+        message_free(user_msg);
+    }
     agent_save_session(agent);
 
     return agent_run_loop(agent, on_chunk, userdata);

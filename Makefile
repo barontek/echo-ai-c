@@ -44,8 +44,13 @@ run: run-web
 run-web: frontend-build debug
 	$(BUILD_DIR)/echo-ai --web --config $(CONFIG)
 
+# ASAN_OPTIONS=use_sigaltstack=0: notcurses installs an alternate signal
+# stack on its input thread; at quit that makes ASan's thread teardown
+# abort (munmap CHECK failure) and exit 1. use_sigaltstack=0 is the
+# workaround notcurses documents for ASan builds (the nix flake build
+# additionally defines USE_ASAN, which skips the altstack entirely).
 run-cli: debug
-	$(BUILD_DIR)/echo-ai --cli --config $(CONFIG)
+	@ASAN_OPTIONS=use_sigaltstack=0 $(BUILD_DIR)/echo-ai --cli --config $(CONFIG)
 
 run-tui: run-cli
 

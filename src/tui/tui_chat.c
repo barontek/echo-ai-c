@@ -300,6 +300,24 @@ static size_t utf8_decode_cp(const char *s, size_t len, uint32_t *cp)
     return n;
 }
 
+/* Total display width of a byte range; the same per-codepoint rules
+ * the wrapper uses. Exposed so markdown table geometry can pad cells
+ * to the same columns the chat pane counts. */
+size_t tui_chat_display_width(const char *s, size_t len)
+{
+    size_t w = 0;
+    size_t i = 0;
+    while (i < len)
+    {
+        uint32_t cp = 0;
+        size_t n = utf8_decode_cp(s + i, len - i, &cp);
+        int cw = cp_display_width(cp);
+        if (cw > 0) w += (size_t)cw;
+        i += n;
+    }
+    return w;
+}
+
 /* Greedy word wrap by display columns; see the header for the contract. */
 size_t tui_chat_wrap(const char *text, size_t width,
                      size_t *line_starts, size_t cap)

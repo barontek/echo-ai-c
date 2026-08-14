@@ -184,3 +184,7 @@ style = dark
 density = compact
 # accent = RRGGBB hex (optional; overrides the preset accent)
 # accent = 7aa2f7
+# transparent = true — leave the terminal background unpainted so a
+# transparent/blurred terminal (e.g. kitty) shows through. The status
+# bar, error highlights, and modal backdrop stay opaque.
+# transparent = false
