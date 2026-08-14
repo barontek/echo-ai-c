@@ -20,6 +20,18 @@ on:
 #   formulae (brew >= 4.4 no longer writes Brewfile.lock.json), so versions
 #   float; the `brew list --versions` step records what actually ran for
 #   traceability.
+
+# - backend-arch runs the official archlinux:latest Docker Hub image, a
+#   minimal `base` rootfs rebuilt daily upstream (no git/gcc/make inside —
+#   those are installed explicitly; git must be installed before the
+#   checkout step since actions/checkout runs inside the container). Arch
+#   is a rolling release, so the toolchain cannot be version-pinned; this
+#   job is the forward-compat canary that builds against the newest
+#   gcc/glibc/libcurl/etc. available (notcurses is currently 3.0.17, the
+#   same version the TUI targets on Debian sid). `pacman -Syu` at job start
+#   closes the gap between image rebuild and live repo state, and the
+#   `pacman -Q` step records the versions that actually ran for
+#   traceability, same policy as backend-macos.
 # - The frontend job pins Node to major 22 via actions/setup-node; exact
 #   minor/patch is pinned by the committed package-lock.json (npm ci).
 
@@ -89,6 +101,48 @@ jobs:
 
     - name: test
       run: nix develop --command bash -c "ctest --test-dir build -V"
+
+  # Rolling-release canary: Arch has no version pins, so this job is the
+  # first to break when upstream toolchains move. Mirrors backend-debian
+  # (Debug + sanitizers + file-length audit) plus a version-recording step.
+  backend-arch:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+
+    steps:
+    # The official archlinux image is a minimal `base` rootfs: no git (so
+    # checkout below would fail), no gcc (only gcc-libs runtime), no make.
+    # The keyring refresh first closes the stale-keyring window when the
+    # image predates a new archlinux-keyring (Arch wiki recommendation).
+    - name: update system and install git for checkout
+      run: |
+        pacman -Sy --noconfirm archlinux-keyring
+        pacman -Syu --noconfirm
+        pacman -S --noconfirm --needed git
+
+    - uses: actions/checkout@v4
+
+    - name: install deps
+      run: pacman -S --noconfirm --needed cmake gcc make pkgconf libuv curl sqlite openssl cjson check notcurses libunistring ncurses libdeflate
+
+    # Versions float on Arch; record what actually ran (same policy as
+    # backend-macos' `brew list --versions`).
+    - name: record toolchain versions
+      run: pacman -Q cmake gcc git make libuv curl sqlite openssl cjson check notcurses libunistring ncurses libdeflate
+
+    - name: configure
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+
+    - name: build
+      run: cmake --build build
+
+    # ASan/UBSan/LSan all work under Arch's gcc, so no ASAN_OPTIONS needed.
+    - name: test
+      run: ctest --test-dir build -V
+
+    - name: file-length audit
+      continue-on-error: true
+      run: scripts/check-file-lengths.sh
 
   fuzz:
     runs-on: ubuntu-latest
