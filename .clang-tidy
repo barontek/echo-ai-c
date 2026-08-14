@@ -1,0 +1,26 @@
+# clang-tidy config — run via `make lint` (local only, not CI).
+#
+# Curated for this repo's build-flag contract (-Wall -Wextra -Wpedantic
+# -Werror + ASan/UBSan already cover compile-time and runtime memory
+# bugs; this adds static data-flow analysis on top):
+#   bugprone-*         suspicious/misleading patterns (overflow, misuse)
+#   clang-analyzer-*   leaks, use-after-free, null derefs, uninit reads
+#   portability-*      macOS/other-platform portability traps
+#
+# Deliberately disabled:
+#   bugprone-reserved-identifier — every TU defines _GNU_SOURCE first;
+#   bugprone-easily-swappable-parameters — fires on every multi-size_t
+#     helper (wrap/truncate families); header docs carry the contracts;
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+#     — fires on every memcpy/strncpy call; AGENTS.md already bans the
+#     unbounded forms and the codebase only uses bounded ones.
+Checks: >
+  bugprone-*,
+  clang-analyzer-*,
+  portability-*,
+  misc-misleading-indentation,
+  -bugprone-reserved-identifier,
+  -bugprone-easily-swappable-parameters,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+WarningsAsErrors: false
+HeaderFilterRegex: 'src/'

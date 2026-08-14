@@ -5,7 +5,7 @@ CONFIG  ?= config.conf
 NPM     ?= npm
 NPM_DIR  = frontend
 
-.PHONY: all debug release clean test run run-web run-cli run-tls docs init frontend frontend-build frontend-test frontend-clean
+.PHONY: all debug release clean test lint run run-web run-cli run-tls docs init frontend frontend-build frontend-test frontend-clean
 
 init:
 	@if [ ! -f config.conf ]; then cp config.conf.example config.conf && echo "Created config.conf from example"; else echo "config.conf already exists"; fi
@@ -28,6 +28,13 @@ clean: frontend-clean
 
 test: debug
 	$(CTEST) --test-dir $(BUILD_DIR) -V
+
+# Local-only static analysis (clang-tidy; read-only, never edits files).
+# Needs build/compile_commands.json: `cmake -B build` writes it because
+# CMAKE_EXPORT_COMPILE_COMMANDS is on by default in this repo.
+lint:
+	@echo "usage: make lint [FILES='src/...c ...'] (default: all tracked src)"
+	scripts/lint.sh $(FILES)
 
 # G1: debugger/valgrind helpers for a single Check suite (see
 # scripts/debug-check.sh — uses CK_FORK=no + CK_RUN_* isolation).
