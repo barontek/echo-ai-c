@@ -188,14 +188,20 @@ static struct ncplane *make_plane(TuiApp *app, unsigned rows, unsigned cols,
     return ncplane_create(notcurses_stdplane(app->nc), &opts);
 }
 
+/* Wrapped height of the approval prompt bar (defined with the modal
+ * rendering below; layout needs it first). */
+static int approval_bar_lines(const TuiApp *app, unsigned cols);
+
 /* Rebuild the plane stack when the terminal size changes — or when the
  * approval bar appears/disappears (callers invalidate term_rows). */
 static int layout_planes(TuiApp *app)
 {
     unsigned rows, cols;
     notcurses_term_dim_yx(app->nc, &rows, &cols); /* void in 3.0.17 */
-    int bar = (app->modal &&
-               tui_modal_kind(app->modal) == TUI_MODAL_APPROVAL) ? 1 : 0;
+    int bar = approval_bar_lines(app, cols);
+    /* Cap the bar so the chat pane keeps at least one row on short terms. */
+    if (bar > (int)rows - 5) bar = (int)rows - 5;
+    if (bar < 0) bar = 0;
     if (rows == app->term_rows && cols == app->term_cols && app->status_plane)
         return 0;
     app->term_rows = rows;
@@ -206,10 +212,11 @@ static int layout_planes(TuiApp *app)
         return -1; /* too small to be usable; caller exits cleanly */
     app->status_plane = make_plane(app, 1, cols, 0, 0);
     app->tools_plane = make_plane(app, 1, cols, 1, 0);
-    /* chat shrinks by one row while the approval bar is up */
+    /* chat shrinks by the approval bar height while it is up */
     app->chat_plane = make_plane(app, rows - 4 - (unsigned)bar, cols, 2, 0);
     if (bar)
-        app->prompt_plane = make_plane(app, 1, cols, (int)rows - 3, 0);
+        app->prompt_plane = make_plane(app, (unsigned)bar, cols,
+                                       (int)rows - 2 - bar, 0);
     app->input_plane = make_plane(app, 1, cols, (int)rows - 2, 0);
     app->footer_plane = make_plane(app, 1, cols, (int)rows - 1, 0);
     app->modal_plane = NULL;
@@ -894,37 +901,75 @@ static const char *modal_hint(TuiModalKind kind)
 
 /* Bracket-free modal panel: full-width accent title bar, wrapped body,
  * input row, and an action-hint line. The backdrop dims the rest. */
-/* Approval prompt bar: a single accent-background line just above the
- * input box — no backdrop, no screen takeover. */
+/* Approval prompt text: " allow <tool>?  <args>   — y allow • n deny". */
+static char *approval_prompt_text_alloc(const TuiApp *app)
+{
+    const char *title = tui_modal_title(app->modal);
+    const char *body = tui_modal_body(app->modal);
+    if (!title) title = "";
+    if (!body) body = "";
+    static const char hint[] = "   \xE2\x80\x94 y allow \xE2\x80\xA2 n deny";
+    size_t n = strlen(title) + strlen(body) + strlen(hint) + 16;
+    char *out = malloc(n);
+    if (!out) return NULL;
+    int k = snprintf(out, n, " allow %s?  %s%s", title, body, hint);
+    if (k < 0 || (size_t)k >= n)
+    {
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+/* Wrapped height of the approval prompt bar at the current width; 0 when
+ * no approval bar is up. Allocation failure falls back to one line so a
+ * modal still renders. */
+static int approval_bar_lines(const TuiApp *app, unsigned cols)
+{
+    if (!app->modal || tui_modal_kind(app->modal) != TUI_MODAL_APPROVAL)
+        return 0;
+    char *text = approval_prompt_text_alloc(app);
+    if (!text) return 1;
+    size_t width = cols >= 2 ? (size_t)cols - 1 : (size_t)cols;
+    size_t lines = tui_chat_wrap(text, width, NULL, 0);
+    free(text);
+    return lines < 1 ? 1 : (int)lines;
+}
+
+/* Approval prompt bar: accent-background lines just above the input box —
+ * no backdrop, no screen takeover. Fits on one line when the terminal is
+ * wide enough, wraps across multiple lines otherwise so the full request
+ * stays readable. */
 static void render_prompt_bar(TuiApp *app)
 {
     if (!app->prompt_plane || !app->modal) return;
     struct ncplane *p = app->prompt_plane;
-    unsigned cols;
-    ncplane_dim_yx(p, NULL, &cols);
+    unsigned rows, cols;
+    ncplane_dim_yx(p, &rows, &cols);
     ncplane_erase(p);
     plane_color(app, p, TUI_ROLE_STATUS_FG);
 
-    char line[512];
-    int n = snprintf(line, sizeof(line), " allow %s?",
-                     tui_modal_title(app->modal));
-    const char *body = tui_modal_body(app->modal);
-    if (n < 0) return;
-    if ((size_t)n >= sizeof(line))
-        n = (int)sizeof(line) - 1; /* truncated: keep chained writes in bounds */
-    if (body)
-        n += snprintf(line + n, sizeof(line) - (size_t)n, "  %s", body);
-    if (n < 0) return;
-    if ((size_t)n >= sizeof(line))
-        n = (int)sizeof(line) - 1;
-    n += snprintf(line + n, sizeof(line) - (size_t)n,
-                  "   \xE2\x80\x94 y allow \xE2\x80\xA2 n deny");
-    if (n < 0) return;
-    if ((size_t)n >= sizeof(line))
-        n = (int)sizeof(line) - 1;
-    size_t len = (size_t)n;
-    if (len > (size_t)cols - 1) len = (size_t)cols - 1;
-    (void)ncplane_putnstr(p, len, line);
+    char *text = approval_prompt_text_alloc(app);
+    if (!text) return;
+    size_t width = cols >= 2 ? (size_t)cols - 1 : (size_t)cols;
+    size_t blines = tui_chat_wrap(text, width, NULL, 0);
+    size_t *starts = malloc((blines + 1) * sizeof(size_t));
+    if (starts)
+    {
+        (void)tui_chat_wrap(text, width, starts, blines + 1);
+        starts[blines] = strlen(text);
+        size_t shown = blines < rows ? blines : rows;
+        for (size_t l = 0; l < shown; l++)
+        {
+            size_t s = starts[l];
+            size_t e = starts[l + 1];
+            if (e <= s) continue;
+            (void)ncplane_cursor_move_yx(p, (int)l, 0);
+            (void)ncplane_putnstr(p, e - s, text + s);
+        }
+        free(starts);
+    }
+    free(text);
 }
 
 static void render_modal(TuiApp *app)

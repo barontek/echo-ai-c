@@ -224,6 +224,16 @@ int registry_count(void)
     return tool_count;
 }
 
+int registry_enabled_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < tool_count; i++)
+    {
+        if (tools[i]->enabled) n++;
+    }
+    return n;
+}
+
 #ifndef REGISTRY_TEST
 /* Same test-build reason as registry_init: no write_file tool to wire up. */
 void registry_set_change_tracker(ChangeTracker *ct)

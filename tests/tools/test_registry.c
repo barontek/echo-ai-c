@@ -40,6 +40,19 @@ START_TEST(test_registry_returns_enabled_tool)
 }
 END_TEST
 
+START_TEST(test_registry_enabled_count_excludes_disabled)
+{
+    registry_register(fake_tool_create("a"));
+    registry_register(fake_tool_create("b"));
+    registry_register(fake_tool_create("c"));
+    ck_assert_int_eq(registry_count(), 3);
+    ck_assert_int_eq(registry_enabled_count(), 0);
+    registry_set_enabled("a, c");
+    ck_assert_int_eq(registry_enabled_count(), 2);
+    registry_destroy();
+}
+END_TEST
+
 START_TEST(test_registry_set_delegate_config_normal)
 {
     ck_assert_int_ne(registry_get_delegate_config(NULL, NULL, NULL, NULL,
@@ -146,6 +159,7 @@ Suite *registry_suite(void)
     TCase *tc_normal = tcase_create("Normal");
     tcase_add_test(tc_normal, test_registry_rejects_disabled_tool_lookup);
     tcase_add_test(tc_normal, test_registry_returns_enabled_tool);
+    tcase_add_test(tc_normal, test_registry_enabled_count_excludes_disabled);
     tcase_add_test(tc_normal, test_registry_set_delegate_config_normal);
     suite_add_tcase(s, tc_normal);
 

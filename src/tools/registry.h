@@ -91,6 +91,14 @@ char *registry_schemas_json(void);
 int registry_count(void);
 
 /**
+ * registry_enabled_count - number of tools enabled via config
+ *
+ * Return: count of tools whose enabled flag is set (registry_set_enabled
+ * or registry_init). Reads static state; not thread-safe.
+ */
+int registry_enabled_count(void);
+
+/**
  * registry_set_change_tracker - attach a change tracker to the write_file tool
  * @ct: borrowed ChangeTracker; not owned by the registry or the tool, and
  *   may be NULL to disable change tracking.

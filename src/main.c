@@ -455,7 +455,7 @@ static void run_tui(Conf *conf)
     actx.model = rt->agent->model;
     actx.provider = rt->cfg_copy.provider;
     actx.session_id = rt->agent->session_id;
-    actx.tool_count = registry_count();
+    actx.tool_count = registry_enabled_count();
     actx.style = style;
     actx.density = density;
     actx.accent = accent;
