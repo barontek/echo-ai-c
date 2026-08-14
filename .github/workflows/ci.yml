@@ -98,7 +98,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: install pinned distro toolchain
-      run: apt-get update && apt-get install -y clang cmake pkgconf pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check libnotcurses-dev libunistring-dev libncurses-dev libdeflate-dev
+      run: apt-get update && apt-get install -y clang g++ cmake pkgconf pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check libnotcurses-dev libunistring-dev libncurses-dev libdeflate-dev
 
     - name: configure with libFuzzer
       run: CC=clang cmake -B build-fuzz -DCMAKE_BUILD_TYPE=Debug

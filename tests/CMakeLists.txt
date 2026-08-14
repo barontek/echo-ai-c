@@ -117,8 +117,13 @@ if(HAS_LIBFUZZER)
     target_link_libraries(fuzz_html_extract PRIVATE
         -fsanitize=fuzzer,address,undefined m)
 
+    # The split that created serve_static.c/http_parse.c (be88367) moved
+    # serve_static and server_test_parse_chunks out of server.c; this list
+    # tracks test_server's, which compiles all three modules.
     add_executable(fuzz_http_parser
         ../src/server/server.c
+        ../src/server/serve_static.c
+        ../src/server/http_parse.c
         ../src/utils/string_utils.c
         fuzz/fuzz_http_parser.c
     )
@@ -131,6 +136,7 @@ if(HAS_LIBFUZZER)
 
     add_executable(fuzz_openai_compatible_stream
         ../src/llm/openai_compatible.c
+        ../src/llm/openai_compatible_stream.c
         ../src/utils/http_client.c
         ../src/agent/message.c
         ../src/utils/string_utils.c
@@ -176,6 +182,12 @@ if(HAS_LIBFUZZER)
     foreach(OAUTH_FUZZ_TARGET IN ITEMS callback token jwt)
         add_executable(fuzz_openai_oauth_${OAUTH_FUZZ_TARGET}
             ../src/llm/openai_oauth.c
+            ../src/llm/oauth_codec.c
+            ../src/llm/oauth_jwt.c
+            ../src/llm/oauth_vault.c
+            ../src/llm/oauth_http.c
+            ../src/llm/oauth_callback.c
+            ../src/llm/oauth_device.c
             ../src/utils/http_client.c
             fuzz/openai_oauth_stubs.c
             fuzz/fuzz_openai_oauth_${OAUTH_FUZZ_TARGET}.c
@@ -192,6 +204,9 @@ if(HAS_LIBFUZZER)
 
     add_executable(fuzz_openai_parse_response
         ../src/llm/openai.c
+        ../src/llm/openai_request.c
+        ../src/llm/openai_stream.c
+        ../src/llm/openai_response.c
         ../src/utils/http_client.c
         ../src/agent/message.c
         ../src/utils/string_utils.c
@@ -208,6 +223,9 @@ if(HAS_LIBFUZZER)
 
     add_executable(fuzz_openai_parse_models
         ../src/llm/openai.c
+        ../src/llm/openai_request.c
+        ../src/llm/openai_stream.c
+        ../src/llm/openai_response.c
         ../src/utils/http_client.c
         ../src/agent/message.c
         ../src/utils/string_utils.c
@@ -238,6 +256,9 @@ if(HAS_LIBFUZZER)
 
     add_executable(fuzz_openai_codex_stream
         ../src/llm/openai.c
+        ../src/llm/openai_request.c
+        ../src/llm/openai_stream.c
+        ../src/llm/openai_response.c
         ../src/utils/http_client.c
         ../src/agent/message.c
         ../src/utils/string_utils.c
