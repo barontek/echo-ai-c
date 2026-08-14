@@ -125,6 +125,49 @@ START_TEST(test_path_clean_passes)
 }
 END_TEST
 
+/* The syntactic check no longer rejects absolute paths: the workspace
+ * pinning in safety_resolve_path_alloc() is the real boundary (every file
+ * tool calls it right after this check). Regression test for the "agent
+ * cannot read files by absolute path" complaint. */
+START_TEST(test_path_absolute_allowed)
+{
+    SafetyConfig *cfg = safety_config_create();
+    ck_assert_int_eq(safety_check_path(cfg, "/home/user/repo/src/main.c"), 1);
+    ck_assert_int_eq(safety_check_path(cfg, "/etc/passwd"), 0);
+    safety_config_free(cfg);
+}
+END_TEST
+
+/* A configured blocked_extensions list replaces the hardcoded defaults
+ * (.key .pem .env ...) instead of extending them; with an explicit list
+ * set, .env files are no longer blocked. */
+START_TEST(test_path_configured_blocked_extensions_replace_defaults)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->blocked_extensions = malloc(sizeof(char *));
+    cfg->blocked_extensions[0] = str_dup(".exe");
+    cfg->blocked_extensions_count = 1;
+    ck_assert_int_eq(safety_check_path(cfg, "program.exe"), 0);
+    ck_assert_int_eq(safety_check_path(cfg, "config.env"), 1);
+    ck_assert_int_eq(safety_check_path(cfg, "secret.key"), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+/* Same replace-not-append semantics for blocked_paths: a configured list
+ * drops the /etc/passwd /etc/shadow /etc/sudoers .git/config defaults. */
+START_TEST(test_path_configured_blocked_paths_replace_defaults)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->blocked_paths = malloc(sizeof(char *));
+    cfg->blocked_paths[0] = str_dup("secret_dir");
+    cfg->blocked_paths_count = 1;
+    ck_assert_int_eq(safety_check_path(cfg, "path/secret_dir/file"), 0);
+    ck_assert_int_eq(safety_check_path(cfg, "path/.git/config"), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
 /* --- safety_check_command --- */
 
 START_TEST(test_command_null_passes)
@@ -159,6 +202,19 @@ START_TEST(test_command_safe_passes)
     ck_assert_int_eq(safety_check_command(cfg, "grep pattern file"), 1);
     ck_assert_int_eq(safety_check_command(cfg, "echo hello"), 1);
     ck_assert_int_eq(safety_check_command(cfg, "cat file.txt"), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+/* Download tools are not destructive; the approval gate on bash is the
+ * real boundary. Regression test for CI scripts blocked by "curl"/"wget"
+ * substring matches. */
+START_TEST(test_command_download_tools_allowed)
+{
+    SafetyConfig *cfg = safety_config_create();
+    ck_assert_int_eq(safety_check_command(cfg, "curl -fsSL https://example.com/install.sh"), 1);
+    ck_assert_int_eq(safety_check_command(cfg, "wget -O setup https://example.com/setup"), 1);
+    ck_assert_int_eq(safety_check_command(cfg, "curl -L https://example.com | tar xz"), 1);
     safety_config_free(cfg);
 }
 END_TEST
@@ -342,24 +398,26 @@ END_TEST
 
 START_TEST(test_socket_address_rejects_private_dns_destinations)
 {
+    SafetyConfig *cfg = safety_config_create();
     struct sockaddr_in private_addr = {0};
     private_addr.sin_family = AF_INET;
     ck_assert_int_eq(inet_pton(AF_INET, "10.2.3.4", &private_addr.sin_addr), 1);
     ck_assert_int_eq(safety_check_socket_address(
-                         (const struct sockaddr *)&private_addr), 0);
+                         cfg, (const struct sockaddr *)&private_addr), 0);
 
     struct sockaddr_in public_addr = {0};
     public_addr.sin_family = AF_INET;
     ck_assert_int_eq(inet_pton(AF_INET, "8.8.8.8", &public_addr.sin_addr), 1);
     ck_assert_int_eq(safety_check_socket_address(
-                         (const struct sockaddr *)&public_addr), 1);
+                         cfg, (const struct sockaddr *)&public_addr), 1);
 
     struct sockaddr_in carrier_grade_nat = {0};
     carrier_grade_nat.sin_family = AF_INET;
     ck_assert_int_eq(inet_pton(AF_INET, "100.100.100.200",
                                &carrier_grade_nat.sin_addr), 1);
     ck_assert_int_eq(safety_check_socket_address(
-                         (const struct sockaddr *)&carrier_grade_nat), 0);
+                         cfg, (const struct sockaddr *)&carrier_grade_nat), 0);
+    safety_config_free(cfg);
 }
 END_TEST
 
@@ -419,6 +477,119 @@ START_TEST(test_approval_empty_list)
 {
     SafetyConfig *cfg = safety_config_create();
     ck_assert_int_eq(safety_needs_approval(cfg, "bash"), 0);
+    safety_config_free(cfg);
+}
+END_TEST
+
+/* --- safety.mode --- */
+
+START_TEST(test_mode_default_is_restricted)
+{
+    SafetyConfig *cfg = safety_config_create();
+    ck_assert_int_eq(cfg->mode, SAFETY_MODE_RESTRICTED);
+    ck_assert_int_eq(safety_check_path(cfg, "secret.key"), 0);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_mode_unrestricted_bypasses_path_check)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_UNRESTRICTED;
+    ck_assert_int_eq(safety_check_path(cfg, "secret.key"), 1);
+    ck_assert_int_eq(safety_check_path(cfg, "../etc/passwd"), 1);
+    ck_assert_int_eq(safety_check_path(cfg, "/etc/shadow"), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_mode_unrestricted_bypasses_command_check)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_UNRESTRICTED;
+    ck_assert_int_eq(safety_check_command(cfg, "rm -rf /"), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_mode_unrestricted_bypasses_url_check)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_UNRESTRICTED;
+    cfg->allow_network = 0;
+    ck_assert_int_eq(safety_check_url(cfg, "http://localhost/"), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_mode_unrestricted_bypasses_socket_check)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_UNRESTRICTED;
+    struct sockaddr_in private_addr = {0};
+    private_addr.sin_family = AF_INET;
+    ck_assert_int_eq(inet_pton(AF_INET, "10.2.3.4", &private_addr.sin_addr), 1);
+    ck_assert_int_eq(safety_check_socket_address(
+                         cfg, (const struct sockaddr *)&private_addr), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_mode_unrestricted_bypasses_file_size)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_UNRESTRICTED;
+    cfg->max_file_size = 1024;
+    ck_assert_int_eq(safety_check_file_size(cfg, 10485760), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+/* Unrestricted disables approval prompts; NULL args still fail closed. */
+START_TEST(test_mode_unrestricted_no_approval_required)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_UNRESTRICTED;
+    ck_assert_int_eq(safety_needs_approval(cfg, "bash"), 0);
+    ck_assert_int_eq(safety_needs_approval(cfg, "read_file"), 0);
+    ck_assert_int_eq(safety_needs_approval(cfg, NULL), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_mode_unrestricted_resolve_returns_path_verbatim)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_UNRESTRICTED;
+    cfg->workspace = str_dup("/tmp/echo_test_ws");
+    char *resolved = safety_resolve_path_alloc(cfg, "../outside/file.txt");
+    ck_assert_ptr_nonnull(resolved);
+    ck_assert_str_eq(resolved, "../outside/file.txt");
+    ck_assert_int_eq(safety_path_is_within_workspace(cfg, "/etc/passwd"), 1);
+    free(resolved);
+    safety_config_free(cfg);
+}
+END_TEST
+
+START_TEST(test_mode_approve_all_requires_approval_for_every_tool)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_APPROVE_ALL;
+    ck_assert_int_eq(safety_needs_approval(cfg, "bash"), 1);
+    ck_assert_int_eq(safety_needs_approval(cfg, "read_file"), 1);
+    ck_assert_int_eq(safety_needs_approval(cfg, "list_dir"), 1);
+    safety_config_free(cfg);
+}
+END_TEST
+
+/* approve_all is stricter, not looser: policy checks stay on so the
+ * approver still sees obvious-destructive flags. */
+START_TEST(test_mode_approve_all_keeps_policy_checks)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->mode = SAFETY_MODE_APPROVE_ALL;
+    ck_assert_int_eq(safety_check_path(cfg, "secret.key"), 0);
+    ck_assert_int_eq(safety_check_command(cfg, "rm -rf /"), 0);
     safety_config_free(cfg);
 }
 END_TEST
@@ -597,6 +768,9 @@ Suite *safety_suite(void)
     tcase_add_test(tc_path, test_path_blocked_default_paths);
     tcase_add_test(tc_path, test_path_user_blocked_paths);
     tcase_add_test(tc_path, test_path_clean_passes);
+    tcase_add_test(tc_path, test_path_absolute_allowed);
+    tcase_add_test(tc_path, test_path_configured_blocked_extensions_replace_defaults);
+    tcase_add_test(tc_path, test_path_configured_blocked_paths_replace_defaults);
     suite_add_tcase(s, tc_path);
 
     TCase *tc_cmd = tcase_create("Command");
@@ -604,6 +778,7 @@ Suite *safety_suite(void)
     tcase_add_test(tc_cmd, test_command_null_passes);
     tcase_add_test(tc_cmd, test_command_dangerous_rejected);
     tcase_add_test(tc_cmd, test_command_safe_passes);
+    tcase_add_test(tc_cmd, test_command_download_tools_allowed);
     tcase_add_test(tc_cmd, test_command_semicolon_chain_dangerous);
     tcase_add_test(tc_cmd, test_command_pipe_chain_dangerous);
     tcase_add_test(tc_cmd, test_command_ampersand_chain_dangerous);
@@ -644,6 +819,20 @@ Suite *safety_suite(void)
     tcase_add_test(tc_app, test_approval_default_tools);
     tcase_add_test(tc_app, test_approval_empty_list);
     suite_add_tcase(s, tc_app);
+
+    TCase *tc_mode = tcase_create("Mode");
+    tcase_set_timeout(tc_mode, 10);
+    tcase_add_test(tc_mode, test_mode_default_is_restricted);
+    tcase_add_test(tc_mode, test_mode_unrestricted_bypasses_path_check);
+    tcase_add_test(tc_mode, test_mode_unrestricted_bypasses_command_check);
+    tcase_add_test(tc_mode, test_mode_unrestricted_bypasses_url_check);
+    tcase_add_test(tc_mode, test_mode_unrestricted_bypasses_socket_check);
+    tcase_add_test(tc_mode, test_mode_unrestricted_bypasses_file_size);
+    tcase_add_test(tc_mode, test_mode_unrestricted_no_approval_required);
+    tcase_add_test(tc_mode, test_mode_unrestricted_resolve_returns_path_verbatim);
+    tcase_add_test(tc_mode, test_mode_approve_all_requires_approval_for_every_tool);
+    tcase_add_test(tc_mode, test_mode_approve_all_keeps_policy_checks);
+    suite_add_tcase(s, tc_mode);
 
     TCase *tc_res = tcase_create("Resolve");
     tcase_set_timeout(tc_res, 10);

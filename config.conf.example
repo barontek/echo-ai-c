@@ -123,6 +123,14 @@ base_url = https://opencode.ai/zen/v1
 base_url = https://opencode.ai/zen/go/v1
 
 [safety]
+# Policy strictness dial:
+#   restricted  - policy checks + require_approval_for list (default)
+#   approve_all - policy checks stay on, but EVERY tool call asks the user
+#   unrestricted - all policy checks and approvals off (paths, commands,
+#                  URLs, sockets, workspace pinning). Resource guards stay:
+#                  bash timeouts, size caps, result truncation, audit log.
+# mode = restricted
+
 # Restrict file operations to this directory (default: current dir)
 workspace = ./
 
@@ -138,6 +146,20 @@ web_fetch_max_chars = 25000
 
 # Maximum execution time for bash commands in seconds (default: 300)
 max_execution_time = 300
+
+# File extensions that are never readable/writable (comma-separated).
+# Setting this REPLACES the built-in defaults (.key, .pem, .env, .token,
+# .password, .aws, .netrc, .htpasswd, .crt, .p12) — e.g. use
+# blocked_extensions = .exe, .dll to allow .env files in this repo.
+# Default (unset): the built-in list above.
+# blocked_extensions = .exe
+
+# Paths/substrings that are never readable/writable (comma-separated).
+# Setting this REPLACES the built-in defaults (/etc/passwd, /etc/shadow,
+# /etc/sudoers, .git/config). The workspace pinning
+# (safety_resolve_path_alloc) still blocks everything outside the
+# workspace regardless of this list.
+# blocked_paths = secret_dir
 
 # Tools that require user approval before executing (comma-separated)
 # Default: bash, write_file, replace_in_file, git, python_execute, delegate

@@ -45,7 +45,8 @@ static curl_socket_t open_socket_cb(void *userdata, curlsocktype purpose,
 {
     (void)purpose;
     FetchCtx *fc = userdata;
-    if (!safety_check_socket_address((const struct sockaddr *)&address->addr))
+    if (!safety_check_socket_address(fc->safety,
+                                     (const struct sockaddr *)&address->addr))
     {
         fc->socket_policy_rejected = 1;
         return CURL_SOCKET_BAD;
@@ -633,7 +634,11 @@ int web_fetch_test_open_socket_addr(unsigned int s_addr_be,
     struct sockaddr_in *in = (struct sockaddr_in *)&u.ca.addr;
     in->sin_family = AF_INET;
     in->sin_addr.s_addr = s_addr_be;
-    FetchCtx fc = {0};
+    /* Restricted mode keeps the socket policy active in the hook path;
+     * the helper's callers only exercise the policy, not the mode dial. */
+    SafetyConfig cfg = {0};
+    cfg.mode = SAFETY_MODE_RESTRICTED;
+    FetchCtx fc = {.safety = &cfg};
     *out = open_socket_cb(&fc, CURLSOCKTYPE_IPCXN, &u.ca);
     return fc.socket_policy_rejected;
 }
@@ -662,7 +667,9 @@ int web_fetch_test_open_socket_addr6(const unsigned char s6[16],
     struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&u.ca.addr;
     in6->sin6_family = AF_INET6;
     memcpy(&in6->sin6_addr.s6_addr, s6, 16);
-    FetchCtx fc = {0};
+    SafetyConfig cfg = {0};
+    cfg.mode = SAFETY_MODE_RESTRICTED;
+    FetchCtx fc = {.safety = &cfg};
     *out = open_socket_cb(&fc, CURLSOCKTYPE_IPCXN, &u.ca);
     return fc.socket_policy_rejected;
 }

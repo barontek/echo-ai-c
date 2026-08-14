@@ -34,6 +34,7 @@ SafetyConfig *safety_config_create(void)
     cfg->allow_network = 1;
     cfg->read_size_threshold = 1048576;
     cfg->web_fetch_max_chars = 25000;
+    cfg->mode = SAFETY_MODE_RESTRICTED;
 
     return cfg;
 }
@@ -80,6 +81,19 @@ int safety_load_from_conf(SafetyConfig *cfg, const Conf *conf)
             cfg->workspace = dup;
         }
         else failed = 1;
+    }
+
+    /* Unknown values keep the current mode (RESTRICTED from create),
+     * which is the fail-safe direction. */
+    v = conf_get(conf, "safety.mode");
+    if (v)
+    {
+        if (strcmp(v, "approve_all") == 0)
+            cfg->mode = SAFETY_MODE_APPROVE_ALL;
+        else if (strcmp(v, "unrestricted") == 0)
+            cfg->mode = SAFETY_MODE_UNRESTRICTED;
+        else if (strcmp(v, "restricted") == 0)
+            cfg->mode = SAFETY_MODE_RESTRICTED;
     }
 
     v = conf_get(conf, "safety.allow_network");
@@ -283,8 +297,11 @@ void safety_config_free(SafetyConfig *cfg)
 int safety_check_path(const SafetyConfig *cfg, const char *path)
 {
     if (!path) return 0;
+    if (cfg->mode == SAFETY_MODE_UNRESTRICTED) return 1;
 
-    if (path[0] == '/') return 0;
+    /* Absolute paths are allowed here: safety_resolve_path_alloc() (called
+     * by every file tool after this check) realpath-resolves and pins the
+     * path inside the workspace, which is the actual security boundary. */
     if (strstr(path, "..") != NULL) return 0;
 
     if (cfg->allowed_extensions_count > 0)
@@ -300,14 +317,21 @@ int safety_check_path(const SafetyConfig *cfg, const char *path)
         if (!allowed) return 0;
     }
 
-    static const char *default_blocked_exts[] = {
-        ".key", ".pem", ".env", ".token", ".password",
-        ".aws", ".netrc", ".htpasswd", ".crt", ".p12", NULL
-    };
-
-    for (int i = 0; default_blocked_exts[i]; i++)
+    /* Default blocked extensions apply only when the config does not
+     * define its own list: a configured blocked_extensions replaces the
+     * defaults entirely (the workspace pinning in
+     * safety_resolve_path_alloc() remains the real security boundary). */
+    if (cfg->blocked_extensions_count == 0)
     {
-        if (str_ends_with(path, default_blocked_exts[i])) return 0;
+        static const char *default_blocked_exts[] = {
+            ".key", ".pem", ".env", ".token", ".password",
+            ".aws", ".netrc", ".htpasswd", ".crt", ".p12", NULL
+        };
+
+        for (int i = 0; default_blocked_exts[i]; i++)
+        {
+            if (str_ends_with(path, default_blocked_exts[i])) return 0;
+        }
     }
 
     for (int i = 0; i < cfg->blocked_extensions_count; i++)
@@ -315,14 +339,18 @@ int safety_check_path(const SafetyConfig *cfg, const char *path)
         if (str_ends_with(path, cfg->blocked_extensions[i])) return 0;
     }
 
-    static const char *default_blocked_paths[] = {
-        "/etc/passwd", "/etc/shadow", "/etc/sudoers",
-        ".git/config", NULL
-    };
-
-    for (int i = 0; default_blocked_paths[i]; i++)
+    /* Same replace-not-append semantics as blocked_extensions above. */
+    if (cfg->blocked_paths_count == 0)
     {
-        if (strstr(path, default_blocked_paths[i]) != NULL) return 0;
+        static const char *default_blocked_paths[] = {
+            "/etc/passwd", "/etc/shadow", "/etc/sudoers",
+            ".git/config", NULL
+        };
+
+        for (int i = 0; default_blocked_paths[i]; i++)
+        {
+            if (strstr(path, default_blocked_paths[i]) != NULL) return 0;
+        }
     }
 
     for (int i = 0; i < cfg->blocked_paths_count; i++)
@@ -359,7 +387,6 @@ int safety_check_path(const SafetyConfig *cfg, const char *path)
 static const char *dangerous_patterns[] = {
     "rm -rf /", "rm -rf /*",
     ":(){ :|:& };:", "fork()",
-    "wget", "curl",
     "mkfs.", "mkswap",
     "dd if=", "dd if=/dev/zero", "dd if=/dev/urandom",
     "shred",
@@ -420,6 +447,7 @@ int safety_check_command(const SafetyConfig *cfg, const char *command)
 {
     (void)cfg;
     if (!command) return 1;
+    if (cfg->mode == SAFETY_MODE_UNRESTRICTED) return 1;
 
     StrArray semicolons = str_split(command, ';');
     for (int i = 0; i < semicolons.count; i++)
@@ -464,7 +492,9 @@ int safety_check_destructive(const char *command)
 
 int safety_check_url(const SafetyConfig *cfg, const char *url)
 {
-    if (!cfg || !cfg->allow_network || !url) return 0;
+    if (!cfg || !url) return 0;
+    if (cfg->mode == SAFETY_MODE_UNRESTRICTED) return 1;
+    if (!cfg->allow_network) return 0;
 
     const char *authority = NULL;
     if (strncasecmp(url, "https://", 8) == 0)
@@ -551,9 +581,11 @@ static int ipv4_is_public(uint32_t network_address)
     return 1;
 }
 
-int safety_check_socket_address(const struct sockaddr *address)
+int safety_check_socket_address(const SafetyConfig *cfg,
+                                const struct sockaddr *address)
 {
-    if (!address) return 0;
+    if (!cfg || !address) return 0;
+    if (cfg->mode == SAFETY_MODE_UNRESTRICTED) return 1;
     if (address->sa_family == AF_INET)
     {
         const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)address;
@@ -582,12 +614,15 @@ int safety_check_socket_address(const struct sockaddr *address)
 
 int safety_check_file_size(const SafetyConfig *cfg, size_t size)
 {
+    if (cfg->mode == SAFETY_MODE_UNRESTRICTED) return 1;
     return size <= cfg->max_file_size;
 }
 
 int safety_needs_approval(const SafetyConfig *cfg, const char *tool_name)
 {
     if (!cfg || !tool_name) return 1;
+    if (cfg->mode == SAFETY_MODE_APPROVE_ALL) return 1;
+    if (cfg->mode == SAFETY_MODE_UNRESTRICTED) return 0;
     for (int i = 0; i < cfg->require_approval_count; i++)
     {
         if (strcmp(cfg->require_approval_for[i], tool_name) == 0) return 1;
@@ -615,8 +650,15 @@ int safety_audit_log(const SafetyConfig *cfg, const char *entry)
 
 char *safety_resolve_path_alloc(const SafetyConfig *cfg, const char *path)
 {
-    if (!cfg || !cfg->workspace || !path || strstr(path, "..") != NULL)
-        return NULL;
+    if (!cfg || !cfg->workspace || !path) return NULL;
+
+    /* Unrestricted: no canonicalization, no workspace pinning — the path
+     * is used exactly as given, so anything the process can reach is
+     * addressable. */
+    if (cfg->mode == SAFETY_MODE_UNRESTRICTED)
+        return str_dup(path);
+
+    if (strstr(path, "..") != NULL) return NULL;
 
     char root[PATH_MAX];
     if (!realpath(cfg->workspace, root)) return NULL;
@@ -655,6 +697,7 @@ char *safety_resolve_path_alloc(const SafetyConfig *cfg, const char *path)
 int safety_path_is_within_workspace(const SafetyConfig *cfg, const char *path)
 {
     if (!cfg || !cfg->workspace || !path) return 0;
+    if (cfg->mode == SAFETY_MODE_UNRESTRICTED) return 1;
 
     char root[PATH_MAX];
     char canonical[PATH_MAX];

@@ -25,9 +25,9 @@ typedef struct {
 static curl_socket_t open_socket_cb(void *userdata, curlsocktype purpose,
                                     struct curl_sockaddr *address)
 {
-    (void)userdata;
     (void)purpose;
-    if (!safety_check_socket_address((const struct sockaddr *)&address->addr))
+    if (!safety_check_socket_address((SafetyConfig *)userdata,
+                                     (const struct sockaddr *)&address->addr))
         return CURL_SOCKET_BAD;
     return socket(address->family, address->socktype, address->protocol);
 }

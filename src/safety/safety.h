@@ -12,8 +12,31 @@
 
 typedef struct Conf Conf;
 
+/*
+ * SafetyMode - global policy strictness dial, loaded from safety.mode.
+ *
+ * SAFETY_MODE_RESTRICTED: policy checks (paths, commands, URLs, sockets,
+ * size) and the require_approval_for approval list — the historical
+ * behavior, and the default.
+ *
+ * SAFETY_MODE_APPROVE_ALL: policy checks stay on, but every tool call
+ * goes through the human approval gate, ignoring require_approval_for.
+ *
+ * SAFETY_MODE_UNRESTRICTED: all policy checks and approval gates are
+ * bypassed (paths, commands, URLs, sockets, file size, workspace
+ * pinning). Process-protecting resource guards still apply: bash
+ * max_execution_time, tool-result truncation, web_fetch_max_chars, and
+ * the audit log still run.
+ */
+typedef enum {
+    SAFETY_MODE_RESTRICTED = 0,
+    SAFETY_MODE_APPROVE_ALL,
+    SAFETY_MODE_UNRESTRICTED
+} SafetyMode;
+
 typedef struct {
     char *workspace;
+    SafetyMode mode;
     char **allowed_commands;
     int allowed_commands_count;
     char **blocked_commands;
@@ -41,8 +64,9 @@ typedef struct {
  * safety_config_create - allocate a safety config with built-in defaults
  *
  * Defaults: max_file_size 10 MiB, max_execution_time 300 s, allow_network
- * on, read_size_threshold 1 MiB, web_fetch_max_chars 25000; every string
- * list starts empty. Populate it with safety_load_from_conf() before use.
+ * on, read_size_threshold 1 MiB, web_fetch_max_chars 25000, mode
+ * SAFETY_MODE_RESTRICTED; every string list starts empty. Populate it
+ * with safety_load_from_conf() before use.
  *
  * Return: caller-owned SafetyConfig (free with safety_config_free()), or
  * NULL on allocation failure. Thread-safe; no shared state.
@@ -66,14 +90,16 @@ void safety_config_free(SafetyConfig *cfg);
  * @conf: config source, borrowed for the duration of the call; must be
  *   non-NULL.
  *
- * Reads the safety.* keys (workspace, allow_network, max_file_size,
+ * Reads the safety.* keys (workspace, mode, allow_network, max_file_size,
  * max_execution_time, allowed/blocked_commands, allowed/blocked_extensions,
  * blocked_paths, allowed_domains, require_approval_for, audit_log_path,
  * read_requires_approval, read_size_threshold, web_fetch_max_chars) and
  * replaces previously loaded values. Keys absent from conf keep their
- * current values. When no require_approval_for list is configured, a
- * default list (bash, write_file, replace_in_file, git, python_execute,
- * delegate) is installed.
+ * current values. safety.mode accepts "restricted", "approve_all", or
+ * "unrestricted" (any other value is ignored and keeps the current mode).
+ * When no require_approval_for list is configured, a default list (bash,
+ * write_file, replace_in_file, git, python_execute, delegate) is
+ * installed.
  *
  * Return: 0 on success; -1 when any policy field could not be allocated
  * (workspace/audit path dup or list parse) — the config is then
@@ -89,12 +115,19 @@ int safety_load_from_conf(SafetyConfig *cfg, const Conf *conf);
  *   check).
  * @path: path to check, borrowed; NULL is rejected.
  *
- * A syntactic, not filesystem, check: rejects absolute paths (leading '/'),
- * any path containing "..", paths not ending in an allowed extension (when
- * allowed_extensions is configured), paths ending in a blocked extension
- * (defaults .key .pem .env .token .password .aws .netrc .htpasswd .crt
- * .p12 plus cfg's list), and paths containing a blocked path (defaults
- * /etc/passwd /etc/shadow /etc/sudoers .git/config plus cfg's list). Use
+ * A syntactic, not filesystem, check: rejects any path containing "..",
+ * paths not ending in an allowed extension (when allowed_extensions is
+ * configured), paths ending in a blocked extension, and paths containing a
+ * blocked path. Absolute paths are allowed — the workspace pinning in
+ * safety_resolve_path_alloc()/safety_path_is_within_workspace() is the
+ * real security boundary, and every file tool calls it after this check.
+ *
+ * Blocked-extension/path defaults (.key .pem .env .token .password .aws
+ * .netrc .htpasswd .crt .p12; /etc/passwd /etc/shadow /etc/sudoers
+ * .git/config) apply only while the corresponding config list is empty:
+ * configuring cfg->blocked_extensions or cfg->blocked_paths replaces the
+ * defaults instead of extending them. In SAFETY_MODE_UNRESTRICTED every
+ * path passes. Use
  * safety_resolve_path_alloc()/safety_path_is_within_workspace() when
  * realpath-resolved checks are needed.
  *
@@ -109,7 +142,8 @@ int safety_check_path(const SafetyConfig *cfg, const char *path);
  * @command: shell command string to check; NULL is treated as allowed.
  *
  * Returns 0 (blocked) when a segment — the command split on ';', '\n',
- * '|', and '&' — matches a known dangerous pattern; 1 (allowed) otherwise.
+ * '|', and '&' — matches a known dangerous pattern; 1 (allowed)
+ * otherwise. In SAFETY_MODE_UNRESTRICTED every command passes.
  *
  * This is NOT a security boundary. It cannot catch command substitution
  * ($(...)), variable expansion, encoded payloads, or scripting-language
@@ -151,7 +185,8 @@ int safety_check_destructive(const char *command);
  * The host is matched literally; no DNS resolution is performed, so a
  * hostname that resolves to a private address is not caught here. ULA
  * detection is approximated by the literal fc/fd prefix, so hostnames
- * starting with "fc" or "fd" are also rejected.
+ * starting with "fc" or "fd" are also rejected. In SAFETY_MODE_UNRESTRICTED
+ * every URL is accepted.
  *
  * Return: 1 if allowed, 0 if blocked. Never fails; thread-safe.
  */
@@ -159,16 +194,20 @@ int safety_check_url(const SafetyConfig *cfg, const char *url);
 
 /**
  * safety_check_socket_address - reject non-public network addresses
+ * @cfg: safety config; NULL dereferenced only in SAFETY_MODE_UNRESTRICTED
+ *   — pass a live config.
  * @address: sockaddr to inspect, borrowed; NULL returns 0. Only AF_INET
  *   and AF_INET6 are handled.
  *
  * Returns 1 for globally routable addresses, 0 for private, loopback,
  * link-local, unique-local, multicast, or unspecified addresses, and for
- * any other family. IPv4-mapped IPv6 addresses are evaluated as IPv4.
+ * any other family. IPv4-mapped IPv6 addresses are evaluated as IPv4. In
+ * SAFETY_MODE_UNRESTRICTED every address is accepted.
  *
  * Return: 1 if public, 0 otherwise. Never fails; thread-safe.
  */
-int safety_check_socket_address(const struct sockaddr *address);
+int safety_check_socket_address(const SafetyConfig *cfg,
+                                const struct sockaddr *address);
 
 /**
  * safety_check_file_size - compare a size against cfg->max_file_size
@@ -176,8 +215,8 @@ int safety_check_socket_address(const struct sockaddr *address);
  *   check).
  * @size: size in bytes to check.
  *
- * Return: 1 when size <= max_file_size, 0 otherwise. Never fails;
- * thread-safe.
+ * Return: 1 when size <= max_file_size, 0 otherwise. In
+ * SAFETY_MODE_UNRESTRICTED every size passes. Never fails; thread-safe.
  */
 int safety_check_file_size(const SafetyConfig *cfg, size_t size);
 
@@ -185,6 +224,9 @@ int safety_check_file_size(const SafetyConfig *cfg, size_t size);
  * safety_needs_approval - does a tool require human approval?
  * @cfg: safety config; NULL returns 1 (fail closed).
  * @tool_name: tool name to look up in require_approval_for; NULL returns 1.
+ *
+ * In SAFETY_MODE_APPROVE_ALL every tool name returns 1; in
+ * SAFETY_MODE_UNRESTRICTED every tool name returns 0.
  *
  * Return: 1 when the tool is in the approval list or when either argument
  * is NULL, 0 otherwise. Never fails; thread-safe.
@@ -218,6 +260,10 @@ int safety_audit_log(const SafetyConfig *cfg, const char *entry);
  * resolved instead and must be inside the workspace; the basename is then
  * re-attached, so writes to new files still validate.
  *
+ * In SAFETY_MODE_UNRESTRICTED the path is duplicated verbatim — no
+ * realpath, no workspace pinning — so anything reachable by the process
+ * can be addressed.
+ *
  * Return: caller-owned null-terminated path (free with free()), or NULL on
  * any failure: bad arguments, realpath failure, outside the workspace, or
  * allocation failure. Thread-safe; no shared state.
@@ -231,7 +277,8 @@ char *safety_resolve_path_alloc(const SafetyConfig *cfg, const char *path);
  *
  * Both the workspace and the path are canonicalized with realpath(), so
  * symlinks resolve. The path counts as inside when it equals the workspace
- * root or starts with root + '/'.
+ * root or starts with root + '/'. In SAFETY_MODE_UNRESTRICTED every
+ * non-NULL path counts as inside.
  *
  * Return: 1 when inside, 0 otherwise (including NULL args or realpath
  * failure). Never fails; thread-safe.

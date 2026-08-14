@@ -147,6 +147,42 @@ START_TEST(test_safety_load_from_conf_read_threshold)
 }
 END_TEST
 
+START_TEST(test_safety_load_from_conf_mode)
+{
+    /* "unrestricted" and "approve_all" parse; an unknown value keeps the
+     * fail-safe restricted default. */
+    write_conf_file("/tmp/test_safety_mode_ur.conf",
+        "safety.mode = unrestricted\n");
+    Conf *conf = conf_load("/tmp/test_safety_mode_ur.conf");
+    SafetyConfig *cfg = safety_config_create();
+    safety_load_from_conf(cfg, conf);
+    ck_assert_int_eq(cfg->mode, SAFETY_MODE_UNRESTRICTED);
+    safety_config_free(cfg);
+    conf_free(conf);
+    ck_assert_int_eq(remove("/tmp/test_safety_mode_ur.conf"), 0);
+
+    write_conf_file("/tmp/test_safety_mode_aa.conf",
+        "safety.mode = approve_all\n");
+    conf = conf_load("/tmp/test_safety_mode_aa.conf");
+    cfg = safety_config_create();
+    safety_load_from_conf(cfg, conf);
+    ck_assert_int_eq(cfg->mode, SAFETY_MODE_APPROVE_ALL);
+    safety_config_free(cfg);
+    conf_free(conf);
+    ck_assert_int_eq(remove("/tmp/test_safety_mode_aa.conf"), 0);
+
+    write_conf_file("/tmp/test_safety_mode_bad.conf",
+        "safety.mode = lets_all_run_free\n");
+    conf = conf_load("/tmp/test_safety_mode_bad.conf");
+    cfg = safety_config_create();
+    safety_load_from_conf(cfg, conf);
+    ck_assert_int_eq(cfg->mode, SAFETY_MODE_RESTRICTED);
+    safety_config_free(cfg);
+    conf_free(conf);
+    ck_assert_int_eq(remove("/tmp/test_safety_mode_bad.conf"), 0);
+}
+END_TEST
+
 Suite *safety_conf_suite(void)
 {
     Suite *s = suite_create("Safety Conf");
@@ -161,6 +197,7 @@ Suite *safety_conf_suite(void)
     tcase_add_test(tc_load, test_safety_load_from_conf_require_approval);
     tcase_add_test(tc_load, test_safety_load_from_conf_null_args);
     tcase_add_test(tc_load, test_safety_load_from_conf_read_threshold);
+    tcase_add_test(tc_load, test_safety_load_from_conf_mode);
     suite_add_tcase(s, tc_load);
 
     return s;
