@@ -18,7 +18,7 @@ typedef enum {
     TUI_ROLE_ACCENT,
     TUI_ROLE_USER,       /* user message marker + border of user blocks */
     TUI_ROLE_ASSISTANT,  /* assistant message body */
-    TUI_ROLE_THINK,      /* <think> blocks (dimmed, italic) */
+    TUI_ROLE_THINK,      /* <think> blocks (muted color, dimmed, italic) */
     TUI_ROLE_TOOL,       /* tool activity lines (dimmed) */
     TUI_ROLE_TOOL_RESULT, /* tool result blocks (distinct color) */
     TUI_ROLE_ERROR,      /* error lines (reverse video) */

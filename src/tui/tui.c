@@ -392,12 +392,20 @@ static int markdown_kind(TuiBlockKind kind)
 }
 
 /* Map MdStyle bits onto a notcurses style + fg (bg stays as the block
- * role's — see-through in transparent mode). Resets leftover styles. */
+ * role's — see-through in transparent mode). Resets leftover styles.
+ * Role-level styles (think = dim + italic) apply beneath the inline
+ * markdown styles: this is the only painter for message content lines,
+ * so without them a think block would render exactly like the reply. */
 static void md_apply(TuiApp *app, struct ncplane *p, TuiRole role,
                      unsigned bits)
 {
     uint32_t fg = tui_theme_color(app->theme, role);
     unsigned ncstyle = 0;
+    unsigned role_bits = tui_theme_styles(app->theme, role);
+    if (role_bits & TUI_STYLE_DIM)
+        fg = tui_theme_mix(fg, tui_theme_color(app->theme, TUI_ROLE_BASE_BG), 60);
+    if (role_bits & TUI_STYLE_ITALIC) ncstyle |= NCSTYLE_ITALIC;
+    if (role_bits & TUI_STYLE_BOLD) ncstyle |= NCSTYLE_BOLD;
     if (bits & MD_STYLE_BOLD) ncstyle |= NCSTYLE_BOLD;
     if (bits & MD_STYLE_ITALIC) ncstyle |= NCSTYLE_ITALIC;
     if (bits & MD_STYLE_STRIKE) ncstyle |= NCSTYLE_STRUCK;

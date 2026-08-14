@@ -21,30 +21,31 @@ typedef struct {
     uint32_t error; /* used as foreground under REVERSE, so it must be a
                      * light-on-dark or dark-on-light pair with base_bg */
     uint32_t tool_result; /* tool result blocks */
+    uint32_t think; /* <think> block text (muted; distinct from the reply) */
     unsigned backdrop_pct; /* backdrop = base_bg blended toward black */
 } Palette;
 
 /* The 0x prefix makes the literals readable next to the plan's hex table:
- * dark   bg #1e1e2e  fg #dcd7ba  accent #7aa2f7  tool #9ece6a
- * light  bg #f2f0e8  fg #2d2a26  accent #2f5fb3  tool #3f6212
+ * dark   bg #1e1e2e  fg #dcd7ba  accent #7aa2f7  tool #9ece6a  think #9aa5ce
+ * light  bg #f2f0e8  fg #2d2a26  accent #2f5fb3  tool #3f6212  think #4c566a
  * high   bg #000000  fg #ffffff  accent #ffd700
  * none   monochrome */
 static const Palette PALETTES_DARK = {
     RGB(0xdc, 0xd7, 0xba), RGB(0x1e, 0x1e, 0x2e),
     RGB(0x7a, 0xa2, 0xf7), RGB(0xf2, 0x6d, 0x6d),
-    RGB(0x9e, 0xce, 0x6a), 50};
+    RGB(0x9e, 0xce, 0x6a), RGB(0x9a, 0xa5, 0xce), 50};
 static const Palette PALETTES_LIGHT = {
     RGB(0x2d, 0x2a, 0x26), RGB(0xf2, 0xf0, 0xe8),
     RGB(0x2f, 0x5f, 0xb3), RGB(0x8f, 0x1d, 0x1d),
-    RGB(0x3f, 0x62, 0x12), 30};
+    RGB(0x3f, 0x62, 0x12), RGB(0x4c, 0x56, 0x6a), 30};
 static const Palette PALETTES_HIGH = {
     RGB(0xff, 0xff, 0xff), RGB(0x00, 0x00, 0x00),
     RGB(0xff, 0xd7, 0x00), RGB(0xff, 0xff, 0xff),
-    RGB(0xff, 0xff, 0xff), 100};
+    RGB(0xff, 0xff, 0xff), RGB(0xff, 0xff, 0xff), 100};
 static const Palette PALETTES_NONE = {
     RGB(0xff, 0xff, 0xff), RGB(0x00, 0x00, 0x00),
     RGB(0xff, 0xff, 0xff), RGB(0xff, 0xff, 0xff),
-    RGB(0xff, 0xff, 0xff), 100};
+    RGB(0xff, 0xff, 0xff), RGB(0xff, 0xff, 0xff), 100};
 
 struct TuiTheme {
     const Palette *pal; /* points at a static preset */
@@ -93,7 +94,7 @@ static void build_roles(TuiTheme *t)
     t->colors[TUI_ROLE_BASE_BG] = p->base_bg;
     t->colors[TUI_ROLE_ACCENT] = mono ? p->base_fg : p->accent;
     t->colors[TUI_ROLE_USER] = mono ? p->base_fg : p->accent;
-    t->colors[TUI_ROLE_THINK] = p->base_fg;
+    t->colors[TUI_ROLE_THINK] = mono ? p->base_fg : p->think;
     t->styles[TUI_ROLE_THINK] = mono ? 0 : (TUI_STYLE_DIM | TUI_STYLE_ITALIC);
     t->colors[TUI_ROLE_TOOL] = p->base_fg;
     t->styles[TUI_ROLE_TOOL] = mono ? 0 : TUI_STYLE_DIM;

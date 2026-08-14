@@ -66,6 +66,35 @@ START_TEST(test_think_is_dim_italic_in_normal_presets)
 }
 END_TEST
 
+START_TEST(test_think_color_differs_from_reply)
+{
+    /* <think> text must never blend into the assistant reply: it gets a
+     * muted color of its own in the dark and light presets ... */
+    TuiTheme *dark = tui_theme_create("dark", NULL, NULL);
+    ck_assert_int_ne(tui_theme_color(dark, TUI_ROLE_THINK),
+                     tui_theme_color(dark, TUI_ROLE_BASE_FG));
+    ck_assert_int_eq(tui_theme_color(dark, TUI_ROLE_THINK),
+                     RGB(0x9a, 0xa5, 0xce));
+    tui_theme_free(dark);
+
+    TuiTheme *light = tui_theme_create("light", NULL, NULL);
+    ck_assert_int_ne(tui_theme_color(light, TUI_ROLE_THINK),
+                     tui_theme_color(light, TUI_ROLE_BASE_FG));
+    ck_assert_int_eq(tui_theme_color(light, TUI_ROLE_THINK),
+                     RGB(0x4c, 0x56, 0x6a));
+    tui_theme_free(light);
+
+    /* ... while highcontrast and none stay white for legibility */
+    TuiTheme *high = tui_theme_create("highcontrast", NULL, NULL);
+    ck_assert_int_eq(tui_theme_color(high, TUI_ROLE_THINK), RGB(0xff, 0xff, 0xff));
+    tui_theme_free(high);
+
+    TuiTheme *none = tui_theme_create("none", NULL, NULL);
+    ck_assert_int_eq(tui_theme_color(none, TUI_ROLE_THINK), RGB(0xff, 0xff, 0xff));
+    tui_theme_free(none);
+}
+END_TEST
+
 START_TEST(test_status_bar_is_inverted_accent)
 {
     TuiTheme *t = tui_theme_create("dark", NULL, NULL);
@@ -207,6 +236,7 @@ static Suite *suite(void)
     tcase_add_test(tc, test_highcontrast_palette);
     tcase_add_test(tc, test_none_palette_is_monochrome_but_keeps_error_reverse);
     tcase_add_test(tc, test_think_is_dim_italic_in_normal_presets);
+    tcase_add_test(tc, test_think_color_differs_from_reply);
     tcase_add_test(tc, test_status_bar_is_inverted_accent);
     tcase_add_test(tc, test_invalid_style_falls_back_and_flags);
     tcase_add_test(tc, test_style_names_case_insensitive);
