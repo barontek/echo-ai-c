@@ -8,8 +8,13 @@ on:
 
 # Toolchain pinning policy (AGENTS.md "Environment and toolchain"):
 # - backend-nix is pinned by flake.lock (nix develop).
-# - Debian jobs pin the container to a dated bookworm tag, which fixes the
-#   apt package versions available to the job.
+# - The C Debian jobs pin the container to a dated sid tag, which fixes the
+#   base image contents available to the job. sid is required over
+#   bookworm/trixie because notcurses was removed from the Debian archive
+#   for those suites; sid is the only stable-enough suite carrying
+#   libnotcurses-dev 3.0.17, which the TUI targets (tui.c comments reference
+#   the 3.0.17 API). The frontend job keeps the dated bookworm tag since it
+#   never installs Debian packages.
 # - backend-macos pins the runner to macos-15 (arm64) and installs the exact
 #   formula set from Brewfile. Homebrew has no version pinning for unversioned
 #   formulae (brew >= 4.4 no longer writes Brewfile.lock.json), so versions
@@ -21,7 +26,7 @@ on:
 jobs:
   backend-debian:
     runs-on: ubuntu-latest
-    container: debian:bookworm-20260803-slim
+    container: debian:sid-20260803-slim
 
     steps:
     - uses: actions/checkout@v4
@@ -51,7 +56,7 @@ jobs:
   # -D_FORTIFY_SOURCE=2 under -Werror, which Debug never sees.
   backend-release:
     runs-on: ubuntu-latest
-    container: debian:bookworm-20260803-slim
+    container: debian:sid-20260803-slim
 
     steps:
     - uses: actions/checkout@v4
@@ -87,7 +92,7 @@ jobs:
 
   fuzz:
     runs-on: ubuntu-latest
-    container: debian:bookworm-20260803-slim
+    container: debian:sid-20260803-slim
 
     steps:
     - uses: actions/checkout@v4
