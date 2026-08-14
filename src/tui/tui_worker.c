@@ -91,6 +91,13 @@ static int worker_approval(const char *tool_name, const char *arguments,
     int result = 0;
     (void)tui_event_wait_for_answer(ev, NULL, &result);
     tui_event_free(ev);
+    /* A deny answer leaves the run alive (the model is told the tool was
+     * refused and carries on), so the denial would otherwise be invisible
+     * in the transcript. Surface it as the same "cancelled" error block
+     * the aborted-run path emits — the event's text is empty, so the UI
+     * appends the extra as an error block instead of sealing a stream. */
+    if (!result)
+        (void)tui_events_push(w->ctx.evs, TUI_EV_RUN_DONE, NULL, "cancelled");
     return result;
 }
 

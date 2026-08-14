@@ -317,31 +317,29 @@ static int wait_for_terminal(TuiApp *app)
  * the base background is never painted (the plane stays see-through so
  * kitty's transparency/blur shows), but the status bar's accent field,
  * the error highlight, and the modal backdrop keep their opaque
- * backgrounds — they are design elements, not text backdrops. */
+ * backgrounds — they are design elements, not text backdrops. Roles
+ * without an opaque background reset the plane's background to default:
+ * cells inherit the plane's channels at write time, so without the reset
+ * a previous error/status paint would leak its background into every
+ * cell written after it. */
 static void plane_color(TuiApp *app, struct ncplane *p, TuiRole role)
 {
-    uint32_t fg = tui_theme_color(app->theme, role);
-    uint32_t bg = (role == TUI_ROLE_STATUS_FG)
-                      ? tui_theme_color(app->theme, TUI_ROLE_STATUS_BG)
-                      : tui_theme_color(app->theme, TUI_ROLE_BASE_BG);
-    unsigned bits = tui_theme_styles(app->theme, role);
-    if (bits & TUI_STYLE_REVERSE)
-    {
-        uint32_t t = fg;
-        fg = bg;
-        bg = t;
-    }
-    if (bits & TUI_STYLE_DIM)
-        fg = tui_theme_mix(fg, bg, 60);
+    uint32_t fg;
+    uint32_t bg;
+    int opaque = tui_theme_plane_colors(app->theme, app->transparent, role,
+                                        &fg, &bg);
     (void)ncplane_set_fg_rgb8(p, (fg >> 16) & 0xff, (fg >> 8) & 0xff, fg & 0xff);
-    if (!app->transparent || role == TUI_ROLE_STATUS_FG ||
-        role == TUI_ROLE_ERROR)
+    if (opaque)
     {
         (void)ncplane_set_bg_rgb8(p, (bg >> 16) & 0xff,
                                   (bg >> 8) & 0xff, bg & 0xff);
     }
+    else
+    {
+        (void)ncplane_set_bg_default(p);
+    }
 
-    unsigned bits2 = bits;
+    unsigned bits2 = tui_theme_styles(app->theme, role);
     unsigned ncstyle = 0;
     if (bits2 & TUI_STYLE_BOLD) ncstyle |= NCSTYLE_BOLD;
     if (bits2 & TUI_STYLE_ITALIC) ncstyle |= NCSTYLE_ITALIC;

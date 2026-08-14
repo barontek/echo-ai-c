@@ -130,4 +130,25 @@ const char *const *tui_theme_spinner_frames(const TuiTheme *t, size_t *count);
  */
 uint32_t tui_theme_mix(uint32_t a, uint32_t b, int percent_b);
 
+/**
+ * tui_theme_plane_colors - resolve the colors a plane paints for a role
+ * @t: theme; non-NULL.
+ * @transparent: 1 when the base background stays unpainted (see Return).
+ * @role: role to resolve.
+ * @fg: out-param receiving the foreground color.
+ * @bg: out-param receiving the background color (meaningful only when
+ *   the return value is 1).
+ *
+ * Applies the role's style to the raw colors: REVERSE swaps fg/bg, DIM
+ * blends fg toward bg. In transparent mode only the status bar and the
+ * error highlight paint an opaque background; every other role reports 0
+ * so a caller must reset the plane background to transparent instead of
+ * reusing a stale opaque background from a previous role.
+ *
+ * Return: 1 when the caller must paint @bg, 0 when the background must
+ * stay transparent.
+ */
+int tui_theme_plane_colors(const TuiTheme *t, int transparent, TuiRole role,
+                           uint32_t *fg, uint32_t *bg);
+
 #endif /* ECHO_TUI_THEME_H */

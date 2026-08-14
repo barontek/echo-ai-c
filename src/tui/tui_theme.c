@@ -218,3 +218,35 @@ uint32_t tui_theme_mix(uint32_t a, uint32_t b, int percent_b)
     }
     return out;
 }
+
+int tui_theme_plane_colors(const TuiTheme *t, int transparent, TuiRole role,
+                           uint32_t *fg, uint32_t *bg)
+{
+    if (!t || !fg || !bg) return 0;
+    if (role < 0 || role >= TUI_ROLE_COUNT)
+    {
+        *fg = t->pal->base_fg;
+        *bg = t->pal->base_bg;
+        return 1;
+    }
+    /* The status bar paints on its own accent field; every other role
+     * sits on the base background. */
+    uint32_t f = tui_theme_color(t, role);
+    uint32_t b = (role == TUI_ROLE_STATUS_FG)
+                     ? tui_theme_color(t, TUI_ROLE_STATUS_BG)
+                     : tui_theme_color(t, TUI_ROLE_BASE_BG);
+    unsigned bits = tui_theme_styles(t, role);
+    if (bits & TUI_STYLE_REVERSE)
+    {
+        uint32_t tmp = f;
+        f = b;
+        b = tmp;
+    }
+    if (bits & TUI_STYLE_DIM)
+        f = tui_theme_mix(f, b, 60);
+    int opaque = !transparent || role == TUI_ROLE_STATUS_FG ||
+                 role == TUI_ROLE_ERROR;
+    *fg = f;
+    *bg = b;
+    return opaque;
+}

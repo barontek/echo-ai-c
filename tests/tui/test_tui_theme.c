@@ -227,6 +227,92 @@ START_TEST(test_spinner_frames_available)
 }
 END_TEST
 
+START_TEST(test_plane_colors_error_role_reverses_to_opaque_red)
+{
+    /* The error highlight is a design element: in transparent mode it
+     * still paints an opaque background (REVERSE swaps fg/bg). */
+    TuiTheme *t = tui_theme_create("dark", NULL, NULL);
+    uint32_t fg = 0;
+    uint32_t bg = 0;
+    int opaque = tui_theme_plane_colors(t, 1, TUI_ROLE_ERROR, &fg, &bg);
+    ck_assert_int_eq(opaque, 1);
+    ck_assert_int_eq(fg, RGB(0x1e, 0x1e, 0x2e)); /* base_bg */
+    ck_assert_int_eq(bg, RGB(0xf2, 0x6d, 0x6d)); /* error red */
+    tui_theme_free(t);
+}
+END_TEST
+
+START_TEST(test_plane_colors_transparent_mode_resets_bg_for_plain_roles)
+{
+    /* Regression (2026-08-14): the approval bar and error blocks painted
+     * opaque backgrounds that leaked into every cell written afterwards
+     * in transparent mode, because plain roles never reset the plane's
+     * background channel — cancelling an approval left the whole chat
+     * pane red. Plain roles must resolve to a transparent background so
+     * the renderer resets the plane instead of reusing a stale one. */
+    TuiTheme *t = tui_theme_create("dark", NULL, NULL);
+    uint32_t fg = 0;
+    uint32_t bg = 0;
+    int opaque = tui_theme_plane_colors(t, 1, TUI_ROLE_BASE_FG, &fg, &bg);
+    ck_assert_int_eq(opaque, 0);
+    ck_assert_int_eq(fg, RGB(0xdc, 0xd7, 0xba));
+    opaque = tui_theme_plane_colors(t, 1, TUI_ROLE_USER, &fg, &bg);
+    ck_assert_int_eq(opaque, 0);
+    opaque = tui_theme_plane_colors(t, 1, TUI_ROLE_ASSISTANT, &fg, &bg);
+    ck_assert_int_eq(opaque, 0);
+    opaque = tui_theme_plane_colors(t, 1, TUI_ROLE_TOOL_RESULT, &fg, &bg);
+    ck_assert_int_eq(opaque, 0);
+    opaque = tui_theme_plane_colors(t, 1, TUI_ROLE_BORDER, &fg, &bg);
+    ck_assert_int_eq(opaque, 0);
+    tui_theme_free(t);
+}
+END_TEST
+
+START_TEST(test_plane_colors_status_fg_keeps_opaque_accent_bg)
+{
+    TuiTheme *t = tui_theme_create("dark", NULL, NULL);
+    uint32_t fg = 0;
+    uint32_t bg = 0;
+    int opaque = tui_theme_plane_colors(t, 1, TUI_ROLE_STATUS_FG, &fg, &bg);
+    ck_assert_int_eq(opaque, 1);
+    ck_assert_int_eq(fg, RGB(0x1e, 0x1e, 0x2e)); /* base_bg on the bar */
+    ck_assert_int_eq(bg, RGB(0x7a, 0xa2, 0xf7)); /* accent field */
+    tui_theme_free(t);
+}
+END_TEST
+
+START_TEST(test_plane_colors_opaque_mode_always_paints_bg)
+{
+    TuiTheme *t = tui_theme_create("dark", NULL, NULL);
+    uint32_t fg = 0;
+    uint32_t bg = 0;
+    int opaque = tui_theme_plane_colors(t, 0, TUI_ROLE_BASE_FG, &fg, &bg);
+    ck_assert_int_eq(opaque, 1);
+    ck_assert_int_eq(bg, RGB(0x1e, 0x1e, 0x2e));
+    opaque = tui_theme_plane_colors(t, 0, TUI_ROLE_ASSISTANT, &fg, &bg);
+    ck_assert_int_eq(opaque, 1);
+    opaque = tui_theme_plane_colors(t, 0, TUI_ROLE_ERROR, &fg, &bg);
+    ck_assert_int_eq(opaque, 1);
+    ck_assert_int_eq(bg, RGB(0xf2, 0x6d, 0x6d));
+    tui_theme_free(t);
+}
+END_TEST
+
+START_TEST(test_plane_colors_think_dim_mixes_fg)
+{
+    /* DIM styles blend the foreground toward the background; the plain
+     * base background applies before any swap. */
+    TuiTheme *t = tui_theme_create("dark", NULL, NULL);
+    uint32_t fg = 0;
+    uint32_t bg = 0;
+    int opaque = tui_theme_plane_colors(t, 0, TUI_ROLE_THINK, &fg, &bg);
+    ck_assert_int_eq(opaque, 1);
+    ck_assert_int_eq(bg, RGB(0x1e, 0x1e, 0x2e));
+    ck_assert_int_eq(fg, tui_theme_mix(RGB(0x9a, 0xa5, 0xce), RGB(0x1e, 0x1e, 0x2e), 60));
+    tui_theme_free(t);
+}
+END_TEST
+
 static Suite *suite(void)
 {
     Suite *s = suite_create("tui_theme");
@@ -249,6 +335,11 @@ static Suite *suite(void)
     tcase_add_test(tc, test_tool_result_and_backdrop_roles);
     tcase_add_test(tc, test_border_is_muted_foreground);
     tcase_add_test(tc, test_spinner_frames_available);
+    tcase_add_test(tc, test_plane_colors_error_role_reverses_to_opaque_red);
+    tcase_add_test(tc, test_plane_colors_transparent_mode_resets_bg_for_plain_roles);
+    tcase_add_test(tc, test_plane_colors_status_fg_keeps_opaque_accent_bg);
+    tcase_add_test(tc, test_plane_colors_opaque_mode_always_paints_bg);
+    tcase_add_test(tc, test_plane_colors_think_dim_mixes_fg);
     suite_add_tcase(s, tc);
     return s;
 }
