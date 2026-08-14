@@ -26,10 +26,14 @@
 #include "tui_dialogs.h"
 #include "tui_worker.h"
 #include "markdown.h"
+#include "tool_args.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 #include "../tools/registry.h"
 #include "../session/session.h"
+
+/* Cap for the compacted tool-arguments text shown on header lines. */
+#define TOOL_ARGS_MAX 200
 
 struct TuiApp {
     TuiAppCtx ctx;
@@ -53,6 +57,7 @@ struct TuiApp {
     char *title;      /* generated session title (owned); shown in status */
     char *status_msg; /* transient status message (owned) */
     char *active_tool; /* currently running tool (owned); NULL when idle */
+    char *active_tool_args; /* compact args of the running tool (owned) */
     char *log_path;   /* owned */
     size_t chat_top;  /* scroll offset in lines */
     int auto_scroll;
@@ -423,6 +428,64 @@ static void md_apply(TuiApp *app, struct ncplane *p, TuiRole role,
     (void)ncplane_set_styles(p, ncstyle);
 }
 
+/* Block header line: rail + role label. Tool blocks show the tool name
+ * bold with the compact call arguments dimmed after it ("bash: ls -la");
+ * without arguments they keep the "<name> tool" label. Names and args
+ * are model-provided, so the whole line is clamped to the content width
+ * at a codepoint boundary. */
+static void put_block_header(TuiApp *app, struct ncplane *p, TuiRole role,
+                             size_t cw, TuiBlockKind bk, int row,
+                             const char *title, const char *args)
+{
+    const char *label;
+    char label_buf[64];
+    int show_args = 0;
+    if (bk == TUI_BLOCK_TOOL && title)
+    {
+        if (args && args[0] != '\0')
+        {
+            label = title;
+            show_args = 1;
+        }
+        else
+        {
+            snprintf(label_buf, sizeof(label_buf), "%s tool", title);
+            label = label_buf;
+        }
+    }
+    else
+    {
+        label = kind_label(bk);
+    }
+
+    char name_buf[64];
+    (void)tui_chat_truncate_width(label, cw, name_buf, sizeof(name_buf));
+    (void)ncplane_cursor_move_yx(p, row, 0);
+    plane_color(app, p, role);
+    (void)ncplane_putstr(p, "\xE2\x94\x82"); /* │ */
+    (void)ncplane_cursor_move_yx(p, row, 2);
+    (void)ncplane_set_styles(p, NCSTYLE_BOLD);
+    (void)ncplane_putstr(p, name_buf);
+    if (show_args)
+    {
+        size_t used = tui_chat_display_width(name_buf, strlen(name_buf));
+        if (used + 2 < cw)
+        {
+            char args_buf[TOOL_ARGS_MAX + 4];
+            (void)tui_chat_truncate_width(args, cw - used - 2, args_buf,
+                                          sizeof(args_buf));
+            if (args_buf[0] != '\0')
+            {
+                (void)ncplane_set_styles(p, 0);
+                md_apply(app, p, role, MD_STYLE_DIM);
+                (void)ncplane_putstr(p, ": ");
+                (void)ncplane_putstr(p, args_buf);
+            }
+        }
+    }
+    (void)ncplane_set_styles(p, 0);
+}
+
 /* Horizontal rule: a dim line of box-drawing fills the content width. */
 static void put_hr(TuiApp *app, struct ncplane *p, TuiRole role,
                    char *buf, size_t bufcap, size_t cw)
@@ -537,22 +600,14 @@ static void render_chat(TuiApp *app)
         size_t content = truncated ? TUI_CHAT_COLLAPSE_THRESHOLD : lines;
         int has_marker = (bk == TUI_BLOCK_TOOL && lines > TUI_CHAT_COLLAPSE_THRESHOLD);
 
-        /* Header line: rail + role label (tool blocks use "<name> tool") */
+        /* Header line: rail + role label. Tool blocks show the tool name
+         * bold with the compact call arguments dimmed ("bash: ls -la"),
+         * or "<name> tool" when the call carried no arguments. */
         if (virtual_line >= top && drawn < (size_t)rows)
         {
-            char label[64];
-            const char *title = tui_chat_block_title(app->chat, b);
-            if (bk == TUI_BLOCK_TOOL && title)
-                snprintf(label, sizeof(label), "%s tool", title);
-            else
-                snprintf(label, sizeof(label), "%s", kind_label(bk));
-            (void)ncplane_cursor_move_yx(p, (int)drawn, 0);
-            plane_color(app, p, role);
-            (void)ncplane_putstr(p, "\xE2\x94\x82"); /* │ */
-            (void)ncplane_cursor_move_yx(p, (int)drawn, 2);
-            (void)ncplane_set_styles(p, NCSTYLE_BOLD);
-            (void)ncplane_putstr(p, label);
-            (void)ncplane_set_styles(p, 0);
+            put_block_header(app, p, role, cw, bk, (int)drawn,
+                             tui_chat_block_title(app->chat, b),
+                             tui_chat_block_args(app->chat, b));
             drawn++;
         }
         virtual_line++;
@@ -766,11 +821,18 @@ static void render_tools(TuiApp *app)
      * collapses when idle. Tool history lives in the chat blocks. */
     if (!app->active_tool) return;
 
-    char line[256];
-    int n = snprintf(line, sizeof(line), "%s: running...", app->active_tool);
+    char line[320];
+    int n;
+    if (app->active_tool_args && app->active_tool_args[0])
+        n = snprintf(line, sizeof(line), "%s: %s", app->active_tool,
+                     app->active_tool_args);
+    else
+        n = snprintf(line, sizeof(line), "%s", app->active_tool);
     if (n < 0) return;
     if ((size_t)n >= sizeof(line))
         n = (int)sizeof(line) - 1; /* truncated: keep chained writes in bounds */
+    n += snprintf(line + n, sizeof(line) - (size_t)n,
+                  "  \xE2\x80\xA6 running");
     if (tui_worker_busy(app->worker))
     {
         size_t frames = 0;
@@ -1033,11 +1095,20 @@ static void handle_event(TuiApp *app, TuiEvent *ev)
         break;
     case TUI_EV_TOOL_START:
         /* Open a pending tool block: empty content, spinner animation,
-         * filled with the result when the tool ends. */
-        (void)tui_chat_begin_tool(app->chat, ev->text);
-        set_status_msg(app, ev->text ? ev->text : "");
-        free(app->active_tool);
-        app->active_tool = ev->text ? str_dup(ev->text) : NULL;
+         * filled with the result when the tool ends. The block header
+         * shows the call arguments compacted to one line, and the same
+         * summary drives the live-activity strip. */
+        {
+            char *args = ev->extra
+                             ? tool_args_compact(ev->extra, TOOL_ARGS_MAX)
+                             : NULL;
+            (void)tui_chat_begin_tool(app->chat, ev->text, args);
+            set_status_msg(app, ev->text ? ev->text : "");
+            free(app->active_tool);
+            free(app->active_tool_args);
+            app->active_tool = ev->text ? str_dup(ev->text) : NULL;
+            app->active_tool_args = args; /* owned by the app from here */
+        }
         break;
     case TUI_EV_TOOL_END:
         (void)tui_chat_tool_finish(app->chat, ev->text, ev->extra);
@@ -1047,6 +1118,8 @@ static void handle_event(TuiApp *app, TuiEvent *ev)
             set_status_msg(app, NULL);
         free(app->active_tool);
         app->active_tool = NULL;
+        free(app->active_tool_args);
+        app->active_tool_args = NULL;
         break;
     case TUI_EV_TITLE:
         /* Session titles are internal bookkeeping: they belong in the
@@ -1089,12 +1162,20 @@ static void handle_event(TuiApp *app, TuiEvent *ev)
             TuiModalKind kind = ev->type == TUI_EV_ASK_USER
                                     ? TUI_MODAL_ASK_USER : TUI_MODAL_APPROVAL;
             /* Approval: title = tool name, body = the arguments it would
-             * run — rendered as the bottom prompt bar. */
+             * run — rendered as the bottom prompt bar. The raw JSON is
+             * compacted to one line so the bar stays readable. */
             const char *title = ev->type == TUI_EV_ASK_USER
                                     ? "ask_user" : ev->text;
             const char *body = ev->type == TUI_EV_ASK_USER
                                    ? ev->text : ev->extra;
+            char *compacted = NULL;
+            if (ev->type == TUI_EV_APPROVAL && ev->extra)
+            {
+                compacted = tool_args_compact(ev->extra, TOOL_ARGS_MAX);
+                if (compacted) body = compacted;
+            }
             app->modal = tui_modal_open(kind, title, body, ev);
+            free(compacted);
             if (!app->modal)
                 (void)tui_event_answer(ev, NULL, 0);
             else if (kind == TUI_MODAL_APPROVAL)
@@ -1738,6 +1819,7 @@ void tui_app_destroy(TuiApp *app)
     tui_chat_destroy(app->chat);
     tui_theme_free(app->theme);
     free(app->active_tool);
+    free(app->active_tool_args);
     free(app->title);
     free(app->status_msg);
     free(app->session_id);

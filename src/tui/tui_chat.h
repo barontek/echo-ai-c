@@ -119,16 +119,19 @@ int tui_chat_append_tool(TuiChat *chat, const char *name, const char *result);
  * tui_chat_begin_tool - open a pending tool block for a running tool
  * @chat: scrollback; non-NULL.
  * @name: tool name, borrowed (kept as the block's header title).
+ * @args: compact one-line tool arguments (see tool_args_compact), or
+ *   NULL when the call carried none; borrowed (kept as the block's
+ *   header args).
  *
- * Appends a TOOL block with empty text and the given title. While the
- * text stays empty the renderer shows an animation instead of content;
- * tui_chat_tool_finish() fills the same block with the result, so one
- * tool call never appears twice. Same failure contract as the other
- * appends: on allocation failure the scrollback is unchanged.
+ * Appends a TOOL block with empty text, the given title and args. While
+ * the text stays empty the renderer shows an animation instead of
+ * content; tui_chat_tool_finish() fills the same block with the result,
+ * so one tool call never appears twice. Same failure contract as the
+ * other appends: on allocation failure the scrollback is unchanged.
  *
  * Return: 0 on success, -1 on allocation failure.
  */
-int tui_chat_begin_tool(TuiChat *chat, const char *name);
+int tui_chat_begin_tool(TuiChat *chat, const char *name, const char *args);
 
 /**
  * tui_chat_tool_finish - fill the pending tool block with its result
@@ -183,6 +186,19 @@ const char *tui_chat_block_text(const TuiChat *chat, size_t idx);
  * Return: borrowed title, or NULL when the block has none.
  */
 const char *tui_chat_block_title(const TuiChat *chat, size_t idx);
+
+/**
+ * tui_chat_block_args - the block's header args (tool blocks)
+ * @chat: scrollback; non-NULL.
+ * @idx: block index.
+ *
+ * Tool blocks opened via tui_chat_begin_tool may carry a compact one-
+ * line rendering of the call's arguments; the renderer shows them on
+ * the header line after the title.
+ *
+ * Return: borrowed compact args (never NULL; "" when none were given).
+ */
+const char *tui_chat_block_args(const TuiChat *chat, size_t idx);
 
 /**
  * tui_chat_block_effective_collapsed - is the block rendered truncated?
@@ -285,6 +301,23 @@ size_t tui_chat_wrap(const char *text, size_t width,
  * Return: display width in columns. Never fails.
  */
 size_t tui_chat_display_width(const char *s, size_t len);
+
+/**
+ * tui_chat_truncate_width - truncate UTF-8 text to a display width
+ * @text: NUL-terminated input; non-NULL.
+ * @max_w: maximum display columns of the result; 0 yields "".
+ * @out: caller-owned buffer receiving the NUL-terminated result.
+ * @out_cap: capacity of @out in bytes; must be >= 1.
+ *
+ * Cuts at a codepoint boundary (never splits a UTF-8 sequence) and
+ * appends "…" when anything was cut. Widths come from the same
+ * locale-independent table as tui_chat_display_width. If the marker
+ * does not fit in @out_cap it is omitted.
+ *
+ * Return: bytes written excluding the trailing NUL.
+ */
+size_t tui_chat_truncate_width(const char *text, size_t max_w,
+                               char *out, size_t out_cap);
 
 /**
  * tui_chat_total_lines - total wrapped line count across all blocks

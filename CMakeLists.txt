@@ -112,6 +112,7 @@ add_executable(echo-ai
     src/tui/tui_dialogs.c
     src/tui/tui_stream.c
     src/tui/markdown.c
+    src/tui/tool_args.c
     src/tui/tui_worker.c
     src/tui/tui.c
     src/change_tracker/change_tracker.c

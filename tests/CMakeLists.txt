@@ -79,6 +79,17 @@ if(HAS_LIBFUZZER)
     target_link_libraries(fuzz_config PRIVATE
         -fsanitize=fuzzer,address,undefined)
 
+    # fuzz_tool_args — exercises tool_args_compact with fuzzed argument JSON
+    add_executable(fuzz_tool_args
+        ../src/tui/tool_args.c
+        fuzz/fuzz_tool_args.c
+    )
+    target_include_directories(fuzz_tool_args PRIVATE ../src)
+    target_compile_options(fuzz_tool_args PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+    target_link_libraries(fuzz_tool_args PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::CJSON)
+
     # fuzz_session_deserialize — exercises session_deserialize_messages
     add_executable(fuzz_session_deserialize
         ../src/session/session.c

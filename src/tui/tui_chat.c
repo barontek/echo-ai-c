@@ -28,6 +28,7 @@ typedef struct {
     TuiBlockKind kind;
     char *text;
     char *title; /* header title (tool name for tool blocks); owned */
+    char *args;  /* header args (compact tool arguments); owned */
     TuiCollapseState collapse; /* AUTO unless the user toggled the block */
     size_t wrap_width;  /* width the cached offsets were computed for; 0 = none */
     size_t wrap_lines;  /* wrapped line count for wrap_width */
@@ -54,6 +55,7 @@ void tui_chat_destroy(TuiChat *chat)
     {
         free(chat->blocks[i].text);
         free(chat->blocks[i].title);
+        free(chat->blocks[i].args);
         free(chat->blocks[i].wrap_starts);
     }
     free(chat->blocks);
@@ -75,10 +77,11 @@ static void seal_streaming(TuiChat *chat)
 
 /* Append a block; on failure the scrollback is unchanged. The array
  * growth uses allocate-copy-free (not realloc) so the fault-injection
- * shims can force a failure at the growth step itself. The title is
- * duplicated after the text; a failure there rolls back the text copy. */
-static int block_append2(TuiChat *chat, TuiBlockKind kind, const char *text,
-                         const char *title)
+ * shims can force a failure at the growth step itself. The title and
+ * args are duplicated after the text; a failure there rolls back every
+ * copy made so far. */
+static int block_append3(TuiChat *chat, TuiBlockKind kind, const char *text,
+                         const char *title, const char *args)
 {
     if (chat->count == chat->cap)
     {
@@ -106,16 +109,28 @@ static int block_append2(TuiChat *chat, TuiBlockKind kind, const char *text,
             return -1;
         }
     }
+    char *args_copy = NULL;
+    if (args)
+    {
+        args_copy = str_dup(args);
+        if (!args_copy)
+        {
+            free(copy);
+            free(title_copy);
+            return -1;
+        }
+    }
     chat->blocks[chat->count].kind = kind;
     chat->blocks[chat->count].text = copy;
     chat->blocks[chat->count].title = title_copy;
+    chat->blocks[chat->count].args = args_copy;
     chat->count++;
     return 0;
 }
 
 static int block_append(TuiChat *chat, TuiBlockKind kind, const char *text)
 {
-    return block_append2(chat, kind, text, NULL);
+    return block_append3(chat, kind, text, NULL, NULL);
 }
 
 int tui_chat_begin_user(TuiChat *chat, const char *text)
@@ -185,10 +200,10 @@ int tui_chat_append_tool(TuiChat *chat, const char *name, const char *result)
     return rc;
 }
 
-int tui_chat_begin_tool(TuiChat *chat, const char *name)
+int tui_chat_begin_tool(TuiChat *chat, const char *name, const char *args)
 {
     if (!chat) return -1;
-    return block_append2(chat, TUI_BLOCK_TOOL, "", name);
+    return block_append3(chat, TUI_BLOCK_TOOL, "", name, args);
 }
 
 int tui_chat_tool_finish(TuiChat *chat, const char *name, const char *result)
@@ -237,6 +252,13 @@ const char *tui_chat_block_title(const TuiChat *chat, size_t idx)
 {
     if (!chat || idx >= chat->count) return NULL;
     return chat->blocks[idx].title;
+}
+
+const char *tui_chat_block_args(const TuiChat *chat, size_t idx)
+{
+    if (!chat || idx >= chat->count) return "";
+    const char *args = chat->blocks[idx].args;
+    return args ? args : "";
 }
 
 /* ---- wrapping ---- */
@@ -316,6 +338,50 @@ size_t tui_chat_display_width(const char *s, size_t len)
         i += n;
     }
     return w;
+}
+
+/* Truncate to a display width at a codepoint boundary; see the header
+ * for the contract. The marker is appended only when it fits the buffer
+ * without overlapping the kept prefix. */
+size_t tui_chat_truncate_width(const char *text, size_t max_w,
+                               char *out, size_t out_cap)
+{
+    if (!out || out_cap < 1) return 0;
+    out[0] = '\0';
+    if (!text || max_w < 1) return 0;
+
+    size_t len = strlen(text);
+    size_t w = 0;
+    size_t i = 0;
+    size_t last = 0; /* byte offset past the last complete codepoint kept */
+    while (i < len)
+    {
+        uint32_t cp = 0;
+        size_t n = utf8_decode_cp(text + i, len - i, &cp);
+        int cw = cp_display_width(cp);
+        if (w + (size_t)(cw > 0 ? cw : 0) > max_w) break;
+        if (i + n + 1 > out_cap) break; /* buffer full before width reached */
+        w += (size_t)(cw > 0 ? cw : 0);
+        i += n;
+        last = i;
+        if (w >= max_w) break;
+    }
+    if (i < len)
+    {
+        /* truncated: copy the kept prefix, then append "…" when it
+         * fits after it */
+        memcpy(out, text, last);
+        if (out_cap - last >= 4)
+        {
+            memcpy(out + last, "\xE2\x80\xA6", 4);
+            return last + 3;
+        }
+        out[last] = '\0';
+        return last;
+    }
+    memcpy(out, text, i);
+    out[i] = '\0';
+    return i;
 }
 
 /* Greedy word wrap by display columns; see the header for the contract. */

@@ -270,6 +270,49 @@ START_TEST(test_wrap_wide_word_moves_whole_word)
 }
 END_TEST
 
+/* ---- display-width truncation (header lines) ---- */
+
+START_TEST(test_truncate_width_plain)
+{
+    char out[64];
+    size_t n = tui_chat_truncate_width("hello world", 5, out, sizeof(out));
+    ck_assert_int_eq(n, 8); /* "hello" + 3-byte marker */
+    ck_assert_str_eq(out, "hello\xE2\x80\xA6");
+    ck_assert_int_eq(tui_chat_truncate_width("hello world", 100, out, sizeof(out)), 11);
+    ck_assert_str_eq(out, "hello world");
+    ck_assert_int_eq(tui_chat_truncate_width("", 10, out, sizeof(out)), 0);
+    ck_assert_str_eq(out, "");
+    ck_assert_int_eq(tui_chat_truncate_width("abc", 0, out, sizeof(out)), 0);
+    ck_assert_str_eq(out, "");
+}
+END_TEST
+
+START_TEST(test_truncate_width_cjk_boundary)
+{
+    /* 中 = 2 columns, 3 bytes; cutting must never split the sequence */
+    char out[64];
+    const char *one = "\xE4\xB8\xAD"; /* 中 */
+    const char *two = "\xE4\xB8\xAD\xE6\x96\x87"; /* 中文 */
+    /* one char fills the width exactly: no marker */
+    ck_assert_int_eq(tui_chat_truncate_width(one, 2, out, sizeof(out)), 3);
+    ck_assert_str_eq(out, one);
+    /* width for one char: cut before the second, marker appended */
+    ck_assert_int_eq(tui_chat_truncate_width(two, 3, out, sizeof(out)), 6);
+    ck_assert_str_eq(out, "\xE4\xB8\xAD\xE2\x80\xA6");
+}
+END_TEST
+
+START_TEST(test_truncate_width_small_buffer_drops_marker)
+{
+    /* a 1-byte buffer can keep one ASCII char; the marker does not fit
+     * and must be omitted, never written past the buffer */
+    char small[2];
+    ck_assert_int_eq(tui_chat_truncate_width("hello world", 100, small,
+                                             sizeof(small)), 1);
+    ck_assert_str_eq(small, "h");
+}
+END_TEST
+
 /* ---- wrap cache ---- */
 
 START_TEST(test_line_starts_cache_reuses_and_invalidates)
@@ -298,7 +341,7 @@ START_TEST(test_line_starts_cache_reuses_and_invalidates)
 
     /* text mutation invalidates: begin a pending tool block, cache its
      * empty wrap, then fill the result and check the rewrap */
-    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), 0);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), 0);
     (void)tui_chat_block_line_starts(chat, 1, 5, &lines);
     ck_assert_int_eq(lines, 1); /* empty text = one line */
     ck_assert_int_eq(tui_chat_tool_finish(chat, "bash", "one two three"), 0);
@@ -522,7 +565,7 @@ END_TEST
 
 START_TEST(test_begin_tool_creates_pending_block)
 {
-    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), 0);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), 0);
     ck_assert_int_eq(tui_chat_block_count(chat), 1);
     ck_assert_int_eq(tui_chat_block_kind(chat, 0), TUI_BLOCK_TOOL);
     ck_assert_str_eq(tui_chat_block_text(chat, 0), "");
@@ -530,9 +573,53 @@ START_TEST(test_begin_tool_creates_pending_block)
 }
 END_TEST
 
+START_TEST(test_begin_tool_keeps_header_args)
+{
+    /* the block header carries the compact arguments, and they survive
+     * tool_finish — the call's parameters stay visible with the result */
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", "command=ls -la"), 0);
+    ck_assert_str_eq(tui_chat_block_args(chat, 0), "command=ls -la");
+    ck_assert_int_eq(tui_chat_tool_finish(chat, "bash", "file list"), 0);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "file list");
+    ck_assert_str_eq(tui_chat_block_title(chat, 0), "bash");
+    ck_assert_str_eq(tui_chat_block_args(chat, 0), "command=ls -la");
+}
+END_TEST
+
+START_TEST(test_begin_tool_null_or_empty_args)
+{
+    /* NULL and "" both mean "no parameters": the accessor yields "" */
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), 0);
+    ck_assert_str_eq(tui_chat_block_args(chat, 0), "");
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "grep", ""), 0);
+    ck_assert_str_eq(tui_chat_block_args(chat, 1), "");
+    /* out of range yields "" too */
+    ck_assert_str_eq(tui_chat_block_args(chat, 99), "");
+}
+END_TEST
+
+START_TEST(test_begin_tool_args_copy_fault_injection)
+{
+    /* fresh chat: calloc(array) + str_dup(text) + str_dup(title) +
+     * str_dup(args) — failing the args copy must roll back all copies */
+    set_fail_at(4);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", "command=ls"), -1);
+    ck_assert_int_eq(tui_chat_block_count(chat), 0);
+    /* the title copy failing (call 3) still rolls back text */
+    set_fail_at(3);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", "command=ls"), -1);
+    ck_assert_int_eq(tui_chat_block_count(chat), 0);
+    /* normal operation afterwards */
+    fail_at = -1;
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", "command=ls"), 0);
+    ck_assert_int_eq(tui_chat_block_count(chat), 1);
+    ck_assert_str_eq(tui_chat_block_args(chat, 0), "command=ls");
+}
+END_TEST
+
 START_TEST(test_tool_finish_fills_pending_block)
 {
-    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), 0);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), 0);
     ck_assert_int_eq(tui_chat_tool_finish(chat, "bash", "Exit code: 0\n/home/x"), 0);
     /* one block, now with the result — the tool never appears twice */
     ck_assert_int_eq(tui_chat_block_count(chat), 1);
@@ -554,29 +641,29 @@ END_TEST
 START_TEST(test_begin_tool_fault_injection)
 {
     set_fail_at(1); /* blocks array growth (cap==0 on a fresh chat) */
-    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), -1);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), -1);
     ck_assert_int_eq(tui_chat_block_count(chat), 0);
 
     set_fail_at(2); /* array ok, text copy fails */
-    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), -1);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), -1);
     ck_assert_int_eq(tui_chat_block_count(chat), 0);
 
     /* the array now exists, so a call allocates text then title: the
      * second allocation is the title copy, which must roll back text */
     set_fail_at(2);
-    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), -1);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), -1);
     ck_assert_int_eq(tui_chat_block_count(chat), 0);
 
     /* normal operation afterwards */
     fail_at = -1;
-    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), 0);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), 0);
     ck_assert_int_eq(tui_chat_block_count(chat), 1);
 }
 END_TEST
 
 START_TEST(test_tool_finish_failure_keeps_pending)
 {
-    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash"), 0);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), 0);
     set_fail_at(1); /* the result copy fails: block stays pending */
     ck_assert_int_eq(tui_chat_tool_finish(chat, "bash", "result"), -1);
     ck_assert_str_eq(tui_chat_block_text(chat, 0), "");
@@ -614,6 +701,9 @@ static Suite *suite(void)
     tcase_add_test(tc_wrap, test_wrap_combining_marks_are_zero_width);
     tcase_add_test(tc_wrap, test_wrap_lone_wide_codepoint_never_loops);
     tcase_add_test(tc_wrap, test_wrap_wide_word_moves_whole_word);
+    tcase_add_test(tc_wrap, test_truncate_width_plain);
+    tcase_add_test(tc_wrap, test_truncate_width_cjk_boundary);
+    tcase_add_test(tc_wrap, test_truncate_width_small_buffer_drops_marker);
     tcase_add_test(tc_wrap, test_total_lines_with_separators);
     tcase_add_test(tc_wrap, test_total_lines_empty_is_one);
     tcase_add_test(tc_wrap, test_view_clamp_bounds);
@@ -642,6 +732,9 @@ static Suite *suite(void)
     TCase *tc_tool = tcase_create("pending_tool");
     tcase_add_checked_fixture(tc_tool, setup_chat, teardown_chat);
     tcase_add_test(tc_tool, test_begin_tool_creates_pending_block);
+    tcase_add_test(tc_tool, test_begin_tool_keeps_header_args);
+    tcase_add_test(tc_tool, test_begin_tool_null_or_empty_args);
+    tcase_add_test(tc_tool, test_begin_tool_args_copy_fault_injection);
     tcase_add_test(tc_tool, test_tool_finish_fills_pending_block);
     tcase_add_test(tc_tool, test_tool_finish_without_pending_appends);
     tcase_add_test(tc_tool, test_begin_tool_fault_injection);

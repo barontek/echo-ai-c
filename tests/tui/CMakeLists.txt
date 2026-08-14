@@ -81,3 +81,12 @@ add_executable(test_markdown
 target_include_directories(test_markdown PRIVATE ../../src)
 target_link_libraries(test_markdown PRIVATE echo_ai_test_deps)
 add_test(NAME test_markdown COMMAND test_markdown)
+
+# --- tool_args (compact tool-call argument summaries) ---
+add_executable(test_tool_args
+    test_tool_args.c
+    ../../src/tui/tool_args.c
+)
+target_include_directories(test_tool_args PRIVATE ../../src)
+target_link_libraries(test_tool_args PRIVATE echo_ai_test_deps)
+add_test(NAME test_tool_args COMMAND test_tool_args)
