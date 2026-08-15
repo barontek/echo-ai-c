@@ -28,4 +28,25 @@
  */
 char *tool_args_compact(const char *json, size_t max_len);
 
+/**
+ * tool_args_compact_named - compact tool-call args, with a per-tool
+ *   rendering special case for the edit tool
+ * @tool_name: tool name as the model called it (e.g. "edit"); NULL or
+ *   any unrecognized name falls back to tool_args_compact.
+ * @json: same input as tool_args_compact.
+ * @max_len: same budget as tool_args_compact.
+ *
+ * The edit tool's header shows only the file name (basename of path),
+ * matching opencode's edit header — the change itself is displayed in
+ * the tool result diff, not in the one-line summary. A call that fails
+ * to parse or lacks a path degrades to the generic rendering. Every
+ * other tool renders identically to tool_args_compact.
+ *
+ * Return: freshly malloc'd NUL-terminated string owned by the caller
+ *   (free with free()), or NULL on allocation failure. Thread-safety:
+ *   no shared state; safe to call concurrently.
+ */
+char *tool_args_compact_named(const char *tool_name, const char *json,
+                              size_t max_len);
+
 #endif /* ECHO_TOOL_ARGS_H */

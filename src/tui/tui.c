@@ -513,8 +513,7 @@ static void put_hr(TuiApp *app, struct ncplane *p, TuiRole role,
 static void put_markdown_line(TuiApp *app, struct ncplane *p, TuiRole role,
                               const char *seg, size_t seg_len, MdLineKind lk,
                               int in_fence, MdRun *runs, size_t run_cap)
-{
-    if (in_fence && lk != MD_LINE_CODE_FENCE)
+{    if (in_fence && lk != MD_LINE_CODE_FENCE)
     {
         /* fenced code is literal: nothing inside it is a delimiter */
         md_apply(app, p, role, MD_STYLE_CODE);
@@ -558,6 +557,35 @@ static void put_markdown_line(TuiApp *app, struct ncplane *p, TuiRole role,
         (void)ncplane_putnstr(p, len, base + start);
     }
     (void)ncplane_set_styles(p, 0); /* leave no style on the plane */
+}
+
+/* Diff-colored tool-result line: added lines green, removed lines red,
+ * context dimmed (the classifier runs before this, so the shape is
+ * known). Returns 1 when the line was drawn. */
+static int put_diff_line(TuiApp *app, struct ncplane *p, TuiRole role,
+                         TuiDiffKind kind, const char *seg, size_t seg_len)
+{
+    uint32_t fg;
+    switch (kind)
+    {
+    case TUI_DIFF_ADD:
+        fg = tui_theme_color(app->theme, TUI_ROLE_DIFF_ADD);
+        break;
+    case TUI_DIFF_DEL:
+        fg = tui_theme_color(app->theme, TUI_ROLE_DIFF_DEL);
+        break;
+    case TUI_DIFF_CONTEXT:
+        fg = tui_theme_mix(tui_theme_color(app->theme, role),
+                           tui_theme_color(app->theme, TUI_ROLE_BASE_BG), 60);
+        break;
+    default:
+        return 0;
+    }
+    (void)ncplane_set_styles(p, 0);
+    (void)ncplane_set_fg_rgb8(p, (fg >> 16) & 0xff, (fg >> 8) & 0xff,
+                              fg & 0xff);
+    (void)ncplane_putnstr(p, seg_len, seg);
+    return 1;
 }
 
 static void render_chat(TuiApp *app)
@@ -731,6 +759,11 @@ static void render_chat(TuiApp *app)
                     else if (markdown_block)
                         put_markdown_line(app, p, role, seg, seg_len, lk,
                                           fence, runs, cw * 4 + 2);
+                    else if (bk == TUI_BLOCK_TOOL &&
+                             put_diff_line(app, p, role,
+                                           tui_diff_line_kind(seg, seg_len),
+                                           seg, seg_len))
+                        ;
                     else
                         (void)ncplane_putnstr(p, seg_len, seg);
                 }
@@ -1143,7 +1176,8 @@ static void handle_event(TuiApp *app, TuiEvent *ev)
          * summary drives the live-activity strip. */
         {
             char *args = ev->extra
-                             ? tool_args_compact(ev->extra, TOOL_ARGS_MAX)
+                             ? tool_args_compact_named(ev->text, ev->extra,
+                                                       TOOL_ARGS_MAX)
                              : NULL;
             (void)tui_chat_begin_tool(app->chat, ev->text, args);
             set_status_msg(app, ev->text ? ev->text : "");

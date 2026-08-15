@@ -15,6 +15,8 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <time.h>
+#include <limits.h>
+#include <stdint.h>
 
 #include "tool.h"
 #include "../safety/safety.h"
@@ -25,7 +27,31 @@ typedef struct {
     SafetyConfig *safety;
 } BashCtx;
 
-static int run_with_timeout(const char *command, int timeout_secs, char **output)
+/* T4a: output tail budget. Output beyond this is spilled to a temp
+ * file and the model is pointed at it, instead of being silently
+ * truncated by a fixed buffer (the pre-T4a 64 KB behavior). */
+#define BASH_TAIL_BYTES 8192
+
+/*
+ * bash_output_cleanup - release a spill temp file (if any)
+ * @tmp_path: malloc'd spill path, or NULL
+ * @tmpf: open spill FILE, or NULL
+ *
+ * Unlinks the temp file and frees the path. Used on every error exit
+ * from run_with_timeout so a failed command leaves nothing behind.
+ */
+static void bash_output_cleanup(char *tmp_path, FILE *tmpf)
+{
+    if (tmpf) (void)fclose(tmpf);
+    if (tmp_path)
+    {
+        unlink(tmp_path);
+        free(tmp_path);
+    }
+}
+
+static int run_with_timeout(const char *command, int timeout_secs,
+                            char **output, char **full_out_path)
 {
     int pipefd[2] = {-1, -1};
     if (pipe(pipefd) < 0)
@@ -83,8 +109,11 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
     int child_done = 0;
     int pipe_open = 1;
     int descendants_signaled = 0;
-    char result_buf[65536];
-    size_t total = 0;
+    char tail[BASH_TAIL_BYTES + 1];
+    size_t tail_len = 0;
+    uint64_t total = 0;
+    char *tmp_path = NULL;
+    FILE *tmpf = NULL;
     struct timespec start = {0};
     if (clock_gettime(CLOCK_MONOTONIC, &start) != 0)
     {
@@ -102,12 +131,87 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
             ssize_t n = read(pipefd[0], chunk, sizeof(chunk));
             if (n > 0)
             {
-                size_t available = sizeof(result_buf) - 1 - total;
-                size_t copy_len = (size_t)n < available ? (size_t)n : available;
-                if (copy_len > 0)
+                /* read() cannot exceed the buffer, but clamping makes
+                 * the bound visible to the compiler so the window
+                 * copies below are provably in-bounds. */
+                size_t chunk_len = (size_t)n;
+                if (chunk_len > sizeof(chunk)) chunk_len = sizeof(chunk);
+                total += chunk_len;
+
+                /* T4a: once the output outgrows the tail budget, start a
+                 * temp file holding the FULL output and keep only the
+                 * rolling tail in memory. */
+                if (!tmp_path &&
+                    total > (uint64_t)BASH_TAIL_BYTES)
                 {
-                    memcpy(result_buf + total, chunk, copy_len);
-                    total += copy_len;
+                    char tmpl[] = "/tmp/echo-bash-XXXXXX";
+                    int fd = mkstemp(tmpl);
+                    if (fd < 0)
+                    {
+                        (void)kill(-pid, SIGKILL);
+                        if (!child_done) (void)waitpid(pid, &status, 0);
+                        if (pipe_open) close(pipefd[0]);
+                        return -4;
+                    }
+                    tmp_path = str_dup(tmpl);
+                    if (!tmp_path)
+                    {
+                        close(fd);
+                        (void)kill(-pid, SIGKILL);
+                        if (!child_done) (void)waitpid(pid, &status, 0);
+                        if (pipe_open) close(pipefd[0]);
+                        return -4;
+                    }
+                    tmpf = fdopen(fd, "wb");
+                    if (!tmpf)
+                    {
+                        close(fd);
+                        unlink(tmp_path);
+                        free(tmp_path);
+                        tmp_path = NULL;
+                        (void)kill(-pid, SIGKILL);
+                        if (!child_done) (void)waitpid(pid, &status, 0);
+                        if (pipe_open) close(pipefd[0]);
+                        return -4;
+                    }
+                    /* Everything seen so far (the full window) goes
+                     * into the spill file before streaming continues. */
+                    if (tail_len > 0 &&
+                        fwrite(tail, 1, tail_len, tmpf) != tail_len)
+                    {
+                        bash_output_cleanup(tmp_path, tmpf);
+                        (void)kill(-pid, SIGKILL);
+                        if (!child_done) (void)waitpid(pid, &status, 0);
+                        if (pipe_open) close(pipefd[0]);
+                        return -4;
+                    }
+                }
+                if (tmpf &&
+                    fwrite(chunk, 1, chunk_len, tmpf) != chunk_len)
+                {
+                    bash_output_cleanup(tmp_path, tmpf);
+                    (void)kill(-pid, SIGKILL);
+                    if (!child_done) (void)waitpid(pid, &status, 0);
+                    if (pipe_open) close(pipefd[0]);
+                    return -4;
+                }
+
+                /* Rolling tail window: keep the newest BASH_TAIL_BYTES
+                 * bytes. Overflow keeps the newest chunk_len bytes of
+                 * the old window plus the whole chunk; chunk_len is
+                 * always < BASH_TAIL_BYTES (4096 < 8192), so the
+                 * memmove/memcpy sizes are bounded. */
+                if (tail_len + chunk_len <= BASH_TAIL_BYTES)
+                {
+                    memcpy(tail + tail_len, chunk, chunk_len);
+                    tail_len += chunk_len;
+                }
+                else
+                {
+                    size_t keep_old = BASH_TAIL_BYTES - chunk_len;
+                    memmove(tail, tail + tail_len - keep_old, keep_old);
+                    memcpy(tail + keep_old, chunk, chunk_len);
+                    tail_len = BASH_TAIL_BYTES;
                 }
                 continue;
             }
@@ -132,6 +236,7 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
             else if (ret < 0 && errno != EINTR)
             {
                 if (pipe_open) close(pipefd[0]);
+                bash_output_cleanup(tmp_path, tmpf);
                 return -1;
             }
         }
@@ -148,6 +253,7 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
             (void)kill(-pid, SIGKILL);
             if (!child_done) (void)waitpid(pid, &status, 0);
             if (pipe_open) close(pipefd[0]);
+            bash_output_cleanup(tmp_path, tmpf);
             return -1;
         }
         double elapsed = (double)(now.tv_sec - start.tv_sec) +
@@ -157,6 +263,7 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
             (void)kill(-pid, SIGKILL);
             if (!child_done) (void)waitpid(pid, &status, 0);
             if (pipe_open) close(pipefd[0]);
+            bash_output_cleanup(tmp_path, tmpf);
             return -2;
         }
 
@@ -170,6 +277,7 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
                 (void)kill(-pid, SIGKILL);
                 if (!child_done) (void)waitpid(pid, &status, 0);
                 if (pipe_open) close(pipefd[0]);
+                bash_output_cleanup(tmp_path, tmpf);
                 return -1;
             }
         }
@@ -182,9 +290,35 @@ static int run_with_timeout(const char *command, int timeout_secs, char **output
         if (kill(-pid, 0) == 0) (void)kill(-pid, SIGKILL);
     }
 
-    result_buf[total] = '\0';
-    *output = str_dup(result_buf);
-    if (!*output) return -1;
+    if (tmpf && fclose(tmpf) != 0)
+    {
+        unlink(tmp_path);
+        free(tmp_path);
+        return -4;
+    }
+    if (tmp_path)
+    {
+        /* Trim the tail window to start at a line boundary; the dropped
+         * partial line is already captured in the spill file. */
+        size_t first_nl = 0;
+        while (first_nl < tail_len && tail[first_nl] != '\n')
+            first_nl++;
+        if (first_nl < tail_len)
+        {
+            size_t keep = tail_len - (first_nl + 1);
+            memmove(tail, tail + first_nl + 1, keep);
+            tail_len = keep;
+        }
+    }
+
+    tail[tail_len] = '\0';
+    *output = str_dup(tail);
+    if (!*output)
+    {
+        bash_output_cleanup(tmp_path, NULL);
+        return -1;
+    }
+    *full_out_path = tmp_path;
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return -1;
@@ -213,10 +347,33 @@ static ToolResult *bash_execute(Tool *self, const char *args_json)
         return tool_result_error("command rejected by safety policy", "policy_denied");
     }
 
+    /* T4: optional per-call timeout override, capped at the policy
+     * maximum so the LLM cannot escalate beyond the safety limit. */
+    int timeout_secs = ctx->safety->max_execution_time;
+    cJSON *timeout_json = cJSON_GetObjectItem(args, "timeout");
+    if (timeout_json)
+    {
+        double dv = timeout_json->valuedouble;
+        if (!cJSON_IsNumber(timeout_json) || dv < 1.0 ||
+            dv > (double)INT_MAX || dv != (double)(int)dv)
+        {
+            cJSON_Delete(args);
+            free(command);
+            return tool_result_error(
+                "timeout must be a whole number of seconds",
+                "validation_error");
+        }
+        int requested = (int)dv;
+        if (ctx->safety->max_execution_time <= 0 ||
+            requested < ctx->safety->max_execution_time)
+            timeout_secs = requested;
+    }
+
     cJSON_Delete(args);
 
     char *output = NULL;
-    int rc = run_with_timeout(command, ctx->safety->max_execution_time, &output);
+    char *full_out = NULL;
+    int rc = run_with_timeout(command, timeout_secs, &output, &full_out);
     free(command);
 
     if (rc == -2)
@@ -234,8 +391,26 @@ static ToolResult *bash_execute(Tool *self, const char *args_json)
                                  "execution_error");
     }
 
+    if (rc == -4)
+    {
+        /* T4a: output could not be captured (spill file failure). */
+        free(output);
+        return tool_result_error("failed to capture command output",
+                                 "execution_error");
+    }
+
     char *result = NULL;
-    if (rc == 0)
+    if (full_out)
+    {
+        /* T4a: the model is pointed at the spill file for the full
+         * output; the file is intentionally kept (pi does the same).
+         * Cleanup on server exit is a follow-up (see PI_PARITY_PLAN). */
+        if (asprintf(&result, "Exit code: %d\n%s\n\n[Full output: %s]",
+                     rc, output ? output : "", full_out) < 0)
+            result = NULL;
+        free(full_out);
+    }
+    else if (rc == 0)
     {
         if (asprintf(&result, "Exit code: %d\n%s", rc, output ? output : "") < 0)
             result = NULL;
@@ -284,10 +459,11 @@ Tool *tool_bash_create(SafetyConfig *safety)
     ctx->safety = safety;
 
     t->name = str_dup("bash");
-    t->description = str_dup("Execute a shell command");
+    t->description = str_dup("Execute a shell command; optional timeout in seconds, capped at the safety limit");
     t->parameters_schema = str_dup(
         "{\"type\":\"object\",\"properties\":{"
-        "\"command\":{\"type\":\"string\",\"description\":\"Shell command to execute\"}"
+        "\"command\":{\"type\":\"string\",\"description\":\"Shell command to execute\"},"
+        "\"timeout\":{\"type\":\"number\",\"description\":\"Timeout in seconds, capped at the safety limit\"}"
         "},\"required\":[\"command\"]}"
     );
     t->execute = bash_execute;

@@ -1,7 +1,7 @@
-/* fuzz_tool_args - libFuzzer target for tool_args_compact, the tool-call
- * arguments summarizer. Model-provided JSON is external input: malformed
- * trees, huge values, and hostile UTF-8 must never crash or overrun the
- * cap.
+/* fuzz_tool_args - libFuzzer target for tool_args_compact and
+ * tool_args_compact_named, the tool-call arguments summarizers.
+ * Model-provided JSON is external input: malformed trees, huge values,
+ * and hostile UTF-8 must never crash or overrun the cap.
  *
  * Build with: -fsanitize=fuzzer,address,undefined
  * Run with:   ./fuzz_tool_args -max_len=4096
@@ -26,10 +26,20 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     memcpy(input, data, size);
     input[size] = '\0';
 
+    /* The first byte chooses the tool name (edit vs generic) so the
+     * per-tool special case gets fuzzed with the same corpus. */
+    char *tool_name = (data[0] & 1) ? "edit" : "bash";
+
     size_t caps[] = {1, 2, 3, 7, 64, 200, 4096};
     for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); i++)
     {
         char *out = tool_args_compact(input, caps[i]);
+        if (out)
+        {
+            if (strlen(out) > caps[i]) abort(); /* cap violated */
+            free(out);
+        }
+        out = tool_args_compact_named(tool_name, input, caps[i]);
         if (out)
         {
             if (strlen(out) > caps[i]) abort(); /* cap violated */

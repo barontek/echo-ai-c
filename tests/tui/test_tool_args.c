@@ -105,6 +105,66 @@ START_TEST(test_compact_tiny_cap_is_safe)
 }
 END_TEST
 
+START_TEST(test_compact_named_edit_basename_only)
+{
+    /* opencode-style: the edit header shows the file name only — no
+     * old/new text, no full path; the change shows in the result diff */
+    char *out = tool_args_compact_named("edit",
+        "{\"path\":\"/home/barontek/echo-ai-c/config.conf\",\"edits\":["
+        "{\"old_string\":\"aaa\",\"new_string\":\"1\"},"
+        "{\"old_string\":\"bbb\",\"new_string\":\"2\"}]}", 512);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "config.conf");
+    free(out);
+
+    out = tool_args_compact_named("edit",
+        "{\"path\":\"f.txt\",\"old_string\":\"foo\",\"new_string\":\"X\"}", 512);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "f.txt");
+    free(out);
+
+    out = tool_args_compact_named("edit",
+        "{\"path\":\"f.txt\",\"edits\":[]}", 512);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "f.txt");
+    free(out);
+}
+END_TEST
+
+START_TEST(test_compact_named_edit_degraded)
+{
+    /* unparseable input or a missing path falls back to the generic
+     * rendering, never a crash */
+    char *out = tool_args_compact_named("edit", "not json", 512);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "not json");
+    free(out);
+
+    out = tool_args_compact_named("edit",
+        "{\"old_string\":\"a\",\"new_string\":\"b\"}", 512);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "old_string=a, new_string=b");
+    free(out);
+}
+END_TEST
+
+START_TEST(test_compact_named_non_edit_passthrough)
+{
+    /* every other tool (and a NULL name) renders exactly like the
+     * generic function */
+    char *out = tool_args_compact_named("bash",
+        "{\"command\":\"ls\"}", 512);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "command=ls");
+    free(out);
+
+    out = tool_args_compact_named(NULL, "{\"command\":\"ls\"}", 512);
+    ck_assert_ptr_nonnull(out);
+    ck_assert_str_eq(out, "command=ls");
+    free(out);
+}
+END_TEST
+
 static Suite *suite(void)
 {
     Suite *s = suite_create("tool_args");
@@ -115,6 +175,9 @@ static Suite *suite(void)
     tcase_add_test(tc, test_compact_null_and_garbage_input);
     tcase_add_test(tc, test_compact_truncates_at_codepoint_boundary);
     tcase_add_test(tc, test_compact_tiny_cap_is_safe);
+    tcase_add_test(tc, test_compact_named_edit_basename_only);
+    tcase_add_test(tc, test_compact_named_edit_degraded);
+    tcase_add_test(tc, test_compact_named_non_edit_passthrough);
     suite_add_tcase(s, tc);
     return s;
 }

@@ -218,7 +218,7 @@ int safety_load_from_conf(SafetyConfig *cfg, const Conf *conf)
     if (cfg->require_approval_count == 0)
     {
         const char *defaults[] = {
-            "bash", "write_file", "replace_in_file", "git",
+            "bash", "write_file", "edit", "git",
             "python_execute", "delegate",
         };
         int ndef = sizeof(defaults) / sizeof(defaults[0]);
@@ -378,7 +378,7 @@ int safety_check_path(const SafetyConfig *cfg, const char *path)
  *   - Aliased coreutils           alias rm='command-not-blocked'
  *
  * The real safety boundary is safety_needs_approval(), which by default
- * requires human approval for bash, write_file, replace_in_file, git,
+ * requires human approval for bash, write_file, edit, git,
  * python_execute, and delegate.  This function's job is to catch the
  * *obvious* cases so the approver sees a prompt — it does not, and
  * structurally cannot, guarantee that every destructive command is

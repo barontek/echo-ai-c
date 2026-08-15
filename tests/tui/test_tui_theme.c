@@ -313,6 +313,55 @@ START_TEST(test_plane_colors_think_dim_mixes_fg)
 }
 END_TEST
 
+START_TEST(test_diff_line_classifier)
+{
+    /* the edit tool's diff shape: +/- with line numbers, context with
+     * line numbers, and the skip marker */
+    ck_assert_int_eq(tui_diff_line_kind("-90 enabled = bash, read_file", 34),
+                     TUI_DIFF_DEL);
+    ck_assert_int_eq(tui_diff_line_kind("+90 enabled = bash, read_file, edit", 38),
+                     TUI_DIFF_ADD);
+    ck_assert_int_eq(tui_diff_line_kind(" 3 l3", 6), TUI_DIFF_CONTEXT);
+    ck_assert_int_eq(tui_diff_line_kind(" ...", 4), TUI_DIFF_CONTEXT);
+    ck_assert_int_eq(tui_diff_line_kind("+1 foo X foo", 13), TUI_DIFF_ADD);
+}
+END_TEST
+
+START_TEST(test_diff_line_classifier_rejects_plain_text)
+{
+    /* unrelated tool output must stay in the block role color:
+     * no leading marker, no digit run, or digits without a space */
+    ck_assert_int_eq(tui_diff_line_kind("Replaced 1 occurrence (9 bytes written).", 41),
+                     TUI_DIFF_PLAIN);
+    ck_assert_int_eq(tui_diff_line_kind("Exit code: 0", 12), TUI_DIFF_PLAIN);
+    ck_assert_int_eq(tui_diff_line_kind("-1", 2), TUI_DIFF_PLAIN);
+    ck_assert_int_eq(tui_diff_line_kind("+foo", 4), TUI_DIFF_PLAIN);
+    ck_assert_int_eq(tui_diff_line_kind(" 123", 4), TUI_DIFF_PLAIN); /* no trailing space */
+    ck_assert_int_eq(tui_diff_line_kind("", 0), TUI_DIFF_PLAIN);
+    ck_assert_int_eq(tui_diff_line_kind(NULL, 0), TUI_DIFF_PLAIN);
+    ck_assert_int_eq(tui_diff_line_kind("foo -3 bar", 10), TUI_DIFF_PLAIN);
+}
+END_TEST
+
+START_TEST(test_diff_role_colors)
+{
+    /* diff roles reuse the palette's green/red; monochrome keeps white */
+    TuiTheme *t = tui_theme_create("dark", NULL, NULL);
+    ck_assert_int_eq(tui_theme_color(t, TUI_ROLE_DIFF_ADD), RGB(0x9e, 0xce, 0x6a));
+    ck_assert_int_eq(tui_theme_color(t, TUI_ROLE_DIFF_DEL), RGB(0xf2, 0x6d, 0x6d));
+    tui_theme_free(t);
+
+    t = tui_theme_create("light", NULL, NULL);
+    ck_assert_int_eq(tui_theme_color(t, TUI_ROLE_DIFF_ADD), RGB(0x3f, 0x62, 0x12));
+    ck_assert_int_eq(tui_theme_color(t, TUI_ROLE_DIFF_DEL), RGB(0x8f, 0x1d, 0x1d));
+    tui_theme_free(t);
+
+    t = tui_theme_create("none", NULL, NULL);
+    ck_assert_int_eq(tui_theme_color(t, TUI_ROLE_DIFF_ADD), RGB(0xff, 0xff, 0xff));
+    ck_assert_int_eq(tui_theme_color(t, TUI_ROLE_DIFF_DEL), RGB(0xff, 0xff, 0xff));
+    tui_theme_free(t);
+}
+END_TEST
 static Suite *suite(void)
 {
     Suite *s = suite_create("tui_theme");
@@ -340,9 +389,13 @@ static Suite *suite(void)
     tcase_add_test(tc, test_plane_colors_status_fg_keeps_opaque_accent_bg);
     tcase_add_test(tc, test_plane_colors_opaque_mode_always_paints_bg);
     tcase_add_test(tc, test_plane_colors_think_dim_mixes_fg);
+    tcase_add_test(tc, test_diff_line_classifier);
+    tcase_add_test(tc, test_diff_line_classifier_rejects_plain_text);
+    tcase_add_test(tc, test_diff_role_colors);
     suite_add_tcase(s, tc);
     return s;
 }
+
 
 int main(void)
 {

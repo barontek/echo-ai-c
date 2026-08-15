@@ -98,7 +98,7 @@ void safety_config_free(SafetyConfig *cfg);
  * current values. safety.mode accepts "restricted", "approve_all", or
  * "unrestricted" (any other value is ignored and keeps the current mode).
  * When no require_approval_for list is configured, a default list (bash,
- * write_file, replace_in_file, git, python_execute, delegate) is
+ * write_file, edit, git, python_execute, delegate) is
  * installed.
  *
  * Return: 0 on success; -1 when any policy field could not be allocated
@@ -148,7 +148,7 @@ int safety_check_path(const SafetyConfig *cfg, const char *path);
  * This is NOT a security boundary. It cannot catch command substitution
  * ($(...)), variable expansion, encoded payloads, or scripting-language
  * invocations. The real safety boundary is safety_needs_approval(), which
- * requires human approval for bash, write_file, replace_in_file, git,
+ * requires human approval for bash, write_file, edit, git,
  * python_execute, and delegate by default. This function exists only to
  * catch the *obvious* destructive cases so the approver sees a prompt — it
  * offers no guarantee that every dangerous command is blocked.

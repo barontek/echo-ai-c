@@ -162,7 +162,7 @@ max_execution_time = 300
 # blocked_paths = secret_dir
 
 # Tools that require user approval before executing (comma-separated)
-# Default: bash, write_file, replace_in_file, git, python_execute, delegate
+# Default: bash, write_file, edit, git, python_execute, delegate
 # Empty string to disable all approvals: require_approval_for =
 require_approval_for = bash, write_file, git, python_execute
 

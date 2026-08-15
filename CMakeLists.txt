@@ -71,7 +71,7 @@ add_executable(echo-ai
     src/tools/grep_tool.c
     src/tools/web_fetch.c
     src/tools/web_search.c
-    src/tools/replace_in_file.c
+    src/tools/edit.c
     src/tools/python_execute.c
     src/tools/rest_api.c
     src/tools/notes.c

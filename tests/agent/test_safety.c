@@ -458,7 +458,7 @@ START_TEST(test_approval_default_tools)
 {
     SafetyConfig *cfg = safety_config_create();
     cfg->require_approval_for = malloc(sizeof(char *) * 6);
-    const char *names[] = {"bash", "write_file", "replace_in_file", "git",
+    const char *names[] = {"bash", "write_file", "edit", "git",
                            "python_execute", "delegate"};
     for (int i = 0; i < 6; i++)
         cfg->require_approval_for[i] = str_dup(names[i]);

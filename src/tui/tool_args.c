@@ -2,8 +2,10 @@
  * tool_args.c - compact one-line rendering of tool-call argument JSON.
  * The chat header and the live-activity strip cannot display a raw
  * {"command": "ls -la", ...} blob, so object entries collapse to
- * "key=value" pairs. Degrades to the raw input (truncated) when the
- * input is not JSON or not an object. Depends on: cJSON.
+ * "key=value" pairs; the edit tool gets a tailored old→new summary
+ * because its edits[] array is unreadable flattened. Degrades to the
+ * raw input (truncated) when the input is not JSON or not an object.
+ * Depends on: cJSON.
  */
 
 #define _GNU_SOURCE
@@ -116,4 +118,43 @@ char *tool_args_compact(const char *json, size_t max_len)
 
     (void)truncate_with_ellipsis(buf, used, cap, max_len);
     return buf;
+}
+
+/* opencode-style edit header: the file name only — the change itself
+ * shows in the result diff. */
+static char *tool_args_compact_edit(const char *json, size_t max_len)
+{
+    if (max_len < 1) max_len = 1;
+    size_t cap = max_len + 8;
+    char *buf = malloc(cap + 1);
+    if (!buf) return NULL;
+    buf[0] = '\0';
+
+    size_t used = 0;
+    cJSON *root = json ? cJSON_Parse(json) : NULL;
+    cJSON *path = root ? cJSON_GetObjectItem(root, "path") : NULL;
+    if (!root || !cJSON_IsObject(root) || !path || !cJSON_IsString(path))
+    {
+        if (root) cJSON_Delete(root);
+        free(buf);
+        return tool_args_compact(json, max_len);
+    }
+
+    /* Exactly like opencode's edit header: just the file name. */
+    const char *val = cJSON_GetStringValue(path);
+    const char *base = strrchr(val, '/');
+    base = base ? base + 1 : val;
+    buf_append(buf, &used, cap, base, strlen(base));
+    cJSON_Delete(root);
+
+    (void)truncate_with_ellipsis(buf, used, cap, max_len);
+    return buf;
+}
+
+char *tool_args_compact_named(const char *tool_name, const char *json,
+                              size_t max_len)
+{
+    if (tool_name && strcmp(tool_name, "edit") == 0)
+        return tool_args_compact_edit(json, max_len);
+    return tool_args_compact(json, max_len);
 }

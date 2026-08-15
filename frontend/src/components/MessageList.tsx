@@ -63,7 +63,7 @@ function ToolIcon({ name }: { name: string }) {
         </svg>
       );
     case 'write_file':
-    case 'replace_in_file':
+    case 'edit':
       return (
         <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M12 20h9" />
@@ -108,10 +108,21 @@ function formatLabel(name: string, args: Record<string, unknown>): string {
     case 'web_search': return `Web Search: ${String(args.query || '')}`;
     case 'deep_search': return `Deep Search: ${String(args.query || '')}`;
     case 'web_fetch': return `Web Fetch: ${String(args.url || '')}`;
-    case 'bash': return `Bash: ${String(args.command || '')}`;
-    case 'read_file': return `Read: ${String(args.file_path || '')}`;
+    case 'bash': {
+      const t = args.timeout ? ` (timeout ${String(args.timeout)}s)` : '';
+      return `Bash: ${String(args.command || '')}${t}`;
+    }
+    case 'read_file': {
+      const range = args.offset
+        ? `:${String(args.offset)}${args.limit ? `-${String(Number(args.offset) + Number(args.limit) - 1)}` : ''}`
+        : '';
+      return `Read: ${String(args.file_path || '')}${range}`;
+    }
     case 'write_file': return `Write: ${String(args.file_path || '')}`;
-    case 'replace_in_file': return `Edit: ${String(args.path || '')}`;
+    case 'edit': {
+      const count = Array.isArray(args.edits) ? args.edits.length : 0;
+      return `Edit: ${String(args.path || '')}${count > 1 ? ` (${count} edits)` : ''}`;
+    }
     case 'glob': return `Glob: ${String(args.pattern || '')}`;
     case 'grep': return `Grep: ${String(args.pattern || '')}`;
     case 'list_dir': return `List: ${String(args.path || '.')}`;
@@ -136,7 +147,12 @@ function formatDescription(name: string, args: Record<string, unknown>): string 
     case 'bash': return args.command ? 'Ran command' : null;
     case 'read_file': return args.file_path ? `Read ${String(args.file_path)}` : null;
     case 'write_file': return args.file_path ? `Wrote to ${String(args.file_path)}` : null;
-    case 'replace_in_file': return args.path ? `Edited ${String(args.path)}` : null;
+    case 'edit': {
+      const count = Array.isArray(args.edits) ? args.edits.length : 0;
+      return args.path
+        ? `Edited ${String(args.path)}${count > 1 ? ` (${count} edits)` : ''}`
+        : null;
+    }
     case 'glob': return args.pattern ? `Found files matching ${String(args.pattern)}` : null;
     case 'grep': return args.pattern ? `Searched for "${String(args.pattern)}"` : null;
     case 'list_dir': return `Listed ${String(args.path || 'current directory')}`;

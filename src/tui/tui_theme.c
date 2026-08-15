@@ -99,6 +99,10 @@ static void build_roles(TuiTheme *t)
     t->colors[TUI_ROLE_TOOL] = p->base_fg;
     t->styles[TUI_ROLE_TOOL] = mono ? 0 : TUI_STYLE_DIM;
     t->colors[TUI_ROLE_TOOL_RESULT] = mono ? p->base_fg : p->tool_result;
+    /* diff colors reuse the palette's established green/red; the
+     * monochrome preset keeps everything white-on-black */
+    t->colors[TUI_ROLE_DIFF_ADD] = mono ? p->base_fg : p->tool_result;
+    t->colors[TUI_ROLE_DIFF_DEL] = mono ? p->base_fg : p->error;
     t->colors[TUI_ROLE_BACKDROP] = tui_theme_mix(p->base_bg, 0x000000,
                                                  (int)p->backdrop_pct);
     /* REVERSE swaps fg/bg: the error pair must be legible on both sides */
@@ -249,4 +253,26 @@ int tui_theme_plane_colors(const TuiTheme *t, int transparent, TuiRole role,
     *fg = f;
     *bg = b;
     return opaque;
+}
+
+TuiDiffKind tui_diff_line_kind(const char *line, size_t len)
+{
+    if (!line || len < 2) return TUI_DIFF_PLAIN;
+
+    char c0 = line[0];
+    if (c0 == ' ' && len >= 4 && memcmp(line, " ...", 4) == 0)
+        return TUI_DIFF_CONTEXT;
+
+    /* "+NN text" / "-NN text" / " NN text": the line number must be
+     * followed by a space, so "Exit code: 0" or "foo -3 bar" never
+     * classify as diff lines. */
+    if (c0 != '+' && c0 != '-' && c0 != ' ') return TUI_DIFF_PLAIN;
+    if (line[1] < '0' || line[1] > '9') return TUI_DIFF_PLAIN;
+    size_t i = 1;
+    while (i < len && line[i] >= '0' && line[i] <= '9') i++;
+    if (i >= len || line[i] != ' ') return TUI_DIFF_PLAIN;
+
+    if (c0 == '+') return TUI_DIFF_ADD;
+    if (c0 == '-') return TUI_DIFF_DEL;
+    return TUI_DIFF_CONTEXT;
 }

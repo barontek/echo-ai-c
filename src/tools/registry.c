@@ -97,7 +97,7 @@ Tool *tool_glob_create(SafetyConfig *safety);
 Tool *tool_grep_create(SafetyConfig *safety);
 Tool *tool_web_fetch_create(SafetyConfig *safety);
 Tool *tool_web_search_create(SafetyConfig *safety);
-Tool *tool_replace_in_file_create(SafetyConfig *safety);
+Tool *tool_edit_create(SafetyConfig *safety);
 Tool *tool_python_execute_create(SafetyConfig *safety);
 Tool *tool_rest_api_create(SafetyConfig *safety);
 Tool *tool_notes_create(SafetyConfig *safety);
@@ -132,7 +132,7 @@ int registry_init(SafetyConfig *safety)
     failed += registry_register(tool_grep_create(safety));
     failed += registry_register(tool_web_fetch_create(safety));
     failed += registry_register(tool_web_search_create(safety));
-    failed += registry_register(tool_replace_in_file_create(safety));
+    failed += registry_register(tool_edit_create(safety));
     failed += registry_register(tool_python_execute_create(safety));
     failed += registry_register(tool_rest_api_create(safety));
     failed += registry_register(tool_notes_create(safety));

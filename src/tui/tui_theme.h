@@ -21,6 +21,8 @@ typedef enum {
     TUI_ROLE_THINK,      /* <think> blocks (muted color, dimmed, italic) */
     TUI_ROLE_TOOL,       /* tool activity lines (dimmed) */
     TUI_ROLE_TOOL_RESULT, /* tool result blocks (distinct color) */
+    TUI_ROLE_DIFF_ADD,   /* diff "+N" added lines (green in color presets) */
+    TUI_ROLE_DIFF_DEL,   /* diff "-N" removed lines (red in color presets) */
     TUI_ROLE_ERROR,      /* error lines (reverse video) */
     TUI_ROLE_STATUS_FG,  /* status bar text */
     TUI_ROLE_STATUS_BG,  /* status bar background */
@@ -150,5 +152,30 @@ uint32_t tui_theme_mix(uint32_t a, uint32_t b, int percent_b);
  */
 int tui_theme_plane_colors(const TuiTheme *t, int transparent, TuiRole role,
                            uint32_t *fg, uint32_t *bg);
+
+/* Diff line classification for tool results. The edit tool's result
+ * carries a line diff ("-90 text", "+90 text", " 90 text" context,
+ * " ..." skip); classifying the shape here keeps the coloring decision
+ * pure and unit-testable. */
+typedef enum {
+    TUI_DIFF_PLAIN = 0, /* not a diff line: render in the block role color */
+    TUI_DIFF_ADD,       /* "+NN text": an added line */
+    TUI_DIFF_DEL,       /* "-NN text": a removed line */
+    TUI_DIFF_CONTEXT    /* " NN text" or " ...": unchanged/skip marker */
+} TuiDiffKind;
+
+/**
+ * tui_diff_line_kind - classify a rendered line as a diff line or not
+ * @line: line bytes; @len: byte length.
+ *
+ * A line is a diff line only when it matches the tool's output shape:
+ * +/- followed by digits and a space, a space followed by digits and a
+ * space, or the " ..." skip marker. Anything else (plain text, bash
+ * output, summary lines) classifies as TUI_DIFF_PLAIN, so unrelated
+ * tool results keep their block color.
+ *
+ * Return: the TuiDiffKind. Never fails; pure function.
+ */
+TuiDiffKind tui_diff_line_kind(const char *line, size_t len);
 
 #endif /* ECHO_TUI_THEME_H */

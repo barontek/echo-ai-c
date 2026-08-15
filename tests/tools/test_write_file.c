@@ -19,6 +19,7 @@
 
 Tool *tool_write_file_create(SafetyConfig *safety);
 void tool_write_file_set_change_tracker(Tool *tool, ChangeTracker *ct);
+void write_file_test_set_mkdir_fail(int fail);
 
 static SafetyConfig *make_safety(const char *workspace)
 {
@@ -202,6 +203,135 @@ START_TEST(test_write_file_snapshots_previous_content_to_change_tracker)
 }
 END_TEST
 
+START_TEST(test_write_file_creates_nested_parents)
+{
+    /* T2: write into a/b/c/ — none of the parents exist yet. */
+    char ws[] = "/tmp/echo_wf_nest_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(ws));
+    SafetyConfig *safety = make_safety(ws);
+    Tool *tool = tool_write_file_create(safety);
+    ck_assert_ptr_nonnull(tool);
+    ToolResult *r = tool->execute(tool,
+        "{\"file_path\":\"a/b/c.txt\",\"content\":\"deep\"}");
+    ck_assert_ptr_nonnull(r);
+    ck_assert_ptr_null(r->error);
+    tool_result_free(r);
+
+    char abs_path[512];
+    ck_assert_int_lt(snprintf(abs_path, sizeof(abs_path), "%s/a/b/c.txt", ws),
+                     (int)sizeof(abs_path));
+    char *written = read_whole_file(abs_path);
+    ck_assert_str_eq(written, "deep");
+    free(written);
+
+    tool->destroy(tool);
+    safety_config_free(safety);
+    char cmd[600];
+    ck_assert_int_lt(snprintf(cmd, sizeof(cmd), "rm -rf %s", ws),
+                     (int)sizeof(cmd));
+    ck_assert_int_eq(system(cmd), 0);
+}
+END_TEST
+
+START_TEST(test_write_file_existing_parents_untouched)
+{
+    /* T2 regression: an existing parent must not be recreated or have
+     * its permissions changed by the mkdir walk. */
+    char ws[] = "/tmp/echo_wf_exist_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(ws));
+    char dir_path[512];
+    ck_assert_int_lt(snprintf(dir_path, sizeof(dir_path), "%s/sub", ws),
+                     (int)sizeof(dir_path));
+    ck_assert_int_eq(mkdir(dir_path, 0700), 0);
+
+    SafetyConfig *safety = make_safety(ws);
+    Tool *tool = tool_write_file_create(safety);
+    ck_assert_ptr_nonnull(tool);
+    ToolResult *r = tool->execute(tool,
+        "{\"file_path\":\"sub/out.txt\",\"content\":\"x\"}");
+    ck_assert_ptr_nonnull(r);
+    ck_assert_ptr_null(r->error);
+    tool_result_free(r);
+
+    struct stat st;
+    ck_assert_int_eq(stat(dir_path, &st), 0);
+    ck_assert_int_eq(st.st_mode & 0777, 0700);
+
+    tool->destroy(tool);
+    safety_config_free(safety);
+    char cmd[600];
+    ck_assert_int_lt(snprintf(cmd, sizeof(cmd), "rm -rf %s", ws),
+                     (int)sizeof(cmd));
+    ck_assert_int_eq(system(cmd), 0);
+}
+END_TEST
+
+START_TEST(test_write_file_mkdir_failure_reports_error)
+{
+    /* T2 fault injection: the seam makes mkdir fail mid-walk; the write
+     * must report an error and create nothing. */
+    char ws[] = "/tmp/echo_wf_mkfail_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(ws));
+    SafetyConfig *safety = make_safety(ws);
+    Tool *tool = tool_write_file_create(safety);
+    ck_assert_ptr_nonnull(tool);
+    write_file_test_set_mkdir_fail(1);
+    ToolResult *r = tool->execute(tool,
+        "{\"file_path\":\"a/b/c.txt\",\"content\":\"x\"}");
+    ck_assert_ptr_nonnull(r);
+    ck_assert_ptr_nonnull(r->error);
+    ck_assert_str_eq(r->error_category, "execution_error");
+    tool_result_free(r);
+    write_file_test_set_mkdir_fail(0);
+
+    char dir_path[512];
+    ck_assert_int_lt(snprintf(dir_path, sizeof(dir_path), "%s/a", ws),
+                     (int)sizeof(dir_path));
+    struct stat st;
+    ck_assert_int_ne(stat(dir_path, &st), 0);
+
+    tool->destroy(tool);
+    safety_config_free(safety);
+    char cmd[600];
+    ck_assert_int_lt(snprintf(cmd, sizeof(cmd), "rm -rf %s", ws),
+                     (int)sizeof(cmd));
+    ck_assert_int_eq(system(cmd), 0);
+}
+END_TEST
+
+START_TEST(test_write_file_symlink_escape_refused)
+{
+    /* T2 security boundary: a mid-walk symlink pointing outside the
+     * workspace must abort the walk, not create dirs through it. */
+    char ws[] = "/tmp/echo_wf_lnk_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(ws));
+    char link_path[512];
+    ck_assert_int_lt(snprintf(link_path, sizeof(link_path), "%s/esc", ws),
+                     (int)sizeof(link_path));
+    ck_assert_int_eq(symlink("/etc", link_path), 0);
+
+    SafetyConfig *safety = make_safety(ws);
+    Tool *tool = tool_write_file_create(safety);
+    ck_assert_ptr_nonnull(tool);
+    ToolResult *r = tool->execute(tool,
+        "{\"file_path\":\"esc/c.txt\",\"content\":\"x\"}");
+    ck_assert_ptr_nonnull(r);
+    ck_assert_ptr_nonnull(r->error);
+    ck_assert_str_eq(r->error_category, "execution_error");
+    tool_result_free(r);
+
+    struct stat st;
+    ck_assert_int_ne(stat("/etc/c.txt", &st), 0);
+
+    tool->destroy(tool);
+    safety_config_free(safety);
+    char cmd[600];
+    ck_assert_int_lt(snprintf(cmd, sizeof(cmd), "rm -rf %s", ws),
+                     (int)sizeof(cmd));
+    ck_assert_int_eq(system(cmd), 0);
+}
+END_TEST
+
 START_TEST(test_write_file_missing_args_is_validation_error)
 {
     char ws[] = "/tmp/echo_wf_val_XXXXXX";
@@ -234,6 +364,10 @@ int main(void)
     tcase_add_test(tc, test_write_file_overwrites_existing_content);
     tcase_add_test(tc, test_write_file_oversized_content_is_policy_denied);
     tcase_add_test(tc, test_write_file_snapshots_previous_content_to_change_tracker);
+    tcase_add_test(tc, test_write_file_creates_nested_parents);
+    tcase_add_test(tc, test_write_file_existing_parents_untouched);
+    tcase_add_test(tc, test_write_file_mkdir_failure_reports_error);
+    tcase_add_test(tc, test_write_file_symlink_escape_refused);
     tcase_add_test(tc, test_write_file_missing_args_is_validation_error);
     suite_add_tcase(suite, tc);
 

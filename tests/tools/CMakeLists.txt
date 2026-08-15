@@ -56,6 +56,7 @@ add_executable(test_read_file
     test_read_file.c
 )
 target_include_directories(test_read_file PRIVATE ../../src)
+target_compile_definitions(test_read_file PRIVATE READ_FILE_TEST=1)
 target_link_libraries(test_read_file PRIVATE echo_ai_test_deps)
 add_test(NAME test_read_file COMMAND test_read_file)
 
@@ -70,6 +71,7 @@ add_executable(test_write_file
     test_write_file.c
 )
 target_include_directories(test_write_file PRIVATE ../../src)
+target_compile_definitions(test_write_file PRIVATE WRITE_FILE_TEST=1)
 target_link_libraries(test_write_file PRIVATE echo_ai_test_deps)
 add_test(NAME test_write_file COMMAND test_write_file)
 
@@ -97,19 +99,19 @@ target_include_directories(test_glob_tool PRIVATE ../../src)
 target_link_libraries(test_glob_tool PRIVATE echo_ai_test_deps)
 add_test(NAME test_glob_tool COMMAND test_glob_tool)
 
-add_executable(test_replace_in_file
-    ../../src/tools/replace_in_file.c
+add_executable(test_edit
+    ../../src/tools/edit.c
     ../../src/tools/tool.c
     ../../src/safety/safety.c
     ../../src/config/config.c
     ../../src/utils/string_utils.c
     ../../src/utils/logging.c
-    test_replace_in_file.c
+    test_edit.c
 )
-target_compile_definitions(test_replace_in_file PRIVATE REPLACE_IN_FILE_TEST=1)
-target_include_directories(test_replace_in_file PRIVATE ../../src)
-target_link_libraries(test_replace_in_file PRIVATE echo_ai_test_deps)
-add_test(NAME test_replace_in_file COMMAND test_replace_in_file)
+target_compile_definitions(test_edit PRIVATE EDIT_TEST=1)
+target_include_directories(test_edit PRIVATE ../../src)
+target_link_libraries(test_edit PRIVATE echo_ai_test_deps)
+add_test(NAME test_edit COMMAND test_edit)
 
 add_executable(test_tool_sqlite_query
     ../../src/tools/tool_sqlite_query.c
