@@ -208,6 +208,16 @@ void browser_test_set_strdup_fail(int nth_allocation);
  * Return: caller-owned bytes (free with free()), NULL on bad input.
  */
 unsigned char *browser_test_decode_base64(const char *in, size_t *out_len);
+
+/**
+ * browser_test_remove_profile_dir - run profile removal with retries
+ * @dir: directory to remove (must exist).
+ *
+ * Test-only: regression hook for the close race where a straggler
+ * process kept writing profile files while rm ran, failing the first
+ * attempt with "Directory not empty".
+ */
+void browser_test_remove_profile_dir(const char *dir);
 #endif
 
 #endif

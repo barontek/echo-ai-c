@@ -332,16 +332,38 @@ oom:
 
 /* Remove the temp profile with rm(1): hand-rolled recursion over a
  * browser profile (symlinks, deep nesting) is more code and more error
- * paths than the two-line child. The dir is ours, so this is safe. */
+ * paths than the two-line child. The dir is ours, so this is safe.
+ * Retries: even after the group kill, a straggler process can still be
+ * writing files while rm runs, which made the first attempt fail with
+ * "Directory not empty" in real use. rm's stderr is silenced; the
+ * parent logs one warning only if the dir survives every attempt. */
 static void remove_profile_dir(const char *dir)
 {
-    pid_t pid = fork();
-    if (pid == 0)
+    for (int attempt = 0; attempt < 20; attempt++)
     {
-        execlp("rm", "rm", "-rf", "--", dir, (char *)NULL);
-        _exit(127);
+        pid_t pid = fork();
+        if (pid == 0)
+        {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0)
+            {
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
+            execlp("rm", "rm", "-rf", "--", dir, (char *)NULL);
+            _exit(127);
+        }
+        if (pid > 0)
+        {
+            int status = 0;
+            waitpid(pid, &status, 0);
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+                return;
+        }
+        usleep(100000);
     }
-    if (pid > 0) waitpid(pid, NULL, 0);
+    log_warn("browser temp profile not fully removed",
+             "dir", dir, NULL);
 }
 
 /* Free an argv array built by build_argv. Entry 0 is always the
@@ -428,6 +450,11 @@ static int spawn_browser(BrowserSession *s, int headless,
         }
         for (int i = 5; i < 256; i++) close(i);
 
+        /* Own process group: Chromium's renderer/GPU/utility children
+         * inherit it, so a group signal at close reaches everything
+         * that may still be writing to the profile dir. */
+        (void)setpgid(0, 0);
+
         execv(s->binary, argv);
         _exit(127);
     }
@@ -445,12 +472,16 @@ fail_free_argv:
     return -1;
 }
 
-/* Kill and reap the child. */
+/* Kill and reap the child, signalling its whole process group: killing
+ * only the browser leader leaves renderer/GPU children alive, and they
+ * keep writing to the profile dir for a while (see remove_profile_dir
+ * and https://crbug.com/40259890-adjacent teardown behavior). */
 static void bury_browser(BrowserSession *s)
 {
     if (s->pid <= 0) return;
 
-    kill(s->pid, SIGTERM);
+    if (kill(-s->pid, SIGTERM) != 0 && errno == ESRCH)
+        kill(s->pid, SIGTERM); /* group already gone: leader only */
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     int waited = 0;
@@ -470,7 +501,8 @@ static void bury_browser(BrowserSession *s)
     }
     if (!reaped)
     {
-        kill(s->pid, SIGKILL);
+        if (kill(-s->pid, SIGKILL) != 0 && errno == ESRCH)
+            kill(s->pid, SIGKILL);
         waitpid(s->pid, NULL, 0);
     }
     s->pid = 0;
@@ -1094,5 +1126,18 @@ void browser_test_set_strdup_fail(int nth_allocation)
 unsigned char *browser_test_decode_base64(const char *in, size_t *out_len)
 {
     return decode_base64(in, out_len);
+}
+
+/**
+ * browser_test_remove_profile_dir - run the profile removal with its
+ * retry loop (test-only)
+ * @dir: directory to remove.
+ *
+ * Regression hook for the "Directory not empty" close race: the real
+ * retry behavior, callable without a browser session.
+ */
+void browser_test_remove_profile_dir(const char *dir)
+{
+    remove_profile_dir(dir);
 }
 #endif

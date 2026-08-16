@@ -8,10 +8,12 @@
 
 #define _GNU_SOURCE
 #include <check.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "../src/browser/cdp.h"
@@ -876,6 +878,66 @@ END_TEST
 
 /* ---- suite ------------------------------------------------------- */
 
+START_TEST(test_browser_profile_removal_races_writers)
+{
+    /* Regression for the "Directory not empty" close race: a straggler
+     * process (orphaned renderer in real use) keeps creating profile
+     * files while rm runs. Removal must retry until the dir is gone. */
+    char dir[512];
+    snprintf(dir, sizeof(dir), "%s/echo_ai_profile_test_%ld",
+             test_tmpdir(), (long)getpid());
+    ck_assert_int_eq(0, mkdir(dir, 0700));
+
+    char first[600];
+    snprintf(first, sizeof(first), "%s/seed", dir);
+    FILE *f = fopen(first, "w");
+    ck_assert_ptr_nonnull(f);
+    fclose(f);
+
+    /* Straggler: keeps dropping files into the dir for ~500 ms. */
+    pid_t writer = fork();
+    ck_assert_int_ge(writer, 0);
+    if (writer == 0)
+    {
+        char path[600];
+        for (int i = 0; i < 10; i++)
+        {
+            snprintf(path, sizeof(path), "%s/writer_%d", dir, i);
+            int fd = open(path, O_WRONLY | O_CREAT, 0600);
+            if (fd >= 0) close(fd);
+            usleep(50000);
+        }
+        _exit(0);
+    }
+
+    browser_test_remove_profile_dir(dir);
+
+    ck_assert_int_eq(-1, access(dir, F_OK));
+    int status = 0;
+    waitpid(writer, &status, 0);
+}
+END_TEST
+
+START_TEST(test_browser_profile_removal_simple)
+{
+    char dir[512];
+    snprintf(dir, sizeof(dir), "%s/echo_ai_profile_plain_%ld",
+             test_tmpdir(), (long)getpid());
+    ck_assert_int_eq(0, mkdir(dir, 0700));
+    char sub[600];
+    snprintf(sub, sizeof(sub), "%s/nested", dir);
+    ck_assert_int_eq(0, mkdir(sub, 0700));
+    char file[600];
+    snprintf(file, sizeof(file), "%s/nested/leaf", dir);
+    FILE *f = fopen(file, "w");
+    ck_assert_ptr_nonnull(f);
+    fclose(f);
+
+    browser_test_remove_profile_dir(dir);
+    ck_assert_int_eq(-1, access(dir, F_OK));
+}
+END_TEST
+
 static Suite *browser_suite(void)
 {
     Suite *s = suite_create("browser");
@@ -908,6 +970,8 @@ static Suite *browser_suite(void)
     tcase_add_test(tc_browser, test_browser_navigate_alloc_failures);
     tcase_add_test(tc_browser, test_browser_open_binary_not_found);
     tcase_add_test(tc_browser, test_browser_open_binary_exits_immediately);
+    tcase_add_test(tc_browser, test_browser_profile_removal_races_writers);
+    tcase_add_test(tc_browser, test_browser_profile_removal_simple);
     suite_add_tcase(s, tc_browser);
 
     return s;
