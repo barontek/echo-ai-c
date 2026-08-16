@@ -111,6 +111,7 @@ Tool *tool_sqlite_query_create(SafetyConfig *safety);
 Tool *tool_sqlite_schema_create(SafetyConfig *safety);
 Tool *tool_ask_user_create(SafetyConfig *safety);
 Tool *tool_humanizer_create(SafetyConfig *safety);
+Tool *tool_browser_create(SafetyConfig *safety);
 
 /* Test builds wire the registry by hand, so the real factories are skipped
  * to keep the test binary from linking every built-in tool module. */
@@ -146,6 +147,7 @@ int registry_init(SafetyConfig *safety)
     failed += registry_register(tool_sqlite_schema_create(safety));
     failed += registry_register(tool_ask_user_create(safety));
     failed += registry_register(tool_humanizer_create(safety));
+    failed += registry_register(tool_browser_create(safety));
     return failed;
 }
 #endif

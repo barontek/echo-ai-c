@@ -12,9 +12,11 @@ target_link_libraries(echo_ai_test_deps INTERFACE
     PkgConfig::SQLITE3
     PkgConfig::OPENSSL
     PkgConfig::CJSON
+    Threads::Threads
     m
 )
 
+add_subdirectory(browser)
 add_subdirectory(utils)
 add_subdirectory(agent)
 add_subdirectory(session)
@@ -37,6 +39,20 @@ check_c_source_compiles(
 set(CMAKE_REQUIRED_FLAGS "")
 
 if(HAS_LIBFUZZER)
+    # fuzz_cdp_line — CDP pipe-line dispatcher (cdp.c under CDP_TEST)
+    add_executable(fuzz_cdp_line
+        ../src/browser/cdp.c
+        ../src/utils/string_utils.c
+        ../src/utils/logging.c
+        fuzz/fuzz_cdp_line.c
+    )
+    target_compile_definitions(fuzz_cdp_line PRIVATE CDP_TEST=1)
+    target_include_directories(fuzz_cdp_line PRIVATE ../src)
+    target_compile_options(fuzz_cdp_line PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g)
+    target_link_libraries(fuzz_cdp_line PRIVATE
+        -fsanitize=fuzzer,address,undefined PkgConfig::CJSON)
+
     # fuzz_websocket_frame — real RFC 6455 frame parser (websocket.c
     # under WEBSOCKET_TEST; stubs resolve the rest of the TU)
     add_executable(fuzz_websocket_frame

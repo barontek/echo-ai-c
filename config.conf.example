@@ -177,7 +177,14 @@ enabled = true
 
 [tools]
 # Enabled tools (comma-separated)
-enabled = bash, read_file, write_file, list_dir, glob, grep, web_fetch, web_search, git, memory, notes, humanizer, deep_search
+enabled = bash, read_file, write_file, list_dir, glob, grep, web_fetch, web_search, git, memory, notes, humanizer, deep_search, browser
+
+# browser tool: opens a real, visible browser window on the desktop.
+# The binary is auto-discovered; override with env vars:
+#   ECHO_BROWSER_BIN          explicit path or binary name
+#   ECHO_BROWSER_HEADLESS=1   run without a window
+#   ECHO_BROWSER_USER_DATA_DIR  persistent profile (default: temp, removed on close)
+#   ECHO_BROWSER_FLAGS        extra args, e.g. "--no-sandbox --window-size=1440,900"
 
 [search]
 # Search provider for web_search tool: brave, duckduckgo, or tavily

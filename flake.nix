@@ -62,6 +62,12 @@
             # curl-impersonate-chrome binary at runtime when it is on PATH
             # to retry pages served a JS challenge to plain libcurl.
             curl-impersonate
+            # Optional (not a build dependency): the browser tool spawns
+            # whichever Chromium-family binary it discovers at runtime
+            # (ECHO_BROWSER_BIN, $BROWSER, then PATH). Brave here just
+            # guarantees a headful-capable browser is on PATH in the dev
+            # shell; other browsers work without any of this.
+            brave
           ];
 
           shellHook = ''

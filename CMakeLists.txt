@@ -9,6 +9,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 
 pkg_check_modules(LIBUV REQUIRED IMPORTED_TARGET libuv)
 pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl)
@@ -85,6 +86,9 @@ add_executable(echo-ai
     src/tools/tool_sqlite_schema.c
     src/tools/tool_ask_user.c
     src/tools/tool_humanizer.c
+    src/tools/tool_browser.c
+    src/browser/cdp.c
+    src/browser/browser.c
     src/tools/search_provider.c
     src/tools/search_brave.c
     src/tools/search_duckduckgo.c
@@ -140,6 +144,7 @@ target_link_libraries(echo-ai PRIVATE
     PkgConfig::OPENSSL
     PkgConfig::CJSON
     PkgConfig::NOTCURSES
+    Threads::Threads
     m
 )
 
