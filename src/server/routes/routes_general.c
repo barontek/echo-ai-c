@@ -308,6 +308,16 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
         list_key = "data";
         name_key = "id";
     }
+    else if (strcmp(provider, "opencode_go") == 0)
+    {
+        /* OpenCode Go gateway: same /models shape as Zen, different host. */
+        base_url = ctx && ctx->conf
+            ? conf_get(ctx->conf, "opencode_go.base_url") : NULL;
+        default_base = "https://opencode.ai/zen/go/v1";
+        path = "/models";  /* base_url already includes /v1 */
+        list_key = "data";
+        name_key = "id";
+    }
     else if (strcmp(provider, "ollama") == 0)
     {
         base_url = ctx && ctx->conf ? conf_get(ctx->conf, "ollama.base_url") : NULL;

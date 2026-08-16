@@ -318,6 +318,43 @@ START_TEST(test_handle_models_openai_compatible_uses_own_base_url)
     reset_stubs();
 }
 
+START_TEST(test_handle_models_opencode_go_uses_own_base_url)
+{
+    /* Regression: opencode_go used to hit the "unsupported provider" branch
+     * and return an empty list, so the UI showed "no models available". */
+    stub_curl_init_nonnull = 1;
+    stub_curl_perform_code = CURLE_OK;
+    stub_models_json = "{\"data\":[{\"id\":\"minimax-m3\"}]}";
+
+    char tmpdir[] = "/tmp/test_models_conf_XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(tmpdir));
+    char conf_path[512];
+    snprintf(conf_path, sizeof(conf_path), "%s/test.conf", tmpdir);
+    FILE *f = fopen(conf_path, "w");
+    ck_assert_ptr_nonnull(f);
+    fprintf(f, "[opencode_go]\nbase_url = https://opencode.ai/zen/go/v1\n");
+    fclose(f);
+
+    Conf *conf = conf_load(conf_path);
+    ck_assert_ptr_nonnull(conf);
+    ServerContext ctx = {0};
+    ctx.conf = conf;
+    HTTPRequest req = {0};
+    strcpy(req.query, "provider=opencode_go");
+
+    handle_models(&req, NULL, &ctx);
+    ck_assert_int_eq(captured_status, 200);
+    ck_assert(strstr(captured_curl_url, "https://opencode.ai/zen/go/v1/models"));
+    ck_assert(strstr(captured_body, "minimax-m3"));
+
+    conf_free(conf);
+    char rm[512];
+    snprintf(rm, sizeof(rm), "rm -rf %s", tmpdir);
+    int syst = system(rm);
+    (void)syst;
+    reset_stubs();
+}
+
 START_TEST(test_handle_models_unknown_provider_empty_no_curl)
 {
     stub_curl_init_nonnull = 1;
@@ -354,6 +391,7 @@ Suite *routes_general_models_suite(void)
     tcase_add_test(tc, test_handle_models_lm_studio_alias_uses_openai);
     tcase_add_test(tc, test_handle_models_openai_ignores_custom_public_base_url);
     tcase_add_test(tc, test_handle_models_openai_compatible_uses_own_base_url);
+    tcase_add_test(tc, test_handle_models_opencode_go_uses_own_base_url);
     tcase_add_test(tc, test_handle_models_unknown_provider_empty_no_curl);
 
     suite_add_tcase(s, tc);
