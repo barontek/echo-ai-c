@@ -186,7 +186,7 @@ START_TEST(test_agent_save_session_persists_empty_state)
     char tmpdir[] = "/tmp/test_agent_save_XXXXXX";
     ck_assert_ptr_nonnull(mkdtemp(tmpdir));
 
-    SessionManager *sm = session_manager_create(tmpdir, "pw");
+    SessionManager *sm = session_manager_create(tmpdir, "test-password");
     ck_assert_ptr_nonnull(sm);
 
     /* Construct a minimal Agent by hand — agent_create would need a real

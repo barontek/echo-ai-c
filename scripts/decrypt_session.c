@@ -10,6 +10,7 @@
 #define SCRYPT_N 262144
 #define SCRYPT_R 8
 #define SCRYPT_P 1
+#define SALT_PEPPER_MAX 64
 #define FERNET_VERSION 0x80
 #define IV_SIZE 16
 #define HMAC_SIZE 32
@@ -86,30 +87,48 @@ int main(void)
     const char *home = getenv("HOME");
     if (!home) { fprintf(stderr, "HOME not set\n"); return 1; }
 
-    char salt_path[1024], pw_path[1024];
+    char salt_path[1024], pepper_path[1024];
     snprintf(salt_path, sizeof(salt_path), "%s/.config/echo-ai/salt", home);
-    snprintf(pw_path, sizeof(pw_path), "%s/.config/echo-ai/password", home);
+    snprintf(pepper_path, sizeof(pepper_path), "%s/.config/echo-ai/.pepper", home);
 
     unsigned char *salt = NULL;
     int salt_len = 0;
     if (load_file(salt_path, &salt, &salt_len) != 0) {
         fprintf(stderr, "failed to load salt\n"); return 1;
     }
+    unsigned char *pepper = NULL;
+    int pepper_len = 0;
+    if (load_file(pepper_path, &pepper, &pepper_len) != 0) {
+        fprintf(stderr, "failed to load pepper\n"); free(salt); return 1;
+    }
     char password[256];
-    FILE *pwf = fopen(pw_path, "r");
-    if (!pwf || !fgets(password, sizeof(password), pwf)) { free(salt); return 1; }
-    fclose(pwf);
+    fprintf(stderr, "vault password: ");
+    if (!fgets(password, sizeof(password), stdin)) { free(salt); free(pepper); return 1; }
     int pwlen = strlen(password);
     while (pwlen > 0 && (password[pwlen - 1] == '\n' || password[pwlen - 1] == '\r'))
         password[--pwlen] = '\0';
 
+    /* Key derivation must mirror encryption_key_derive: scrypt over
+     * salt||pepper. */
+    unsigned char salt_combined[SALT_PEPPER_MAX * 2];
+    int combined_len = salt_len;
+    memcpy(salt_combined, salt, (size_t)salt_len);
+    memcpy(salt_combined + salt_len, pepper, (size_t)pepper_len);
+    combined_len += pepper_len;
+    memset(salt, 0, (size_t)salt_len);
+    memset(pepper, 0, (size_t)pepper_len);
+    free(salt);
+    free(pepper);
+
     unsigned char key[KEY_SIZE];
-    if (EVP_PBE_scrypt(password, pwlen, salt, salt_len,
+    if (EVP_PBE_scrypt(password, pwlen, salt_combined, combined_len,
                        SCRYPT_N, SCRYPT_R, SCRYPT_P, 512 * 1024 * 1024,
                        key, KEY_SIZE) != 1) {
-        fprintf(stderr, "scrypt failed\n"); free(salt); return 1;
+        fprintf(stderr, "scrypt failed\n");
+        memset(salt_combined, 0, sizeof(salt_combined));
+        return 1;
     }
-    free(salt);
+    memset(salt_combined, 0, sizeof(salt_combined));
 
     char db_path[1024];
     snprintf(db_path, sizeof(db_path), "%s/.config/echo-ai/echo-ai.db", home);
@@ -117,7 +136,7 @@ int main(void)
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
              "sqlite3 \"%s\" "
-             "\"SELECT id, title, hex(messages_encrypted) FROM agent_sessions "
+             "\"SELECT id, hex(title_encrypted), hex(messages_encrypted) FROM agent_sessions "
              "ORDER BY created_at DESC LIMIT 5;\"",
              db_path);
 
@@ -131,13 +150,24 @@ int main(void)
             line[--len] = '\0';
 
         char *id = strtok(line, "|");
-        char *title = strtok(NULL, "|");
+        char *title_hex = strtok(NULL, "|");
         char *hex = strtok(NULL, "|");
-        if (!id || !title || !hex) continue;
+        if (!id || !title_hex || !hex) continue;
+
+        unsigned char *title_plain = NULL;
+        int title_len = 0;
+        if (decrypt_blob(key, title_hex, strlen(title_hex), &title_plain,
+                         &title_len) != 0)
+        {
+            title_plain = NULL;
+            title_len = 0;
+        }
 
         printf("\n========================================\n");
-        printf("SESSION: %s  |  %s\n", id, title);
+        printf("SESSION: %s  |  %.*s\n", id, title_len,
+               title_plain ? (const char *)title_plain : "[DECRYPT FAILED]");
         printf("========================================\n");
+        free(title_plain);
 
         unsigned char *plain = NULL;
         int plen = 0;

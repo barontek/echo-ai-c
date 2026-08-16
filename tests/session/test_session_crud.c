@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sqlite3.h>
@@ -19,7 +20,7 @@
 
 START_TEST(test_user_memory_table_ready_after_sm_create)
 {
-    SessionManager *sm = session_manager_create(tmpdir, "pw");
+    SessionManager *sm = session_manager_create(tmpdir, "test-password");
     ck_assert_ptr_nonnull(sm);
 
     ck_assert_int_eq(memory_set(sm->db, "fact1", "value1"), 0);
@@ -42,7 +43,7 @@ END_TEST
 
 START_TEST(test_save_session_bind_failure_aborts)
 {
-    SessionManager *sm = session_manager_create(tmpdir, "pw");
+    SessionManager *sm = session_manager_create(tmpdir, "test-password");
     ck_assert_ptr_nonnull(sm);
 
     Session *s = session_manager_create_session(sm, "title_one");
@@ -86,7 +87,7 @@ END_TEST
 
 START_TEST(test_purge_sessions_bind_failure_returns_error)
 {
-    SessionManager *sm = session_manager_create(tmpdir, "pw");
+    SessionManager *sm = session_manager_create(tmpdir, "test-password");
     ck_assert_ptr_nonnull(sm);
 
     Session *s = session_manager_create_session(sm, "to_delete");
@@ -113,7 +114,7 @@ END_TEST
 
 START_TEST(test_purge_sessions_rejects_bad_days)
 {
-    SessionManager *sm = session_manager_create(tmpdir, "pw");
+    SessionManager *sm = session_manager_create(tmpdir, "test-password");
     ck_assert_ptr_nonnull(sm);
 
     Session *s = session_manager_create_session(sm, "keep");
@@ -141,7 +142,7 @@ END_TEST
 
 START_TEST(test_delete_session_distinguishes_missing)
 {
-    SessionManager *sm = session_manager_create(tmpdir, "pw");
+    SessionManager *sm = session_manager_create(tmpdir, "test-password");
     ck_assert_ptr_nonnull(sm);
 
     /* no session yet -> delete must report "no row" */
@@ -168,7 +169,7 @@ END_TEST
 
 START_TEST(test_empty_or_null_id_refused)
 {
-    SessionManager *sm = session_manager_create(tmpdir, "pw");
+    SessionManager *sm = session_manager_create(tmpdir, "test-password");
     ck_assert_ptr_nonnull(sm);
 
     /* load_session with empty id -> NULL (and no SQLite call is made) */
@@ -282,9 +283,10 @@ START_TEST(test_encryption_rejects_hmac_valid_bad_padding_token)
 {
     unsigned char salt[16] = {1, 2, 3, 4, 5, 6, 7, 8,
                               9, 10, 11, 12, 13, 14, 15, 16};
+    unsigned char pepper[8] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01, 0x02};
     EncryptionKey key;
     ck_assert_int_eq(encryption_key_derive("unit-test-pw", salt, sizeof(salt),
-                                           &key), 0);
+                                           pepper, sizeof(pepper), &key), 0);
 
     const char *plain = "hello world";
     int token_len = 0;
@@ -317,6 +319,145 @@ START_TEST(test_encryption_rejects_hmac_valid_bad_padding_token)
     ck_assert_ptr_null(dec);
     ck_assert_int_eq(out_len, 0);
     free(token);
+}
+END_TEST
+
+START_TEST(test_encryption_rejects_future_timestamp_token)
+{
+    unsigned char salt[16] = {1, 2, 3, 4, 5, 6, 7, 8,
+                              9, 10, 11, 12, 13, 14, 15, 16};
+    unsigned char pepper[8] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01, 0x02};
+    EncryptionKey key;
+    ck_assert_int_eq(encryption_key_derive("unit-test-pw", salt, sizeof(salt),
+                                           pepper, sizeof(pepper), &key), 0);
+
+    const char *plain = "hello world";
+    int token_len = 0;
+    unsigned char *token = encryption_encrypt(
+        &key, (const unsigned char *)plain, (int)strlen(plain), &token_len);
+    ck_assert_ptr_nonnull(token);
+
+    /* Regression: decrypt_fernet_token used to ignore the 8-byte BE
+     * timestamp, so a forged clock was accepted. Rewrite the timestamp
+     * to now+3600 and re-sign so the HMAC stays valid — rejection must
+     * come from the freshness check alone, not from a broken MAC. */
+    uint64_t future = (uint64_t)time(NULL) + 3600;
+    for (int i = 0; i < 8; i++)
+        token[1 + i] = (unsigned char)(future >> (56 - i * 8));
+
+    unsigned char hmac[32];
+    unsigned int hmac_len = sizeof(hmac);
+    HMAC(EVP_sha256(), key.key, 16, token, token_len - 32, hmac, &hmac_len);
+    ck_assert_int_eq((int)hmac_len, 32);
+    memcpy(token + token_len - 32, hmac, 32);
+
+    int out_len = 0;
+    unsigned char *dec = encryption_decrypt(&key, token, token_len, &out_len);
+    ck_assert_ptr_null(dec);
+    ck_assert_int_eq(out_len, 0);
+
+    /* The same token rewound to the past must decrypt fine: the check is
+     * a future-clock guard (Fernet spec), not a TTL. */
+    uint64_t past = (uint64_t)time(NULL) - 3600;
+    for (int i = 0; i < 8; i++)
+        token[1 + i] = (unsigned char)(past >> (56 - i * 8));
+    HMAC(EVP_sha256(), key.key, 16, token, token_len - 32, hmac, &hmac_len);
+    memcpy(token + token_len - 32, hmac, 32);
+    dec = encryption_decrypt(&key, token, token_len, &out_len);
+    ck_assert_ptr_nonnull(dec);
+    ck_assert_str_eq((const char *)dec, plain);
+    free(dec);
+    free(token);
+}
+END_TEST
+
+START_TEST(test_first_run_rejects_short_password)
+{
+    /* Regression: the TUI getpass path enforced no minimum at all and
+     * the HTTP setup path allowed 4 characters. The single first-run
+     * check in init_encryption must reject both. */
+    ck_assert_ptr_null(session_manager_create(tmpdir, "1234567"));
+    ck_assert_int_eq(access("/tmp/does-not-exist-salt", F_OK), -1);
+    /* No key material may exist after a rejected first run. */
+    char salt_path[512];
+    snprintf(salt_path, sizeof(salt_path), "%s/salt", tmpdir);
+    ck_assert_int_eq(access(salt_path, F_OK), -1);
+    char pepper_path[512];
+    snprintf(pepper_path, sizeof(pepper_path), "%s/.pepper", tmpdir);
+    ck_assert_int_eq(access(pepper_path, F_OK), -1);
+
+    SessionManager *sm = session_manager_create(tmpdir, "12345678");
+    ck_assert_ptr_nonnull(sm);
+    session_manager_free(sm);
+}
+END_TEST
+
+START_TEST(test_vault_without_pepper_cannot_unlock)
+{
+    /* Regression: a vault whose .pepper file is missing must refuse to
+     * initialize rather than derive a pepper-less key that silently
+     * fails to decrypt every token. */
+    SessionManager *sm = session_manager_create(tmpdir, "good-password");
+    ck_assert_ptr_nonnull(sm);
+    session_manager_free(sm);
+
+    char pepper_path[512];
+    snprintf(pepper_path, sizeof(pepper_path), "%s/.pepper", tmpdir);
+    ck_assert_int_eq(unlink(pepper_path), 0);
+
+    ck_assert_ptr_null(session_manager_create(tmpdir, "good-password"));
+}
+END_TEST
+
+START_TEST(test_key_material_file_modes)
+{
+    /* Defense-in-depth: salt, pepper, verifier and the DB must be 0600
+     * and the vault dir 0700 even under a permissive umask. */
+    umask(0);
+    SessionManager *sm = session_manager_create(tmpdir, "good-password");
+    ck_assert_ptr_nonnull(sm);
+
+    struct stat st;
+    const char *paths[] = {
+        "/salt", "/.pepper", "/.verifier", "/echo-ai.db"
+    };
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++)
+    {
+        char full[512];
+        snprintf(full, sizeof(full), "%s%s", tmpdir, paths[i]);
+        ck_assert_int_eq(stat(full, &st), 0);
+        ck_assert_int_eq(st.st_mode & 0777, 0600);
+    }
+    ck_assert_int_eq(stat(tmpdir, &st), 0);
+    ck_assert_int_eq(st.st_mode & 0777, 0700);
+    session_manager_free(sm);
+}
+END_TEST
+
+START_TEST(test_key_derive_pepper_changes_key)
+{
+    unsigned char salt[16] = {1, 2, 3, 4, 5, 6, 7, 8,
+                              9, 10, 11, 12, 13, 14, 15, 16};
+    unsigned char pepper_a[4] = {0x01, 0x02, 0x03, 0x04};
+    unsigned char pepper_b[4] = {0x05, 0x06, 0x07, 0x08};
+    EncryptionKey key_a, key_a2, key_b;
+
+    ck_assert_int_eq(encryption_key_derive("unit-test-pw", salt, sizeof(salt),
+                                           pepper_a, sizeof(pepper_a), &key_a), 0);
+    ck_assert_int_eq(encryption_key_derive("unit-test-pw", salt, sizeof(salt),
+                                           pepper_a, sizeof(pepper_a), &key_a2), 0);
+    ck_assert_int_eq(encryption_key_derive("unit-test-pw", salt, sizeof(salt),
+                                           pepper_b, sizeof(pepper_b), &key_b), 0);
+
+    ck_assert_mem_eq(key_a.key, key_a2.key, sizeof(key_a.key));
+    ck_assert_mem_ne(key_a.key, key_b.key, sizeof(key_a.key));
+
+    /* Pepper-less derivation must also work (legacy callers) and must
+     * differ from any peppered derivation. */
+    EncryptionKey key_nop;
+    ck_assert_int_eq(encryption_key_derive("unit-test-pw", salt, sizeof(salt),
+                                           NULL, 0, &key_nop), 0);
+    ck_assert_mem_ne(key_a.key, key_nop.key, sizeof(key_a.key));
 }
 END_TEST
 
@@ -414,7 +555,7 @@ START_TEST(test_create_creates_missing_parent_dirs)
     char data_dir[4096];
     snprintf(data_dir, sizeof(data_dir), "%s/missing/sub/echo-ai", parent);
 
-    SessionManager *sm = session_manager_create(data_dir, "pw");
+    SessionManager *sm = session_manager_create(data_dir, "test-password");
     ck_assert_ptr_nonnull(sm);
     session_manager_free(sm);
 
@@ -528,6 +669,11 @@ Suite *session_mgr_crud_suite(void)
     tcase_add_test(tc, test_session_list_alloc_fail_mid);
     tcase_add_test(tc, test_session_list_realloc_failures_are_safe);
     tcase_add_test(tc, test_encryption_rejects_hmac_valid_bad_padding_token);
+    tcase_add_test(tc, test_encryption_rejects_future_timestamp_token);
+    tcase_add_test(tc, test_first_run_rejects_short_password);
+    tcase_add_test(tc, test_vault_without_pepper_cannot_unlock);
+    tcase_add_test(tc, test_key_material_file_modes);
+    tcase_add_test(tc, test_key_derive_pepper_changes_key);
     tcase_add_test(tc, test_import_rejects_duplicate_id_preserves_existing);
     tcase_add_test(tc, test_create_creates_missing_parent_dirs);
     tcase_add_test(tc, test_recovery_restores_backup_when_new_salt_was_not_created);

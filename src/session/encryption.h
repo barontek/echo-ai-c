@@ -22,17 +22,24 @@ typedef struct {
  * encryption_key_derive - derive a 32-byte encryption key from a password
  * @password: NUL-terminated password; must be non-NULL.
  * @salt: salt bytes; must be non-NULL with @salt_len > 0.
- * @salt_len: length of @salt in bytes.
+ * @salt_len: length of @salt in bytes; max 64.
+ * @pepper: pepper bytes mixed into the scrypt input, or NULL for none.
+ *   When non-NULL, @pepper_len must be > 0 and <= 64.
+ * @pepper_len: length of @pepper in bytes (ignored when @pepper is NULL).
  * @key: out-param; caller-provided EncryptionKey filled with the derived
  *   key on success. Not owned by this function.
  *
- * Uses scrypt (N=2^18, r=8, p=1). Failures are logged with the OpenSSL
- * error string.
+ * Uses scrypt (N=2^18, r=8, p=1) over salt||pepper. The pepper is a
+ * per-vault secret (data_dir/.pepper, 0600): without it, a leaked copy
+ * of the DB cannot be used as an offline password-checking oracle.
+ * The combined salt||pepper buffer is zeroized before return.
  *
  * Return: 0 on success, -1 on invalid arguments or scrypt failure (key
  * contents unspecified). Thread-safe; no shared state.
  */
-int encryption_key_derive(const char *password, const unsigned char *salt, int salt_len, EncryptionKey *key);
+int encryption_key_derive(const char *password, const unsigned char *salt, int salt_len,
+                          const unsigned char *pepper, int pepper_len,
+                          EncryptionKey *key);
 
 /**
  * encryption_encrypt - encrypt plaintext into a Fernet token
@@ -70,24 +77,31 @@ unsigned char *encryption_encrypt(const EncryptionKey *key, const unsigned char 
 unsigned char *encryption_decrypt(const EncryptionKey *key, const unsigned char *token, int token_len, int *out_len);
 
 /**
- * encryption_resolve_password_alloc - read the password from ECHO_PASSWORD
- *
- * Return: caller-owned str_dup of the ECHO_PASSWORD value, or NULL when
- * the variable is unset or str_dup fails. Free with free(). Thread-safe
- * as long as the environment is not concurrently modified (getenv).
- */
-char *encryption_resolve_password_alloc(void);
-
-/**
  * encryption_salt_create - create a 16-byte random salt file
- * @salt_path: path to create; "wbx" semantics — fails if the file already
- *   exists.
+ * @salt_path: path to create; exclusive-create semantics — fails if the
+ *   file already exists.
+ *
+ * The file is created with mode 0600 regardless of umask.
  *
  * Return: 0 on success, -1 on RNG failure, open failure, or short write
  * (a partially-written salt file is unlinked). Failures are logged.
  * Thread-safe.
  */
 int encryption_salt_create(const char *salt_path);
+
+/**
+ * encryption_pepper_create - create a 32-byte random pepper file
+ * @pepper_path: path to create; exclusive-create semantics — fails if
+ *   the file already exists.
+ *
+ * The pepper is the per-vault secret mixed into scrypt by
+ * encryption_key_derive(); the file is created with mode 0600.
+ *
+ * Return: 0 on success, -1 on RNG failure, open failure, or short write
+ * (a partially-written pepper file is unlinked). Failures are logged.
+ * Thread-safe.
+ */
+int encryption_pepper_create(const char *pepper_path);
 
 /**
  * encryption_salt_load - read the salt file into a caller buffer
@@ -106,6 +120,22 @@ int encryption_salt_create(const char *salt_path);
 int encryption_salt_load(const char *salt_path, unsigned char *salt, int *salt_len);
 
 /**
+ * encryption_pepper_load - read the pepper file into a caller buffer
+ * @pepper_path: path to read.
+ * @pepper: caller-provided buffer of at least 64 bytes, filled on
+ *   success; not owned by this function.
+ * @pepper_len: out-param receiving the number of bytes read; must be
+ *   non-NULL.
+ *
+ * Same contract as encryption_salt_load(); a missing pepper file is an
+ * error because it renders the vault's keys underivable.
+ *
+ * Return: 0 on success, -1 on open failure, oversized file, seek/tell
+ * error, or short read. Failures are silent. Thread-safe.
+ */
+int encryption_pepper_load(const char *pepper_path, unsigned char *pepper, int *pepper_len);
+
+/**
  * encryption_first_run_detect - check whether <data_dir>/salt exists
  * @data_dir: directory containing the salt file.
  *
@@ -118,7 +148,8 @@ int encryption_first_run_detect(const char *data_dir);
 /**
  * encryption_create_verifier - persist a password verifier file
  * @key: key to encrypt the verifier with; must be non-NULL.
- * @path: file to create; "wbx" semantics — fails if it already exists.
+ * @path: file to create; exclusive-create semantics — fails if it
+ *   already exists. Created with mode 0600.
  *
  * Writes the Fernet token of the fixed string "echo-ai-ok" so a later
  * password check has something to decrypt and compare.

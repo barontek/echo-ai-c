@@ -21,6 +21,7 @@
 #define DB_FILE "echo-ai.db"
 #define MARKER_FILE ".changing_pwd"
 #define SALT_FILE "salt"
+#define PEPPER_FILE ".pepper"
 #define VERIFIER_FILE ".verifier"
 #define VERIFIER_NEW_FILE ".verifier.new"
 
@@ -64,6 +65,19 @@ static char *data_path(const char *data_dir, const char *name)
     char *path = NULL;
     if (asprintf(&path, "%s/%s", data_dir, name) < 0) return NULL;
     return path;
+}
+
+/* Load the vault pepper for a data dir into a caller buffer. Every key
+ * derivation in this file runs over salt||pepper, so all recovery and
+ * migration paths must carry the pepper. */
+static int load_pepper(const char *data_dir, unsigned char *pepper,
+                       int *pepper_len)
+{
+    char *path = data_path(data_dir, PEPPER_FILE);
+    if (!path) return -1;
+    int rc = encryption_pepper_load(path, pepper, pepper_len);
+    free(path);
+    return rc;
 }
 
 static char *path_suffix(const char *path, const char *suffix)
@@ -214,9 +228,13 @@ static int legacy_key_evidence(const char *data_dir, const char *salt_path,
     *verifier_match = 0;
     unsigned char salt[64] = {0};
     int salt_len = 0;
+    unsigned char pepper[64] = {0};
+    int pepper_len = 0;
     EncryptionKey key = {{0}};
     if (encryption_salt_load(salt_path, salt, &salt_len) != 0 ||
-        encryption_key_derive(password, salt, salt_len, &key) != 0)
+        load_pepper(data_dir, pepper, &pepper_len) != 0 ||
+        encryption_key_derive(password, salt, salt_len,
+                              pepper, pepper_len, &key) != 0)
         return -1;
 
     char *verifier = data_path(data_dir, VERIFIER_FILE);
@@ -404,18 +422,25 @@ int migration_check_and_recover(SessionManager *sm, const char *password)
             return -1;
         }
         EncryptionKey recovered_key = {{0}};
-        if (encryption_key_derive(password, current_salt, current_salt_len,
+        unsigned char recovered_pepper[64] = {0};
+        int recovered_pepper_len = 0;
+        if (load_pepper(sm->data_dir, recovered_pepper,
+                        &recovered_pepper_len) != 0 ||
+            encryption_key_derive(password, current_salt, current_salt_len,
+                                  recovered_pepper, recovered_pepper_len,
                                   &recovered_key) != 0 ||
             encryption_create_verifier(&recovered_key, verifier_new) != 0 ||
             sync_file(verifier_new) != 0 ||
             sync_directory(sm->data_dir) != 0)
         {
             memset(&recovered_key, 0, sizeof(recovered_key));
+            memset(recovered_pepper, 0, sizeof(recovered_pepper));
             (void)remove_if_exists(verifier_new);
             free(marker); free(salt); free(old_salt); free(verifier_new);
             return -1;
         }
         memset(&recovered_key, 0, sizeof(recovered_key));
+        memset(recovered_pepper, 0, sizeof(recovered_pepper));
     }
 
     memset(current_salt, 0, sizeof(current_salt));
@@ -614,6 +639,8 @@ static int migration_perform_change(SessionManager *sm, const char *new_password
     EncryptionKey new_key = {{0}};
     unsigned char new_salt[64] = {0};
     int new_salt_len = 0;
+    unsigned char new_pepper[64] = {0};
+    int new_pepper_len = 0;
     old_key = sm->enc_key;
 
     if (create_marker(marker) != 0 || sync_directory(sm->data_dir) != 0)
@@ -625,8 +652,9 @@ static int migration_perform_change(SessionManager *sm, const char *new_password
         goto restore;
     if (encryption_salt_load(salt, new_salt, &new_salt_len) != 0 ||
         new_salt_len <= 0 ||
+        load_pepper(sm->data_dir, new_pepper, &new_pepper_len) != 0 ||
         encryption_key_derive(new_password, new_salt, new_salt_len,
-                              &new_key) != 0)
+                              new_pepper, new_pepper_len, &new_key) != 0)
         goto restore;
     if (remove_if_exists(verifier_new) != 0 ||
         encryption_create_verifier(&new_key, verifier_new) != 0 ||
@@ -694,6 +722,7 @@ cleanup:
     memset(&old_key, 0, sizeof(old_key));
     memset(&new_key, 0, sizeof(new_key));
     memset(new_salt, 0, sizeof(new_salt));
+    memset(new_pepper, 0, sizeof(new_pepper));
     return result;
 }
 

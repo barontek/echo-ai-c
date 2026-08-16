@@ -7,6 +7,16 @@ target_include_directories(test_routes PRIVATE ../../src)
 target_link_libraries(test_routes PRIVATE echo_ai_test_deps)
 add_test(NAME test_routes COMMAND test_routes)
 
+# test_route_table compiles the REAL route table (no ROUTES_TEST) with
+# stubbed handlers, so the gating contract of every entry is under test.
+add_executable(test_route_table
+    ../../src/server/routes/routes.c
+    test_route_table.c
+)
+target_include_directories(test_route_table PRIVATE ../../src)
+target_link_libraries(test_route_table PRIVATE echo_ai_test_deps)
+add_test(NAME test_route_table COMMAND test_route_table)
+
 add_executable(test_routes_session
     ../../src/server/routes/routes_session.c
     test_routes_session.c

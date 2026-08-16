@@ -19,7 +19,7 @@
 
 static SessionManager *branch_sm_create(char *tmpdir, char **sid_out)
 {
-    SessionManager *sm = session_manager_create(tmpdir, "pw");
+    SessionManager *sm = session_manager_create(tmpdir, "test-password");
     ck_assert_ptr_nonnull(sm);
     Session *s = session_manager_create_session(sm, "branch test");
     ck_assert_ptr_nonnull(s);

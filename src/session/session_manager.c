@@ -190,6 +190,8 @@ unsigned char *sm_test_encrypt(const EncryptionKey *key,
 #endif
 
 #define SALT_FILE "salt"
+#define PEPPER_FILE ".pepper"
+#define VERIFIER_FILE ".verifier"
 #define DB_FILE "echo-ai.db"
 
 
@@ -388,51 +390,69 @@ static int init_encryption(SessionManager *sm, const char *password,
     }
 
     char *salt_path = NULL;
-    if (asprintf(&salt_path, "%s/%s", sm->data_dir, SALT_FILE) < 0) return -1;
+    char *pepper_path = NULL;
+    char *verifier_path = NULL;
+    unsigned char salt[64] = {0};
+    unsigned char pepper[64] = {0};
+    int salt_len = 0;
+    int pepper_len = 0;
+    int is_first_run = 0;
+    int rc = -1;
 
-    int is_first_run = encryption_first_run_detect(sm->data_dir);
+    if (asprintf(&salt_path, "%s/%s", sm->data_dir, SALT_FILE) < 0 ||
+        asprintf(&pepper_path, "%s/%s", sm->data_dir, PEPPER_FILE) < 0 ||
+        asprintf(&verifier_path, "%s/%s", sm->data_dir, VERIFIER_FILE) < 0)
+        goto cleanup;
+
+    is_first_run = encryption_first_run_detect(sm->data_dir);
 
     if (is_first_run)
     {
-        log_info("first run detected, creating salt", NULL);
+        /* Single enforcement point for the first-run minimum password
+         * length, covering every entry path (TUI getpass prompt, HTTP
+         * /api/setup). The change-password handler enforces the same
+         * minimum itself. */
+        if (strlen(password) < 8)
+        {
+            log_error("password must be at least 8 characters", NULL);
+            goto cleanup;
+        }
+        log_info("first run detected, creating salt and pepper", NULL);
         if (encryption_salt_create(salt_path) != 0)
         {
             log_error("failed to create salt", NULL);
-            free(salt_path);
-            return -1;
+            goto cleanup;
+        }
+        if (encryption_pepper_create(pepper_path) != 0)
+        {
+            log_error("failed to create pepper", NULL);
+            goto cleanup;
         }
     }
 
-    unsigned char salt[64] = {0};
-    int salt_len = 0;
     if (encryption_salt_load(salt_path, salt, &salt_len) != 0)
     {
         log_error("failed to load salt", NULL);
-        if (is_first_run) (void)unlink(salt_path);
-        memset(salt, 0, sizeof(salt));
-        free(salt_path);
-        return -1;
+        goto cleanup;
+    }
+    if (encryption_pepper_load(pepper_path, pepper, &pepper_len) != 0)
+    {
+        /* Pre-pepper vaults are deliberately unrecoverable: their tokens
+         * were derived from salt alone, and deriving with the new pepper
+         * would silently produce undecryptable garbage. Fail loudly. */
+        log_error("pepper file missing; vault predates the pepper change and cannot be unlocked", NULL);
+        goto cleanup;
     }
 
-    if (encryption_key_derive(password, salt, salt_len, &sm->enc_key) != 0)
+    if (encryption_key_derive(password, salt, salt_len,
+                              pepper, pepper_len, &sm->enc_key) != 0)
     {
         log_error("key derivation failed", NULL);
-        if (is_first_run) (void)unlink(salt_path);
-        memset(salt, 0, sizeof(salt));
-        free(salt_path);
-        return -1;
+        goto cleanup;
     }
 
     sm->key_initialized = 1;
 
-    char *verifier_path = NULL;
-    if (asprintf(&verifier_path, "%s/.verifier", sm->data_dir) < 0)
-    {
-        if (is_first_run) (void)unlink(salt_path);
-        memset(salt, 0, sizeof(salt));
-        free(salt_path);
-        return -1;
-    }
     struct stat st;
     int verifier_exists = stat(verifier_path, &st) == 0;
     int verifier_result = verifier_exists ?
@@ -444,22 +464,31 @@ static int init_encryption(SessionManager *sm, const char *password,
         log_error(verifier_exists ? "password verifier mismatch" :
                     (is_first_run ? "failed to create verifier" :
                                     "password verifier missing"), NULL);
-        if (is_first_run)
-        {
-            (void)unlink(verifier_path);
-            (void)unlink(salt_path);
-        }
-        free(verifier_path);
-        memset(salt, 0, sizeof(salt));
-        free(salt_path);
-        return -1;
+        goto cleanup;
     }
+
+    /* Self-heal file modes: key material and the vault dir must not be
+     * world-readable, regardless of the umask or pre-hardening installs. */
+    (void)chmod(sm->data_dir, 0700);
+    (void)chmod(salt_path, 0600);
+    (void)chmod(pepper_path, 0600);
+    (void)chmod(verifier_path, 0600);
+
+    rc = 0;
+
+cleanup:
+    if (rc != 0 && is_first_run)
+    {
+        if (salt_path) (void)unlink(salt_path);
+        if (pepper_path) (void)unlink(pepper_path);
+        if (verifier_path) (void)unlink(verifier_path);
+    }
+    free(salt_path);
+    free(pepper_path);
     free(verifier_path);
     memset(salt, 0, sizeof(salt));
-    free(salt_path);
-
-    log_info("encryption initialized", NULL);
-    return 0;
+    memset(pepper, 0, sizeof(pepper));
+    return rc;
 }
 
 SessionManager *session_manager_create(const char *data_dir, const char *password)
@@ -518,6 +547,10 @@ SessionManager *session_manager_create_ex(const char *data_dir,
         session_manager_free(sm);
         return NULL;
     }
+    /* The DB is created by sqlite (default 0644); keep it readable only
+     * by the vault owner. */
+    (void)chmod(db_path, 0600);
+    (void)chmod(sm->data_dir, 0700);
     free(db_path);
 
     if (init_db(sm->db) != 0)

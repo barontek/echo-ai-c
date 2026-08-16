@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 
 #include <arpa/inet.h>
@@ -19,6 +20,7 @@
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 #include <openssl/err.h>
+#include <openssl/crypto.h>
 
 #include "encryption.h"
 #include "../utils/logging.h"
@@ -28,17 +30,38 @@
 #define SCRYPT_R 8
 #define SCRYPT_P 1
 #define SALT_SIZE 16
+#define PEPPER_SIZE 32
+#define SALT_PEPPER_MAX 64
 #define FERNET_VERSION 0x80
 #define IV_SIZE 16
 #define HMAC_SIZE 32
 #define KEY_ENCRYPTION_HALF 16
 #define KEY_SIGNING_HALF 16
 
-int encryption_key_derive(const char *password, const unsigned char *salt, int salt_len, EncryptionKey *key)
+int encryption_key_derive(const char *password, const unsigned char *salt, int salt_len,
+                          const unsigned char *pepper, int pepper_len,
+                          EncryptionKey *key)
 {
     if (!password || !salt || salt_len <= 0 || !key) return -1;
+    if (pepper && (pepper_len <= 0 || pepper_len > SALT_PEPPER_MAX)) return -1;
+    if (salt_len > SALT_PEPPER_MAX || (pepper && salt_len + pepper_len > SALT_PEPPER_MAX * 2))
+        return -1;
 
-    int rc = EVP_PBE_scrypt(password, strlen(password), salt, salt_len,
+    /* Pepper mixing: scrypt runs over salt||pepper so the derived key
+     * depends on a secret held only on the machine that created the
+     * vault. A leaked copy of the DB (salt + verifier + tokens) can no
+     * longer be used as an offline password-testing oracle. */
+    unsigned char salt_combined[SALT_PEPPER_MAX * 2];
+    int combined_len = salt_len;
+    memcpy(salt_combined, salt, (size_t)salt_len);
+    if (pepper && pepper_len > 0)
+    {
+        if (salt_len + pepper_len > (int)sizeof(salt_combined)) return -1;
+        memcpy(salt_combined + salt_len, pepper, (size_t)pepper_len);
+        combined_len += pepper_len;
+    }
+
+    int rc = EVP_PBE_scrypt(password, strlen(password), salt_combined, combined_len,
                             SCRYPT_N, SCRYPT_R, SCRYPT_P, 512 * 1024 * 1024,
                             key->key, sizeof(key->key));
     if (rc != 1)
@@ -50,7 +73,27 @@ int encryption_key_derive(const char *password, const unsigned char *salt, int s
         return -1;
     }
 
+    memset(salt_combined, 0, sizeof(salt_combined));
     return 0;
+}
+
+/* Open a vault key-material file for exclusive creation with 0600 mode
+ * (salt, pepper, verifier). The umask-independent mode matters: these
+ * files sit next to the DB and must not be world-readable. Returns a
+ * FILE* over the fd, or NULL (unlinking on failure so no partial file
+ * survives). */
+static FILE *open_secure_excl(const char *path)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) return NULL;
+    FILE *f = fdopen(fd, "wb");
+    if (!f)
+    {
+        close(fd);
+        (void)unlink(path);
+        return NULL;
+    }
+    return f;
 }
 
 static int build_fernet_token(const unsigned char *aes_key, const unsigned char *hmac_key,
@@ -126,6 +169,18 @@ static int decrypt_fernet_token(const unsigned char *aes_key, const unsigned cha
     if (token[0] != FERNET_VERSION) return -1;
 
     int pos = 1;
+    /* Fernet spec freshness rule: reject tokens timestamped more than 60
+     * seconds in the future (clock-skew tolerance). Past timestamps are
+     * always accepted — this vault has no TTL semantics, so tokens keep
+     * their full lifetime, but a token minted "ahead of now" is evidence
+     * of a forged or replayed clock and is refused. */
+    {
+        uint64_t ts_be = 0;
+        memcpy(&ts_be, token + pos, 8);
+        uint64_t ts = ((uint64_t)ntohl((uint32_t)(ts_be >> 32))) |
+                      (((uint64_t)ntohl((uint32_t)ts_be)) << 32);
+        if (ts != 0 && (int64_t)ts > (int64_t)time(NULL) + 60) return -1;
+    }
     pos += 8;
     const unsigned char *iv = token + pos;
     pos += IV_SIZE;
@@ -137,7 +192,11 @@ static int decrypt_fernet_token(const unsigned char *aes_key, const unsigned cha
     unsigned int hmac_len = HMAC_SIZE;
     HMAC(EVP_sha256(), hmac_key, KEY_SIGNING_HALF, token, pos + ciphertext_len, computed_hmac, &hmac_len);
 
-    if (memcmp(computed_hmac, stored_hmac, HMAC_SIZE) != 0) return -1;
+    /* Constant-time compare (CRYPTO_memcmp, same primitive as the unlock
+     * token check in middleware.c): a plain memcmp short-circuits at the
+     * first differing byte and turns the HMAC check into a byte-wise
+     * timing oracle for the signing key. */
+    if (CRYPTO_memcmp(computed_hmac, stored_hmac, HMAC_SIZE) != 0) return -1;
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return -1;
@@ -239,13 +298,6 @@ unsigned char *encryption_decrypt(const EncryptionKey *key, const unsigned char 
     return plaintext;
 }
 
-char *encryption_resolve_password_alloc(void)
-{
-    const char *password = getenv("ECHO_PASSWORD");
-    if (password) return str_dup(password);
-    return NULL;
-}
-
 int encryption_salt_create(const char *salt_path)
 {
     unsigned char salt[SALT_SIZE];
@@ -255,7 +307,7 @@ int encryption_salt_create(const char *salt_path)
         return -1;
     }
 
-    FILE *f = fopen(salt_path, "wbx");
+    FILE *f = open_secure_excl(salt_path);
     if (!f)
     {
         log_error("failed to create salt file", "path", salt_path, NULL);
@@ -271,6 +323,36 @@ int encryption_salt_create(const char *salt_path)
     }
 
     fclose(f);
+    memset(salt, 0, sizeof(salt));
+    return 0;
+}
+
+int encryption_pepper_create(const char *pepper_path)
+{
+    unsigned char pepper[PEPPER_SIZE];
+    if (RAND_bytes(pepper, PEPPER_SIZE) != 1)
+    {
+        log_error("RAND_bytes failed for pepper", NULL);
+        return -1;
+    }
+
+    FILE *f = open_secure_excl(pepper_path);
+    if (!f)
+    {
+        log_error("failed to create pepper file", "path", pepper_path, NULL);
+        return -1;
+    }
+
+    if (fwrite(pepper, 1, PEPPER_SIZE, f) != PEPPER_SIZE)
+    {
+        log_error("failed to write pepper", NULL);
+        fclose(f);
+        unlink(pepper_path);
+        return -1;
+    }
+
+    fclose(f);
+    memset(pepper, 0, sizeof(pepper));
     return 0;
 }
 
@@ -295,6 +377,27 @@ int encryption_salt_load(const char *salt_path, unsigned char *salt, int *salt_l
     return 0;
 }
 
+int encryption_pepper_load(const char *pepper_path, unsigned char *pepper, int *pepper_len)
+{
+    FILE *f = fopen(pepper_path, "rb");
+    if (!f) return -1;
+
+    long file_size;
+    if (fseek(f, 0, SEEK_END) != 0 || (file_size = ftell(f)) < 0 || file_size > 64)
+    {
+        fclose(f);
+        return -1;
+    }
+    rewind(f);
+
+    size_t read = fread(pepper, 1, file_size, f);
+    fclose(f);
+
+    if (read != (size_t)file_size) return -1;
+    *pepper_len = (int)read;
+    return 0;
+}
+
 int encryption_first_run_detect(const char *data_dir)
 {
     char *salt_path = NULL;
@@ -315,7 +418,7 @@ int encryption_create_verifier(const EncryptionKey *key, const char *path)
     unsigned char *token = encryption_encrypt(key, (const unsigned char *)plaintext, strlen(plaintext), &out_len);
     if (!token) return -1;
 
-    FILE *f = fopen(path, "wbx");
+    FILE *f = open_secure_excl(path);
     if (!f) {
         free(token);
         return -1;

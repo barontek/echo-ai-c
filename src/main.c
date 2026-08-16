@@ -132,19 +132,18 @@ static SessionManager *init_session_manager(Conf *conf)
     char *data_dir = NULL;
     if (asprintf(&data_dir, "%s/.config/echo-ai", home) < 0) return NULL;
 
-    char *password = encryption_resolve_password_alloc();
-    if (!password)
+    char *password = NULL;
     {
         int is_first_run = encryption_first_run_detect(data_dir);
         const char *prompt = is_first_run ? "Create a database password: " : "Enter database password: ";
-        password = getpass(prompt);
-        if (!password)
+        char *pw = getpass(prompt);
+        if (!pw)
         {
             log_error("no password provided", NULL);
             free(data_dir);
             return NULL;
         }
-        password = str_dup(password);
+        password = str_dup(pw);
         if (!password)
         {
             free(data_dir);
@@ -485,14 +484,10 @@ static void run_tui(Conf *conf)
              * Esc/empty aborts startup cleanly. */
             while (sm == NULL && !password_cancelled)
             {
-                char *password = encryption_resolve_password_alloc();
-                if (!password)
-                {
-                    const char *prompt = encryption_first_run_detect(data_dir)
-                        ? "Create a database password: "
-                        : "Enter database password: ";
-                    password = tui_app_prompt_password(app, prompt);
-                }
+                const char *prompt = encryption_first_run_detect(data_dir)
+                    ? "Create a database password: "
+                    : "Enter database password: ";
+                char *password = tui_app_prompt_password(app, prompt);
                 if (!password)
                 {
                     password_cancelled = 1;

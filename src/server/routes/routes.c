@@ -72,7 +72,7 @@ int ws_add_message_to_json(cJSON *m, const Message *msg)
 const Route routes[] = {
     {"GET",  "/api/status",               0, 0, 0, handle_status},
     {"GET",  "/api/health",               0, 0, 0, handle_health},
-    {"GET",  "/api/health/detailed",      0, 0, 0, handle_health_detailed},
+    {"GET",  "/api/health/detailed",      0, 1, 0, handle_health_detailed},
     {"GET",  "/api/config",               0, 0, 0, handle_config},
     {"POST", "/api/setup",                0, 0, 0, handle_setup},
     {"POST", "/api/unlock",               0, 0, 0, handle_unlock},

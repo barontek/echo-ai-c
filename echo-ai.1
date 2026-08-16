@@ -34,18 +34,16 @@ Echo AI uses a custom \fB.conf\fR format. See \fBconfig.conf.example\fR for a co
 Configuration is loaded from \fBconfig.conf\fR in the current directory by default.
 Use \fB\-\-config\fR to specify a different path.
 .SH ENVIRONMENT
-.TP
-.B ECHO_PASSWORD
-Encryption password for session persistence. If not set, the server reads from
-\fB~/.config/echo\-ai/password\fR. If neither is available, session persistence is skipped
-and the server runs in unlocked mode (frontend handles password entry).
+No environment variables are read for the vault password: it is prompted
+by the TUI on startup and sent over the web UI's unlock endpoint by the
+frontend.
 .SH FILES
-.TP
-.I ~/.config/echo\-ai/password
-Optional password file for session encryption.
 .TP
 .I ~/.config/echo\-ai/salt
 Scrypt salt file (auto-generated on first run).
+.TP
+.I ~/.config/echo\-ai/.pepper
+Per-vault secret mixed into key derivation (auto-generated on first run).
 .TP
 .I ~/.config/echo\-ai/.verifier
 Encrypted verifier token for password validation.

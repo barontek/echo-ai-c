@@ -145,12 +145,6 @@ carried in the `Sec-WebSocket-Protocol` subprotocol value (e.g. `new WebSocket('
 and echoed back in the 101 response. Non-browser clients (curl, websocat) may keep using the
 `X-Unlock-Token` header instead.
 
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `ECHO_PASSWORD` | Encryption password for session persistence |
-
 ## Project Structure
 
 ```

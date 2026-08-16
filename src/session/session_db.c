@@ -22,16 +22,18 @@ int mkdir_p(const char *path)
     int len = snprintf(tmp, sizeof(tmp), "%s", path);
     if (len <= 0 || len >= (int)sizeof(tmp)) return -1;
 
+    /* 0700: the vault directory holds key material (salt, pepper,
+     * verifier) and must not be traversable or listable by others. */
     for (int i = 0; i < len; i++)
     {
         if (tmp[i] == '/')
         {
             tmp[i] = '\0';
-            mkdir(tmp, 0755);
+            mkdir(tmp, 0700);
             tmp[i] = '/';
         }
     }
-    return mkdir(path, 0755);
+    return mkdir(path, 0700);
 }
 
 int init_db(sqlite3 *db)

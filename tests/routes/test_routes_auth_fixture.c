@@ -144,9 +144,11 @@ int encryption_salt_load(const char *path, unsigned char *salt, int *salt_len)
 }
 
 int encryption_key_derive(const char *password, const unsigned char *salt,
-                           int salt_len, EncryptionKey *key)
+                          int salt_len, const unsigned char *pepper,
+                          int pepper_len, EncryptionKey *key)
 {
-    (void)password; (void)salt; (void)salt_len; (void)key;
+    (void)password; (void)salt; (void)salt_len;
+    (void)pepper; (void)pepper_len; (void)key;
     return stub_key_derive_result;
 }
 

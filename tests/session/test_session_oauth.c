@@ -342,7 +342,7 @@ START_TEST(test_migration_change_password_asprintf_failure_aborts_cleanly)
 {
     for (int fail_at = 1; fail_at <= 3; fail_at++)
     {
-        SessionManager *sm = session_manager_create(tmpdir, "old_pw");
+        SessionManager *sm = session_manager_create(tmpdir, "old_password");
         ck_assert_ptr_nonnull(sm);
         Session *s = session_manager_create_session(sm, "mig test");
         ck_assert_ptr_nonnull(s);
@@ -351,13 +351,13 @@ START_TEST(test_migration_change_password_asprintf_failure_aborts_cleanly)
         session_free(s);
 
         session_manager_test_set_asprintf_fail(fail_at);
-        int rc = migration_change_password(sm, "new_pw");
+        int rc = migration_change_password(sm, "new_password");
         session_manager_test_set_asprintf_fail(-1);
         ck_assert_int_eq(rc, -1);
 
         /* old password still opens the store and the session survives */
         session_manager_free(sm);
-        sm = session_manager_create(tmpdir, "old_pw");
+        sm = session_manager_create(tmpdir, "old_password");
         ck_assert_ptr_nonnull(sm);
         Session *loaded = session_manager_load_session_alloc(sm, session_id);
         ck_assert_ptr_nonnull(loaded);

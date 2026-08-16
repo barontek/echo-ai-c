@@ -61,10 +61,10 @@ void handle_setup(HTTPRequest *req, Client *client, ServerContext *ctx)
     }
 
     cJSON *pw = cJSON_GetObjectItem(json, "password");
-    if (!pw || !pw->valuestring || strlen(pw->valuestring) < 4)
+    if (!pw || !pw->valuestring || strlen(pw->valuestring) < 8)
     {
         cJSON_Delete(json);
-        server_response_error(client, 400, "password must be at least 4 characters");
+        server_response_error(client, 400, "password must be at least 8 characters");
         return;
     }
     char *password = str_dup(pw->valuestring);
