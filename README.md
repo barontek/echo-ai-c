@@ -37,6 +37,11 @@ and WebSocket to `127.0.0.1:8080`, and issues an internal-CA cert for
 `localhost` (ports in `deploy/Caddyfile`; the frontend uses relative URLs,
 so no client changes are needed).
 
+So the plaintext backend is not exposed on the network, set
+`bind = 127.0.0.1` in the `[server]` section of `config.conf` (the default
+is `0.0.0.0`, which keeps echo-ai reachable from the LAN when run without
+the proxy).
+
 The internal CA is not in any system trust store (deliberately), so the
 first visit shows a browser warning. To silence it, import Caddy's root CA
 into your browser (per-user, not system-wide):

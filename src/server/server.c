@@ -523,7 +523,20 @@ int server_start(ServerContext *ctx)
     server->data = ctx;
 
     struct sockaddr_in addr;
-    uv_ip4_addr("0.0.0.0", ctx->port, &addr);
+    const char *bind = ctx->bind ? ctx->bind : "0.0.0.0";
+    if (uv_ip4_addr(bind, ctx->port, &addr) != 0)
+    {
+        /* Invalid bind string (e.g. an IPv6 literal): fall back to
+         * all-interfaces rather than failing to start. */
+        log_error("invalid server.bind value, falling back to 0.0.0.0",
+                  "bind", bind, NULL);
+        bind = "0.0.0.0";
+        if (uv_ip4_addr(bind, ctx->port, &addr) != 0)
+        {
+            free(server);
+            return -1;
+        }
+    }
 
     uv_tcp_bind(server, (const struct sockaddr *)&addr, 0);
 
@@ -537,8 +550,8 @@ int server_start(ServerContext *ctx)
 
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", ctx->port);
-    log_info("server listening", "port", port_str, NULL);
-    printf("Echo AI server started on http://localhost:%d\n", ctx->port);
+    log_info("server listening", "addr", bind, "port", port_str, NULL);
+    printf("Echo AI server started on http://%s:%d\n", bind, ctx->port);
     fflush(stdout);
 
     uv_run(ctx->loop, UV_RUN_DEFAULT);

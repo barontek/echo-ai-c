@@ -197,6 +197,10 @@ api_key = your-api-key-here
 [server]
 # HTTP server port (default: 8080)
 port = 8080
+# Bind address (default: 0.0.0.0 — all interfaces). Set to 127.0.0.1 when
+# running behind the TLS proxy (make run-tls) so the plaintext port is not
+# exposed on the network.
+# bind = 127.0.0.1
 
 [tui]
 # Terminal UI appearance (used by --cli mode)

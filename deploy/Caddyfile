@@ -7,6 +7,10 @@
 # Caddy issues an internal-CA cert for localhost automatically; the first
 # browser visit shows a warning unless caddy's local root is trusted.
 # Change the port here if config.conf uses a different `port`.
+
+# For this proxy to mean anything, echo-ai must not also listen on the
+# network: set `bind = 127.0.0.1` in config.conf's [server] section so the
+# plaintext port 8080 stays local.
 localhost:8443 {
 	reverse_proxy 127.0.0.1:8080
 }

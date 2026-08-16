@@ -564,6 +564,7 @@ static void run_web(Conf *conf, const char *config_path)
     int session_enabled = !session_enabled_str || strcmp(session_enabled_str, "false") != 0;
 
     int port = conf_get_int(conf, "server.port", 8080);
+    const char *bind = conf_get(conf, "server.bind");
 
     ServerContext ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -606,6 +607,7 @@ static void run_web(Conf *conf, const char *config_path)
     ctx.safety = rt->safety;
     ctx.conf = (Conf *)conf;
     ctx.port = port;
+    ctx.bind = bind;
     {
         const char *home = getenv("HOME");
         char *rl_db = NULL;

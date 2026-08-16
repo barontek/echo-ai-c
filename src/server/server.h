@@ -48,6 +48,10 @@ typedef struct {
     unsigned long auth_generation;
     uv_loop_t *loop;
     int port;
+    /* Bind address ("0.0.0.0" by default; "127.0.0.1" when fronted by a
+     * TLS proxy so the plaintext port stays off the network). Borrowed
+     * from Conf, like config_path. */
+    const char *bind;
     RateLimiter *rate_limiter;
     Metrics *metrics;
     ChangeTracker *change_tracker;
