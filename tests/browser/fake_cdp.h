@@ -32,6 +32,10 @@ typedef struct FakeCdp {
     FakeCdpRule *rules;        /* borrowed; valid until fake_cdp_stop */
     int rule_count;
     int requests_seen;
+    cJSON *last_request;       /* deep copy of the most recent request
+                                  (id/method/params); written only by the
+                                  peer thread, owned by the fake (freed in
+                                  fake_cdp_stop and on the next request) */
 } FakeCdp;
 
 /**
@@ -43,6 +47,17 @@ typedef struct FakeCdp {
  * Return: allocated FakeCdp (release with fake_cdp_stop), or NULL.
  */
 FakeCdp *fake_cdp_start(int *client_fd_out, FakeCdpRule *rules, int count);
+
+/**
+ * fake_cdp_last_request_copy - snapshot of the most recently received command
+ * @f: fake.
+ *
+ * Caller owns the returned deep copy (free with cJSON_Delete); NULL if no
+ * command has been received yet. Consumers must call this only after a
+ * synchronous cdp_client_call has returned, at which point the peer thread
+ * has finished with the request it was answering.
+ */
+cJSON *fake_cdp_last_request_copy(FakeCdp *f);
 
 /**
  * fake_cdp_stop - shut the peer down

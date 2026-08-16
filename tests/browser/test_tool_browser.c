@@ -82,6 +82,13 @@ static void rules_add_screenshot(FakeCdpRule *rules, int *n)
                                   .payload = payload};
 }
 
+static void rules_add_click(FakeCdpRule *rules, int *n)
+{
+    /* Both mousePressed and mouseReleased match this rule. */
+    rules[(*n)++] = (FakeCdpRule){.match = "Input.dispatchMouseEvent",
+                                  .payload = cJSON_CreateObject()};
+}
+
 static void rules_add_generic_evaluate(FakeCdpRule *rules, int *n)
 {
     /* Catch-all for anything else (evaluate "1+1" etc.): a valid
@@ -114,6 +121,7 @@ static Fixture fixture_new(void)
     rules_add_ready(fx.rules, &n, "complete");
     rules_add_extract(fx.rules, &n);
     rules_add_screenshot(fx.rules, &n);
+    rules_add_click(fx.rules, &n);
     rules_add_generic_evaluate(fx.rules, &n);
 
     int client_fd = -1;
@@ -212,6 +220,51 @@ START_TEST(test_tool_browser_screenshot)
         {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
     ck_assert_int_eq(0, memcmp(magic, png_magic, 8));
     unlink(path);
+
+    fixture_free(&fx);
+}
+END_TEST
+
+START_TEST(test_tool_browser_click)
+{
+    Fixture fx = fixture_new();
+
+    ToolResult *r = run(fx.tool,
+                        "{\"action\":\"click\",\"x\":123,\"y\":456}");
+    ck_assert_ptr_null(r->error);
+    ck_assert_ptr_nonnull(r->content);
+    ck_assert_ptr_nonnull(strstr(r->content, "123"));
+    ck_assert_ptr_nonnull(strstr(r->content, "456"));
+    ck_assert_ptr_nonnull(strstr(r->content, "left"));
+    tool_result_free(r);
+
+    /* Non-default button passes through to the browser layer. */
+    r = run(fx.tool, "{\"action\":\"click\",\"x\":1,\"y\":2,"
+                     "\"button\":\"right\"}");
+    ck_assert_ptr_null(r->error);
+    ck_assert_ptr_nonnull(strstr(r->content, "right"));
+    tool_result_free(r);
+
+    /* A button that CDP's MouseButton enum does not define is a
+     * validation error (so the LLM learns the vocabulary). */
+    r = run(fx.tool, "{\"action\":\"click\",\"x\":1,\"y\":2,"
+                     "\"button\":\"sideways\"}");
+    ck_assert_ptr_nonnull(r->error);
+    ck_assert_str_eq("validation_error", r->error_category);
+    tool_result_free(r);
+
+    /* A non-string button arg is rejected too. */
+    r = run(fx.tool, "{\"action\":\"click\",\"x\":1,\"y\":2,"
+                     "\"button\":0}");
+    ck_assert_ptr_nonnull(r->error);
+    ck_assert_str_eq("validation_error", r->error_category);
+    tool_result_free(r);
+
+    /* Missing coordinates is a validation error. */
+    r = run(fx.tool, "{\"action\":\"click\"}");
+    ck_assert_ptr_nonnull(r->error);
+    ck_assert_str_eq("validation_error", r->error_category);
+    tool_result_free(r);
 
     fixture_free(&fx);
 }
@@ -346,6 +399,7 @@ static Suite *tool_browser_suite(void)
     tcase_add_test(tc, test_tool_browser_navigate_defaults);
     tcase_add_test(tc, test_tool_browser_evaluate);
     tcase_add_test(tc, test_tool_browser_screenshot);
+    tcase_add_test(tc, test_tool_browser_click);
     tcase_add_test(tc, test_tool_browser_validation_errors);
     tcase_add_test(tc, test_tool_browser_open_already_open);
     tcase_add_test(tc, test_tool_browser_status_and_close);

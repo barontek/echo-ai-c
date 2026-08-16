@@ -679,6 +679,167 @@ START_TEST(test_browser_screenshot_bad_base64)
 }
 END_TEST
 
+START_TEST(test_browser_click_sends_press_and_release)
+{
+    FakeCdpRule *rules = rules_alloc();
+    int n = 0;
+    rules_add_page(rules, &n);
+    /* Two Input.dispatchMouseEvent calls: mousePressed then
+     * mouseReleased. Both match the same rule and return an empty
+     * result. */
+    rules[n++] = (FakeCdpRule){.match = "Input.dispatchMouseEvent",
+                               .payload = cJSON_CreateObject()};
+    rules[n++] = (FakeCdpRule){.match = NULL};
+
+    int client_fd = -1;
+    FakeCdp *fake = fake_cdp_start(&client_fd, rules, n);
+    ck_assert_ptr_nonnull(fake);
+
+    CdpClient *c = cdp_client_new(client_fd, client_fd);
+    ck_assert_ptr_nonnull(c);
+    BrowserSession *s = browser_test_attach(c);
+    ck_assert_ptr_nonnull(s);
+
+    /* First click: page setup (createTarget + attachToTarget) plus the
+     * two mouse events = 4 requests. */
+    ck_assert_int_eq(0, browser_click(s, 123, 456, NULL, 2000));
+    ck_assert_int_eq(4, fake->requests_seen);
+
+    /* Second click reuses the session id: only the two mouse events. */
+    int seen = fake->requests_seen;
+    ck_assert_int_eq(0, browser_click(s, 7, 8, NULL, 2000));
+    ck_assert_int_eq(seen + 2, fake->requests_seen);
+
+    browser_close(s);
+    cdp_client_close(c);
+    fake_cdp_stop(fake);
+    rules_free(rules, n);
+}
+END_TEST
+
+START_TEST(test_browser_click_button_is_string_enum)
+{
+    /* Regression: CDP Input.dispatchMouseEvent declares `button` as the
+     * MouseButton string enum ("left"); sending a JSON number makes real
+     * Chromium reject the call with "Invalid parameters", which surfaced
+     * as the click tool failing with Input.dispatchMouseEvent: Invalid
+     * parameters. */
+    FakeCdpRule *rules = rules_alloc();
+    int n = 0;
+    rules_add_page(rules, &n);
+    rules[n++] = (FakeCdpRule){.match = "Input.dispatchMouseEvent",
+                               .payload = cJSON_CreateObject()};
+    rules[n++] = (FakeCdpRule){.match = NULL};
+
+    int client_fd = -1;
+    FakeCdp *fake = fake_cdp_start(&client_fd, rules, n);
+    ck_assert_ptr_nonnull(fake);
+
+    CdpClient *c = cdp_client_new(client_fd, client_fd);
+    ck_assert_ptr_nonnull(c);
+    BrowserSession *s = browser_test_attach(c);
+    ck_assert_ptr_nonnull(s);
+
+    /* NULL button defaults to "left" (the primary path). */
+    ck_assert_int_eq(0, browser_click(s, 457, 389, NULL, 2000));
+
+    /* The last request is the mouseReleased half; both halves carry the
+     * same params, so inspecting this one covers them. */
+    cJSON *req = fake_cdp_last_request_copy(fake);
+    ck_assert_ptr_nonnull(req);
+    cJSON *params = cJSON_GetObjectItem(req, "params");
+    ck_assert_ptr_nonnull(params);
+    cJSON *btn = cJSON_GetObjectItem(params, "button");
+    ck_assert_ptr_nonnull(btn);
+    ck_assert_int_eq(1, cJSON_IsString(btn));
+    ck_assert_str_eq("left", btn->valuestring);
+    cJSON *x = cJSON_GetObjectItem(params, "x");
+    cJSON *y = cJSON_GetObjectItem(params, "y");
+    ck_assert_ptr_nonnull(x);
+    ck_assert_ptr_nonnull(y);
+    ck_assert_int_eq(457, (int)x->valuedouble);
+    ck_assert_int_eq(389, (int)y->valuedouble);
+    cJSON_Delete(req);
+
+    browser_close(s);
+    cdp_client_close(c);
+    fake_cdp_stop(fake);
+    rules_free(rules, n);
+}
+END_TEST
+
+START_TEST(test_browser_click_uses_chosen_button)
+{
+    /* A non-default button must pass through to both halves of the
+     * click, still as the string enum. */
+    FakeCdpRule *rules = rules_alloc();
+    int n = 0;
+    rules_add_page(rules, &n);
+    rules[n++] = (FakeCdpRule){.match = "Input.dispatchMouseEvent",
+                               .payload = cJSON_CreateObject()};
+    rules[n++] = (FakeCdpRule){.match = NULL};
+
+    int client_fd = -1;
+    FakeCdp *fake = fake_cdp_start(&client_fd, rules, n);
+    ck_assert_ptr_nonnull(fake);
+
+    CdpClient *c = cdp_client_new(client_fd, client_fd);
+    ck_assert_ptr_nonnull(c);
+    BrowserSession *s = browser_test_attach(c);
+    ck_assert_ptr_nonnull(s);
+
+    ck_assert_int_eq(0, browser_click(s, 10, 20, "right", 2000));
+    ck_assert_int_eq(4, fake->requests_seen);
+
+    cJSON *req = fake_cdp_last_request_copy(fake);
+    ck_assert_ptr_nonnull(req);
+    cJSON *params = cJSON_GetObjectItem(req, "params");
+    ck_assert_ptr_nonnull(params);
+    cJSON *btn = cJSON_GetObjectItem(params, "button");
+    ck_assert_ptr_nonnull(btn);
+    ck_assert_int_eq(1, cJSON_IsString(btn));
+    ck_assert_str_eq("right", btn->valuestring);
+    cJSON_Delete(req);
+
+    browser_close(s);
+    cdp_client_close(c);
+    fake_cdp_stop(fake);
+    rules_free(rules, n);
+}
+END_TEST
+
+START_TEST(test_browser_click_rejects_bad_button)
+{
+    FakeCdpRule *rules = rules_alloc();
+    int n = 0;
+    rules_add_page(rules, &n);
+    rules[n++] = (FakeCdpRule){.match = "Input.dispatchMouseEvent",
+                               .payload = cJSON_CreateObject()};
+    rules[n++] = (FakeCdpRule){.match = NULL};
+
+    int client_fd = -1;
+    FakeCdp *fake = fake_cdp_start(&client_fd, rules, n);
+    ck_assert_ptr_nonnull(fake);
+
+    CdpClient *c = cdp_client_new(client_fd, client_fd);
+    ck_assert_ptr_nonnull(c);
+    BrowserSession *s = browser_test_attach(c);
+    ck_assert_ptr_nonnull(s);
+
+    /* Validation happens before any page setup, so nothing goes on the
+     * wire: requests_seen stays 0. */
+    ck_assert_int_eq(-1, browser_click(s, 10, 20, "sideways", 2000));
+    ck_assert_int_eq(0, fake->requests_seen);
+    ck_assert_ptr_nonnull(browser_last_error(s));
+    ck_assert_ptr_nonnull(strstr(browser_last_error(s), "unsupported"));
+
+    browser_close(s);
+    cdp_client_close(c);
+    fake_cdp_stop(fake);
+    rules_free(rules, n);
+}
+END_TEST
+
 START_TEST(test_browser_fetch_text)
 {
     FakeCdpRule *rules = rules_alloc();
@@ -965,6 +1126,10 @@ static Suite *browser_suite(void)
     tcase_add_test(tc_browser, test_browser_evaluate_reports_exception);
     tcase_add_test(tc_browser, test_browser_screenshot_writes_png);
     tcase_add_test(tc_browser, test_browser_screenshot_bad_base64);
+    tcase_add_test(tc_browser, test_browser_click_sends_press_and_release);
+    tcase_add_test(tc_browser, test_browser_click_button_is_string_enum);
+    tcase_add_test(tc_browser, test_browser_click_uses_chosen_button);
+    tcase_add_test(tc_browser, test_browser_click_rejects_bad_button);
     tcase_add_test(tc_browser, test_browser_fetch_text);
     tcase_add_test(tc_browser, test_browser_base64_vectors);
     tcase_add_test(tc_browser, test_browser_navigate_alloc_failures);

@@ -180,6 +180,12 @@ static void *fake_cdp_main(void *arg)
                 if (cJSON_IsNumber(id) && cJSON_IsString(method))
                 {
                     f->requests_seen++;
+                    /* Snapshot the request before answering: tests assert
+                     * on the exact params the browser layer sent (e.g. the
+                     * button enum in Input.dispatchMouseEvent). */
+                    cJSON *track = cJSON_Duplicate(req, 1);
+                    cJSON_Delete(f->last_request);
+                    f->last_request = track;
                     fake_respond(f, (int)id->valuedouble,
                                  method->valuestring, req);
                 }
@@ -222,10 +228,17 @@ FakeCdp *fake_cdp_start(int *client_fd_out, FakeCdpRule *rules, int count)
     return f;
 }
 
+cJSON *fake_cdp_last_request_copy(FakeCdp *f)
+{
+    if (!f || !f->last_request) return NULL;
+    return cJSON_Duplicate(f->last_request, 1);
+}
+
 void fake_cdp_stop(FakeCdp *f)
 {
     if (!f) return;
     close(f->fd);
     pthread_join(f->thread, NULL);
+    cJSON_Delete(f->last_request);
     free(f);
 }

@@ -139,6 +139,31 @@ int browser_evaluate(BrowserSession *s, const char *expression,
 int browser_screenshot(BrowserSession *s, const char *path, int timeout_ms);
 
 /**
+ * browser_click - send a native (trusted) mouse click at viewport coords
+ * @s: session.
+ * @x: viewport x (CSS pixels) of the click.
+ * @y: viewport y (CSS pixels) of the click.
+ * @button: which mouse button to press; one of "left", "middle", "right",
+ *   "back" or "forward" (CDP MouseButton enum). NULL or "" means "left".
+ * @timeout_ms: per-command timeout; 0 = session default.
+ *
+ * Dispatches CDP Input.dispatchMouseEvent mousePressed + mouseReleased
+ * at the given point with the given button. Unlike page-JS synthetic
+ * clicks (isTrusted=false, which anti-bot widgets like Cloudflare
+ * Turnstile ignore), these are trusted browser-level input events, so
+ * they behave like a real user click. Coordinates are in CSS viewport
+ * pixels (0,0 = top-left of the visible page area).
+ *
+ * Any string that is not one of the five enum values is rejected and
+ * the call fails (no command is sent). The returned error tells the
+ * caller which buttons are valid.
+ *
+ * Return: 0 on success, -1 on failure (reason in browser_last_error()).
+ */
+int browser_click(BrowserSession *s, int x, int y, const char *button,
+                  int timeout_ms);
+
+/**
  * browser_fetch_text - navigate and return the page text
  * @s: session.
  * @url: http(s) URL.

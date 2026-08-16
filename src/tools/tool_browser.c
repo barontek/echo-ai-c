@@ -183,6 +183,73 @@ static ToolResult *tool_browser_screenshot(Tool *self, cJSON *args)
     return tool_result_create(out);
 }
 
+/* Must track browser.h's browser_click validation: the tool reports bad
+ * button names as a validation_error so the LLM can self-correct against
+ * the vocabulary, while the browser layer is the hard CDP-enum guarantee.
+ * Return: 1 = accepted (out_button set, or NULL for the "left" default),
+ * 0 = present but not a CDP MouseButton value, -1 = present but not a
+ * string at all. */
+static int parse_click_button(cJSON *args, const char **out_button)
+{
+    cJSON *b_j = cJSON_GetObjectItem(args, "button");
+    *out_button = NULL;
+    if (!b_j) return 1; /* absent: default left */
+    if (!cJSON_IsString(b_j)) return -1;
+
+    static const char *const allowed[] = {
+        "left", "middle", "right", "back", "forward",
+    };
+    for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++)
+        if (strcmp(b_j->valuestring, allowed[i]) == 0)
+        {
+            *out_button = b_j->valuestring;
+            return 1;
+        }
+    return 0;
+}
+
+static ToolResult *tool_browser_click(Tool *self, cJSON *args)
+{
+    ToolResult *open_result = tool_browser_ensure(self, args);
+    if (open_result) return open_result;
+
+    BrowserCtx *ctx = self->ctx;
+    cJSON *x_j = cJSON_GetObjectItem(args, "x");
+    cJSON *y_j = cJSON_GetObjectItem(args, "y");
+    if (!cJSON_IsNumber(x_j) || !cJSON_IsNumber(y_j))
+        return tool_result_error("click requires numeric 'x' and 'y' "
+                                 "viewport coordinates",
+                                 "validation_error");
+
+    const char *button = NULL;
+    int bc = parse_click_button(args, &button);
+    if (bc <= 0)
+        return tool_result_error(bc < 0
+            ? "button must be a string (left, middle, right, back or "
+              "forward)"
+            : "unsupported button (expected left, middle, right, back or "
+              "forward)",
+            "validation_error");
+
+    int x = (int)x_j->valuedouble;
+    int y = (int)y_j->valuedouble;
+    int ms = tool_browser_get_timeout(args);
+    if (browser_click(ctx->session, x, y, button, ms) != 0)
+    {
+        const char *err = browser_last_error(ctx->session);
+        return tool_result_error(err ? err : "click failed",
+                                 "execution_error");
+    }
+
+    char out[160];
+    int n = snprintf(out, sizeof(out),
+                     "native %s click sent at viewport (%d, %d)",
+                     button ? button : "left", x, y);
+    if (n <= 0 || (size_t)n >= sizeof(out))
+        return tool_result_error("native click sent", "execution_error");
+    return tool_result_create(out);
+}
+
 static ToolResult *tool_browser_status(Tool *self)
 {
     BrowserCtx *ctx = self->ctx;
@@ -224,6 +291,8 @@ static ToolResult *tool_browser_execute(Tool *self, const char *args_json)
         result = tool_browser_evaluate(self, args);
     else if (strcmp(action, "screenshot") == 0)
         result = tool_browser_screenshot(self, args);
+    else if (strcmp(action, "click") == 0)
+        result = tool_browser_click(self, args);
     else if (strcmp(action, "status") == 0)
         result = tool_browser_status(self);
     else if (strcmp(action, "close") == 0)
@@ -231,7 +300,7 @@ static ToolResult *tool_browser_execute(Tool *self, const char *args_json)
     else
     {
         const char *list = "open, navigate, evaluate, screenshot, "
-                           "status, close";
+                           "click, status, close";
         char msg[128];
         int n = snprintf(msg, sizeof(msg),
                          "unknown action '%s' (expected one of: %s)",
@@ -281,14 +350,15 @@ Tool *tool_browser_create(SafetyConfig *safety)
     t->name = str_dup("browser");
     t->description = str_dup(
         "Open a visible desktop browser window and control it: navigate "
-        "to pages, read page text, run JavaScript, take screenshots. "
-        "The browser is a real Chromium-family browser (auto-discovered; "
-        "override with ECHO_BROWSER_BIN or the 'binary' argument) and "
-        "the user can watch every action in the window.");
+        "to pages, read page text, run JavaScript, take screenshots, "
+        "and send native (trusted) mouse clicks. The browser is a real "
+        "Chromium-family browser (auto-discovered; override with "
+        "ECHO_BROWSER_BIN or the 'binary' argument) and the user can "
+        "watch every action in the window.");
     t->parameters_schema = str_dup(
         "{\"type\":\"object\",\"properties\":{"
         "\"action\":{\"type\":\"string\",\"enum\":[\"open\",\"navigate\","
-        "\"evaluate\",\"screenshot\",\"status\",\"close\"],"
+        "\"evaluate\",\"screenshot\",\"click\",\"status\",\"close\"],"
         "\"description\":\"what to do\"},"
         "\"url\":{\"type\":\"string\",\"description\":\"http(s) URL for "
         "navigate\"},"
@@ -296,6 +366,14 @@ Tool *tool_browser_create(SafetyConfig *safety)
         "to run for evaluate; the result value is returned as JSON\"},"
         "\"path\":{\"type\":\"string\",\"description\":\"file to write "
         "the screenshot to (default: a temp file)\"},"
+        "\"x\":{\"type\":\"integer\",\"description\":\"viewport x (CSS "
+        "pixels) for the click action\"},"
+        "\"y\":{\"type\":\"integer\",\"description\":\"viewport y (CSS "
+        "pixels) for the click action\"},"
+        "\"button\":{\"type\":\"string\",\"enum\":[\"left\",\"middle\","
+        "\"right\",\"back\",\"forward\"],\"description\":\"mouse button "
+        "for the click action (default left; right opens a context menu, "
+        "middle opens a link in a new tab)\"},"
         "\"max_chars\":{\"type\":\"integer\",\"description\":\"page text "
         "cap (default 25000)\"},"
         "\"timeout\":{\"type\":\"number\",\"description\":\"seconds to "

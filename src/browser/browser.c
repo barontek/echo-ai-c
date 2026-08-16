@@ -1051,6 +1051,85 @@ int browser_screenshot(BrowserSession *s, const char *path, int timeout_ms)
     return 0;
 }
 
+/* CDP Input.dispatchMouseEvent only dispatches a real button-press for
+ * these MouseButton enum values; "none" (used for mouseMoved) press+release
+ * would be a silent no-op click, so it is rejected like any unknown value. */
+static int valid_click_button(const char *button)
+{
+    static const char *const allowed[] = {
+        "left", "middle", "right", "back", "forward",
+    };
+    if (!button) return 0;
+    for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++)
+        if (strcmp(button, allowed[i]) == 0) return 1;
+    return 0;
+}
+
+/**
+ * browser_click - see browser.h
+ */
+int browser_click(BrowserSession *s, int x, int y, const char *button,
+                  int timeout_ms)
+{
+    if (!s) return -1;
+
+    if (!button || !button[0]) button = "left";
+    else if (!valid_click_button(button))
+    {
+        set_error(s, "click: unsupported mouse button '%s' (expected "
+                     "left, middle, right, back or forward)", button);
+        return -1;
+    }
+
+    int ms = timeout_ms > 0 ? timeout_ms
+                            : (s->timeout_ms > 0 ? s->timeout_ms
+                                                 : DEFAULT_TIMEOUT_MS);
+    if (browser_ensure_page(s, ms) != 0) return -1;
+
+    /* mousePressed then mouseReleased at the same point = a click.
+     * These are trusted browser-level input events (isTrusted=true),
+     * unlike page-JS synthetic clicks, so anti-bot widgets that ignore
+     * scripted clicks will still respond to them. */
+    cJSON *params = cJSON_CreateObject();
+    if (!params)
+    {
+        set_error(s, "OOM");
+        return -1;
+    }
+    cJSON_AddStringToObject(params, "type", "mousePressed");
+    cJSON_AddNumberToObject(params, "x", x);
+    cJSON_AddNumberToObject(params, "y", y);
+    /* CDP names button events with the MouseButton string enum; a numeric
+     * button (as for the `buttons` bitset) is rejected with "Invalid
+     * parameters". */
+    cJSON_AddStringToObject(params, "button", button);
+    cJSON_AddNumberToObject(params, "clickCount", 1);
+    cJSON *result = cdp_call_result(s, "Input.dispatchMouseEvent", params,
+                                    s->session_id, ms);
+    cJSON_Delete(params);
+    if (!result) return -1;
+    cJSON_Delete(result);
+
+    params = cJSON_CreateObject();
+    if (!params)
+    {
+        set_error(s, "OOM");
+        return -1;
+    }
+    cJSON_AddStringToObject(params, "type", "mouseReleased");
+    cJSON_AddNumberToObject(params, "x", x);
+    cJSON_AddNumberToObject(params, "y", y);
+    cJSON_AddStringToObject(params, "button", button);
+    cJSON_AddNumberToObject(params, "clickCount", 1);
+    result = cdp_call_result(s, "Input.dispatchMouseEvent", params,
+                             s->session_id, ms);
+    cJSON_Delete(params);
+    if (!result) return -1;
+    cJSON_Delete(result);
+
+    return 0;
+}
+
 /**
  * browser_fetch_text - see browser.h
  */
