@@ -186,6 +186,11 @@ enabled = bash, read_file, write_file, list_dir, glob, grep, web_fetch, web_sear
 #   ECHO_BROWSER_USER_DATA_DIR  persistent profile (default: temp, removed on close)
 #   ECHO_BROWSER_FLAGS        extra args, e.g. "--no-sandbox --window-size=1440,900"
 
+[browser]
+# Window mode for the browser tool: true = headless (no window),
+# false = visible window on the desktop (default)
+headless = false
+
 [search]
 # Search provider for web_search tool: brave, duckduckgo, or tavily
 provider = brave

@@ -111,6 +111,18 @@ int registry_enabled_count(void);
 void registry_set_change_tracker(ChangeTracker *ct);
 
 /**
+ * registry_set_browser_headless - set the browser tool's window mode
+ * @headless: 1 = run without a window, 0 = visible window (default).
+ *
+ * Applies to every browser session the tool opens after this call;
+ * sessions already open are unaffected. Read from the browser.headless
+ * config key at startup. Not compiled under REGISTRY_TEST.
+ *
+ * Return: nothing. Not thread-safe.
+ */
+void registry_set_browser_headless(int headless);
+
+/**
  * registry_set_search_provider - install the search provider singleton
  * @sp: provider to install; ownership transfers to the registry, which
  *   releases it via its destroy() callback in registry_destroy().

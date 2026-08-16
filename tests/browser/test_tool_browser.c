@@ -21,6 +21,7 @@
 /* Declared in tool_browser.c under TOOL_BROWSER_TEST. */
 extern Tool *tool_browser_create(SafetyConfig *safety);
 extern void tool_browser_test_set_session(Tool *self, BrowserSession *s);
+extern void tool_browser_set_headless(Tool *self, int headless);
 
 static const char *test_tmpdir(void)
 {
@@ -314,6 +315,27 @@ START_TEST(test_tool_browser_open_failure_reports_error)
 }
 END_TEST
 
+START_TEST(test_tool_browser_set_headless)
+{
+    /* The mode only affects spawn, so with an injected session every
+     * action must behave identically in both modes. */
+    Fixture fx = fixture_new();
+    tool_browser_set_headless(fx.tool, 1);
+    ToolResult *r = run(fx.tool,
+        "{\"action\":\"navigate\",\"url\":\"https://tool.example/\"}");
+    ck_assert_ptr_null(r->error);
+    ck_assert_ptr_nonnull(strstr(r->content, "Title: ToolPage"));
+    tool_result_free(r);
+
+    tool_browser_set_headless(fx.tool, 0);
+    r = run(fx.tool, "{\"action\":\"evaluate\",\"expression\":\"1\"}");
+    ck_assert_ptr_null(r->error);
+    tool_result_free(r);
+
+    fixture_free(&fx);
+}
+END_TEST
+
 static Suite *tool_browser_suite(void)
 {
     Suite *s = suite_create("tool_browser");
@@ -328,6 +350,7 @@ static Suite *tool_browser_suite(void)
     tcase_add_test(tc, test_tool_browser_open_already_open);
     tcase_add_test(tc, test_tool_browser_status_and_close);
     tcase_add_test(tc, test_tool_browser_open_failure_reports_error);
+    tcase_add_test(tc, test_tool_browser_set_headless);
     suite_add_tcase(s, tc);
 
     return s;

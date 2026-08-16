@@ -207,6 +207,15 @@ static RuntimeCtx *setup_runtime(Conf *conf)
     }
 
     {
+        /* browser.headless: 0 = visible window on the desktop (default),
+         * 1 = headless. Env var ECHO_BROWSER_HEADLESS still wins inside
+         * the browser module when set. */
+        const char *bh = conf_get(conf, "browser.headless");
+        if (bh && strcmp(bh, "true") == 0)
+            registry_set_browser_headless(1);
+    }
+
+    {
         const char *sp_name = conf_get(conf, "search.provider");
         if (sp_name)
         {

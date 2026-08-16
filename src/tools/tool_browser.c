@@ -21,6 +21,7 @@
 
 typedef struct {
     BrowserSession *session;
+    int headless; /* 0 = visible window (default); 1 = no window */
 } BrowserCtx;
 
 static ToolResult *tool_browser_open(Tool *self, cJSON *args)
@@ -34,6 +35,7 @@ static ToolResult *tool_browser_open(Tool *self, cJSON *args)
 
     BrowserConfig cfg = {0};
     cfg.binary = binary;
+    cfg.headless = ctx->headless;
     char *err = NULL;
     ctx->session = browser_open(&cfg, &err);
     if (!ctx->session)
@@ -311,6 +313,22 @@ Tool *tool_browser_create(SafetyConfig *safety)
     t->destroy = tool_browser_destroy;
     t->ctx = ctx;
     return t;
+}
+
+/**
+ * tool_browser_set_headless - set the window mode for future opens
+ * @self: tool.
+ * @headless: 1 = run without a window, 0 = visible window (default).
+ *
+ * Configured once at startup from the browser.headless config key
+ * (registry_set_browser_headless); the mode applies to every session
+ * this tool opens. Opening an already-running session is unaffected.
+ */
+void tool_browser_set_headless(Tool *self, int headless)
+{
+    if (!self || !self->ctx) return;
+    BrowserCtx *ctx = self->ctx;
+    ctx->headless = headless ? 1 : 0;
 }
 
 #ifdef TOOL_BROWSER_TEST

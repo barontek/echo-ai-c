@@ -247,6 +247,16 @@ void registry_set_change_tracker(ChangeTracker *ct)
             tool_write_file_set_change_tracker(tools[i], ct);
     }
 }
+
+void registry_set_browser_headless(int headless)
+{
+    void tool_browser_set_headless(Tool *tool, int headless);
+    for (int i = 0; i < tool_count; i++)
+    {
+        if (strcmp(tools[i]->name, "browser") == 0)
+            tool_browser_set_headless(tools[i], headless);
+    }
+}
 #endif
 
 void registry_set_search_provider(SearchProvider *sp)
