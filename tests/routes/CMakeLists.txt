@@ -43,6 +43,7 @@ endforeach()
 foreach(gen_unit general models)
     add_executable(test_routes_general_${gen_unit}
         ../../src/server/routes/routes_general.c
+        ../../src/llm/provider_models.c
         ../../src/config/config.c
         ../../src/utils/string_utils.c
         openai_oauth_stub.c

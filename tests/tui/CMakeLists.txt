@@ -90,3 +90,17 @@ add_executable(test_tool_args
 target_include_directories(test_tool_args PRIVATE ../../src)
 target_link_libraries(test_tool_args PRIVATE echo_ai_test_deps)
 add_test(NAME test_tool_args COMMAND test_tool_args)
+
+# --- tui_worker (job dispatch; agent + model fetcher stubbed in the test) ---
+add_executable(test_tui_worker
+    test_tui_worker.c
+    ../../src/tui/tui_worker.c
+    ../../src/tui/tui_events.c
+    ../../src/tui/tui_stream.c
+    ../../src/config/config.c
+    ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
+)
+target_include_directories(test_tui_worker PRIVATE ../../src)
+target_link_libraries(test_tui_worker PRIVATE echo_ai_test_deps)
+add_test(NAME test_tui_worker COMMAND test_tui_worker)

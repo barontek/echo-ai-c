@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <poll.h>
 #include <signal.h>
@@ -31,9 +32,53 @@
 #include "../utils/logging.h"
 #include "../tools/registry.h"
 #include "../session/session.h"
+#include "../llm/factory.h"
 
 /* Cap for the compacted tool-arguments text shown on header lines. */
 #define TOOL_ARGS_MAX 200
+
+/* What a deferred menu action runs once the picker has closed (blocking
+ * prompt flows cannot nest inside the modal ANSWERED handling). */
+enum {
+    MENU_ACTION_NONE = 0,
+    MENU_ACTION_CHANGE_PASSWORD
+};
+
+/* What the Ctrl-P picker will commit: a provider choice triggers a
+ * provider switch + model fetch; a model choice triggers a model switch. */
+enum {
+    PICKER_NONE = 0,
+    PICKER_PROVIDER,
+    PICKER_MODEL,
+    PICKER_MENU,          /* main menu: pick the next action */
+    PICKER_EFFORT,        /* reasoning-effort levels for the current provider */
+    PICKER_THEME,         /* theme presets */
+    PICKER_SESSION_LOAD,  /* session list -> switch */
+    PICKER_SESSION_DELETE, /* session list -> delete (then confirm) */
+    PICKER_SESSION_EXPORT, /* session list -> export (path input) */
+    PICKER_SESSION_RENAME  /* session list -> rename (name input) */
+};
+
+/* What the collected text of a menu-opened input modal does. */
+enum {
+    INPUT_NONE = 0,
+    INPUT_EXPORT_PATH,
+    INPUT_RENAME_NAME
+};
+
+/* What a menu-opened confirm modal commits. */
+enum {
+    CONFIRM_NONE = 0,
+    CONFIRM_DELETE
+};
+
+/* Forward decls: handle_event (earlier in the file) opens the pickers. */
+static void open_provider_picker(TuiApp *app);
+static void open_model_picker(TuiApp *app);
+static int picker_commit(TuiApp *app);
+static void rebuild_chat(TuiApp *app, const char *json);
+static void slash_theme(TuiApp *app, const char *style);
+static void slash_change_password(TuiApp *app);
 
 struct TuiApp {
     TuiAppCtx ctx;
@@ -53,14 +98,24 @@ struct TuiApp {
     TuiModal *modal;
     TuiWorker *worker;
     char *model;      /* status bar model (owned) */
+    char *provider;   /* status bar provider (owned) */
     char *session_id; /* status bar session id (owned) */
     char *title;      /* generated session title (owned); shown in status */
     char *status_msg; /* transient status message (owned) */
     char *active_tool; /* currently running tool (owned); NULL when idle */
     char *active_tool_args; /* compact args of the running tool (owned) */
+    char **pending_models;   /* fetched model names for the picker (owned) */
+    int pending_models_count;
+    int picker_context;      /* PICKER_*: what the open picker commits */
+    char *menu_session_id;   /* session picked via the menu (owned) */
+    int input_action;        /* INPUT_*: what the open input modal collects */
+    int confirm_action;      /* CONFIRM_*: what the open confirm modal commits */
+    int menu_action;         /* MENU_ACTION_*: deferred blocking menu action */
     char *log_path;   /* owned */
     size_t chat_top;  /* scroll offset in lines */
     int auto_scroll;
+    unsigned input_rows;  /* input plane height (multiline growth) */
+    unsigned input_rows_laid; /* input height the current planes were built for */
     size_t frame;     /* spinner frame counter */
     int quit;
     unsigned term_rows, term_cols;
@@ -202,22 +257,33 @@ static int layout_planes(TuiApp *app)
     /* Cap the bar so the chat pane keeps at least one row on short terms. */
     if (bar > (int)rows - 5) bar = (int)rows - 5;
     if (bar < 0) bar = 0;
-    if (rows == app->term_rows && cols == app->term_cols && app->status_plane)
+    /* The multiline input pane grows with the wrapped text; recompute the
+     * layout whenever its height or the terminal size changes. */
+    if (rows == app->term_rows && cols == app->term_cols &&
+        app->input_rows == app->input_rows_laid && app->status_plane)
         return 0;
     app->term_rows = rows;
     app->term_cols = cols;
+    app->input_rows_laid = app->input_rows;
     destroy_planes(app);
 
     if (rows < 6 || cols < 20)
         return -1; /* too small to be usable; caller exits cleanly */
+    if (app->input_rows == 0) app->input_rows = 1;
+    if (app->input_rows > 5) app->input_rows = 5;
+    if (app->input_rows + 5 > rows) app->input_rows = rows > 5 ? rows - 5 : 1;
     app->status_plane = make_plane(app, 1, cols, 0, 0);
     app->tools_plane = make_plane(app, 1, cols, 1, 0);
     /* chat shrinks by the approval bar height while it is up */
-    app->chat_plane = make_plane(app, rows - 4 - (unsigned)bar, cols, 2, 0);
+    int chat_h = (int)rows - 3 - bar - (int)app->input_rows;
+    if (chat_h < 1) chat_h = 1;
+    app->chat_plane = make_plane(app, (unsigned)chat_h, cols, 2, 0);
     if (bar)
         app->prompt_plane = make_plane(app, (unsigned)bar, cols,
-                                       (int)rows - 2 - bar, 0);
-    app->input_plane = make_plane(app, 1, cols, (int)rows - 2, 0);
+                                       (int)rows - 2 - bar -
+                                           (int)app->input_rows + 1, 0);
+    app->input_plane = make_plane(app, app->input_rows, cols,
+                                  (int)rows - 1 - (int)app->input_rows, 0);
     app->footer_plane = make_plane(app, 1, cols, (int)rows - 1, 0);
     app->modal_plane = NULL;
     app->backdrop_plane = NULL;
@@ -447,14 +513,16 @@ static void put_block_header(TuiApp *app, struct ncplane *p, TuiRole role,
     int show_args = 0;
     if (bk == TUI_BLOCK_TOOL && title)
     {
+        /* Friendly label ("Read") over the raw tool name; the raw name
+         * stays the block title so tool_end matches pending blocks. */
+        label = tool_args_label(title);
         if (args && args[0] != '\0')
         {
-            label = title;
             show_args = 1;
         }
         else
         {
-            snprintf(label_buf, sizeof(label_buf), "%s tool", title);
+            snprintf(label_buf, sizeof(label_buf), "%s tool", label);
             label = label_buf;
         }
     }
@@ -816,7 +884,7 @@ static void render_status(TuiApp *app)
     char line[512];
     int n = snprintf(line, sizeof(line), " %s | %s | session: %s%s%s%s | tools: %d",
                      app->model ? app->model : "?",
-                     app->ctx.provider ? app->ctx.provider : "?",
+                     app->provider ? app->provider : "?",
                      app->session_id ? app->session_id : "none",
                      app->title ? " (" : "",
                      app->title ? app->title : "",
@@ -890,19 +958,65 @@ static void render_tools(TuiApp *app)
 static void render_input(TuiApp *app)
 {
     struct ncplane *p = app->input_plane;
-    unsigned cols;
-    ncplane_dim_yx(p, NULL, &cols);
+    unsigned rows, cols;
+    ncplane_dim_yx(p, &rows, &cols);
     ncplane_erase(p);
     plane_color(app, p, TUI_ROLE_BASE_FG);
-    (void)ncplane_putstr(p, "> ");
     const char *text = tui_input_text(app->input);
     size_t len = strlen(text);
-    size_t max = cols > 2 ? (size_t)cols - 2 : 0;
-    if (max > 0 && len > max) len = max;
-    (void)ncplane_putnstr(p, len, text);
-    size_t ccol = utf8_width(text, tui_input_cursor(app->input));
-    if (ccol > max) ccol = max;
-    (void)ncplane_cursor_move_yx(p, 0, 2 + (int)ccol);
+    size_t width = cols > 2 ? (size_t)cols - 2 : (size_t)cols;
+
+    /* The pane grows to the wrapped line count (capped); a change marks
+     * the layout stale so the next frame rebuilds the planes. */
+    size_t wrapped = tui_chat_wrap(text, width, NULL, 0);
+    if (wrapped == 0) wrapped = 1;
+    unsigned want = wrapped > 5 ? 5U : (unsigned)wrapped;
+    if (want != app->input_rows)
+    {
+        app->input_rows = want;
+        app->term_rows = 0; /* force layout_planes on the next frame */
+    }
+
+    size_t *starts = malloc((wrapped + 1) * sizeof(size_t));
+    size_t cursor_off = tui_input_cursor(app->input);
+    size_t cursor_line = 0;
+    size_t cursor_col = 0;
+    if (starts)
+    {
+        (void)tui_chat_wrap(text, width, starts, wrapped + 1);
+        starts[wrapped] = len;
+        for (size_t l = 0; l < wrapped; l++)
+        {
+            if (cursor_off >= starts[l] &&
+                cursor_off <= starts[l + 1])
+            {
+                cursor_line = l;
+                cursor_col = utf8_width(text + starts[l],
+                                        cursor_off - starts[l]);
+                break;
+            }
+        }
+    }
+    /* Scroll the view so the cursor's line stays visible; the editor
+     * cursor normally sits on the last line, i.e. show the last rows. */
+    size_t first = cursor_line >= rows ? cursor_line - rows + 1 : 0;
+    if (starts)
+    {
+        for (size_t l = first; l < wrapped && l < first + rows; l++)
+        {
+            size_t s = starts[l];
+            size_t e = starts[l + 1];
+            size_t shown = e > s ? e - s : 0;
+            if (shown > width) shown = width;
+            (void)ncplane_cursor_move_yx(p, (int)(l - first), 0);
+            if (l == 0) (void)ncplane_putstr(p, "> ");
+            else (void)ncplane_putstr(p, "  ");
+            (void)ncplane_putnstr(p, shown, text + s);
+        }
+        free(starts);
+    }
+    if (cursor_col > width) cursor_col = width;
+    (void)ncplane_cursor_move_yx(p, (int)(cursor_line - first), 2 + (int)cursor_col);
     (void)ncplane_putnstr(p, 1, " ");
     (void)ncplane_cursor_move_yx(p, 0, 0);
 }
@@ -914,7 +1028,7 @@ static void render_footer(TuiApp *app)
     ncplane_dim_yx(p, NULL, &cols);
     ncplane_erase(p);
     plane_color(app, p, TUI_ROLE_BORDER);
-    const char *hints = " Esc cancel | Tab focus | Ctrl-C quit | PgUp/PgDn scroll ";
+    const char *hints = " Enter send | Shift+Enter newline | Esc cancel | Ctrl-P menu | Ctrl-C quit ";
     size_t n = strlen(hints);
     if (n > (size_t)cols - 1) n = (size_t)cols - 1;
     (void)ncplane_putnstr(p, n, hints);
@@ -928,6 +1042,8 @@ static const char *modal_hint(TuiModalKind kind)
     case TUI_MODAL_CONFIRM_QUIT: return "y quit \xE2\x80\xA2 any other key cancels";
     case TUI_MODAL_PASSWORD: return "enter submit \xE2\x80\xA2 esc cancel";
     case TUI_MODAL_ASK_USER: return "enter submit \xE2\x80\xA2 esc cancel";
+    case TUI_MODAL_PICKER: return "type to filter \xE2\x80\xA2 up/down move \xE2\x80\xA2 enter select \xE2\x80\xA2 esc cancel";
+    case TUI_MODAL_CONFIRM: return "y confirm \xE2\x80\xA2 n cancel";
     default: return "any key to dismiss";
     }
 }
@@ -1029,7 +1145,11 @@ static void render_modal(TuiApp *app)
         return;
     unsigned rows, cols;
     notcurses_term_dim_yx(app->nc, &rows, &cols);
-    int mh = 8;
+    int want = tui_modal_kind(app->modal) == TUI_MODAL_PICKER
+                   ? tui_modal_picker_item_count(app->modal) + 4 : 8;
+    int mh = want;
+    if (mh < 8) mh = 8;
+    if (mh > 20) mh = 20; /* picker lists cap the window */
     if ((int)rows < mh + 2) mh = (int)rows - 2;
     int my = ((int)rows - mh) / 2;
 
@@ -1069,6 +1189,69 @@ static void render_modal(TuiApp *app)
     if (tn > (size_t)cols - 2) tn = (size_t)cols - 2;
     (void)ncplane_putnstr(p, tn, title);
     (void)ncplane_set_styles(p, 0);
+
+    /* Picker list: type-to-filter rows with a highlighted cursor. */
+    if (tui_modal_kind(app->modal) == TUI_MODAL_PICKER)
+    {
+        int list_rows = mh - 3;
+        if (list_rows < 1) list_rows = 1;
+        tui_modal_picker_set_window(app->modal, list_rows);
+        int top = tui_modal_picker_top(app->modal);
+        int visible = tui_modal_picker_visible_count(app->modal);
+        int cursor = tui_modal_picker_cursor(app->modal);
+        if (visible == 0)
+        {
+            plane_color(app, p, TUI_ROLE_BORDER);
+            (void)ncplane_cursor_move_yx(p, 1, 2);
+            (void)ncplane_putstr(p, "(no matches)");
+        }
+        else
+        {
+            for (int l = 0; l < list_rows && top + l < visible; l++)
+            {
+                int row = top + l;
+                if (row == cursor)
+                {
+                    uint32_t bg = tui_theme_color(app->theme, TUI_ROLE_STATUS_BG);
+                    (void)ncplane_set_bg_rgb8(p, (bg >> 16) & 0xff,
+                                              (bg >> 8) & 0xff, bg & 0xff);
+                    uint32_t fg = tui_theme_color(app->theme, TUI_ROLE_STATUS_FG);
+                    (void)ncplane_set_fg_rgb8(p, (fg >> 16) & 0xff,
+                                              (fg >> 8) & 0xff, fg & 0xff);
+                    (void)ncplane_set_styles(p, NCSTYLE_BOLD);
+                }
+                else
+                {
+                    plane_color(app, p, TUI_ROLE_BASE_FG);
+                }
+                const char *item = tui_modal_picker_visible_at(app->modal, row);
+                if (item)
+                {
+                    size_t ilen = strlen(item);
+                    if (ilen > (size_t)cols - 4) ilen = (size_t)cols - 4;
+                    (void)ncplane_cursor_move_yx(p, 1 + l, 2);
+                    (void)ncplane_putnstr(p, ilen, item);
+                }
+            }
+        }
+        /* Filter line (the picker reuses the input row for type-to-filter) */
+        plane_color(app, p, TUI_ROLE_BASE_FG);
+        (void)ncplane_cursor_move_yx(p, mh - 2, 2);
+        (void)ncplane_putstr(p, "> ");
+        const char *in = tui_modal_text(app->modal);
+        size_t max = (size_t)cols - 4;
+        size_t inlen = strlen(in);
+        if (inlen > max) inlen = max;
+        (void)ncplane_putnstr(p, inlen, in);
+
+        plane_color(app, p, TUI_ROLE_BORDER);
+        (void)ncplane_cursor_move_yx(p, mh - 1, 2);
+        const char *phint = modal_hint(TUI_MODAL_PICKER);
+        size_t phn = strlen(phint);
+        if (phn > (size_t)cols - 4) phn = (size_t)cols - 4;
+        (void)ncplane_putnstr(p, phn, phint);
+        return;
+    }
 
     /* Body: wrapped across the middle rows */
     plane_color(app, p, TUI_ROLE_BASE_FG);
@@ -1188,7 +1371,7 @@ static void handle_event(TuiApp *app, TuiEvent *ev)
         }
         break;
     case TUI_EV_TOOL_END:
-        (void)tui_chat_tool_finish(app->chat, ev->text, ev->extra);
+        (void)tui_chat_tool_finish_named(app->chat, ev->text, ev->extra);
         /* clear the "busy" status hint and the activity strip */
         if (app->status_msg && ev->text &&
             strcmp(app->status_msg, ev->text) == 0)
@@ -1206,6 +1389,109 @@ static void handle_event(TuiApp *app, TuiEvent *ev)
             free(app->title);
             app->title = str_dup(ev->text);
         }
+        break;
+    case TUI_EV_PROVIDER:
+        if (ev->text)
+        {
+            free(app->provider);
+            app->provider = str_dup(ev->text);
+        }
+        break;
+    case TUI_EV_MODEL:
+        if (ev->text)
+        {
+            free(app->model);
+            app->model = str_dup(ev->text);
+        }
+        break;
+    case TUI_EV_MODELS:
+        /* The worker joined the fetched model names with '\n' in extra;
+         * split them into the picker's list (NULL/empty = no models). */
+        for (int i = 0; i < app->pending_models_count; i++)
+            free(app->pending_models[i]);
+        free(app->pending_models);
+        app->pending_models = NULL;
+        app->pending_models_count = 0;
+        if (ev->extra && ev->extra[0])
+        {
+            int cap = 1;
+            const char *p = ev->extra;
+            while (*p)
+            {
+                if (*p == '\n') cap++;
+                p++;
+            }
+            app->pending_models = calloc((size_t)cap, sizeof(char *));
+            if (app->pending_models)
+            {
+                int n = 0;
+                const char *start = ev->extra;
+                const char *q = ev->extra;
+                while (1)
+                {
+                    if (*q == '\n' || *q == '\0')
+                    {
+                        size_t len = (size_t)(q - start);
+                        if (len > 0)
+                        {
+                            app->pending_models[n] = strndup(start, len);
+                            if (app->pending_models[n]) n++;
+                        }
+                        if (*q == '\0') break;
+                        start = q + 1;
+                    }
+                    q++;
+                }
+                app->pending_models_count = n;
+            }
+        }
+        /* A pending model picker (provider just switched) opens once the
+         * list arrives, unless the user opened another dialog meanwhile. */
+        if (app->picker_context == PICKER_MODEL && app->modal == NULL)
+            open_model_picker(app);
+        break;
+    case TUI_EV_FORK:
+        /* The worker forked at user/assistant message position ev->text
+         * (1-based): drop every chat block from that message onwards so
+         * the edited/regenerated reply streams into a clean tail. */
+        {
+            long n = ev->text ? strtol(ev->text, NULL, 10) : 0;
+            if (n > 0)
+            {
+                long target = -1;
+                long seen = 0;
+                size_t count = tui_chat_block_count(app->chat);
+                for (size_t i = 0; i < count; i++)
+                {
+                    TuiBlockKind k = tui_chat_block_kind(app->chat, i);
+                    if (k == TUI_BLOCK_USER || k == TUI_BLOCK_ASSISTANT)
+                    {
+                        seen++;
+                        if (seen == n)
+                        {
+                            target = (long)i;
+                            break;
+                        }
+                    }
+                }
+                if (target >= 0)
+                    (void)tui_chat_truncate_after(app->chat, (size_t)target);
+                else
+                {
+                    tui_chat_destroy(app->chat);
+                    app->chat = tui_chat_create();
+                    app->chat_top = 0;
+                }
+            }
+            /* Edit mode carries the replacement text; regenerate appends
+             * nothing (the new reply streams in next). */
+            if (ev->extra && ev->extra[0])
+                (void)tui_chat_begin_user(app->chat, ev->extra);
+            app->auto_scroll = 1;
+        }
+        break;
+    case TUI_EV_HISTORY:
+        rebuild_chat(app, ev->extra);
         break;
     case TUI_EV_SESSION:
         if (ev->text)
@@ -1280,6 +1566,392 @@ static void chat_notice(TuiApp *app, const char *text)
     (void)tui_chat_append_error(app->chat, text);
 }
 
+/* ---- Ctrl-P provider/model picker ---- */
+
+static void free_pending_models(TuiApp *app)
+{
+    for (int i = 0; i < app->pending_models_count; i++)
+        free(app->pending_models[i]);
+    free(app->pending_models);
+    app->pending_models = NULL;
+    app->pending_models_count = 0;
+}
+
+/* Join N strings with '\n' into a heap buffer ("" when count is 0). */
+static char *join_newline(const char *const *items, int count)
+{
+    if (!items || count <= 0) return str_dup("");
+    size_t total = 1U;
+    for (int i = 0; i < count; i++)
+        total += strlen(items[i]) + 1U;
+    char *out = malloc(total);
+    if (!out) return NULL;
+    size_t pos = 0;
+    for (int i = 0; i < count; i++)
+    {
+        pos += (size_t)snprintf(out + pos, total - pos, "%s\n", items[i]);
+    }
+    return out;
+}
+
+/* Session ids are timestamp-random tokens without spaces; menu picker
+ * items render "id  title" and the leading token is the id. */
+static char *session_id_from_item(const char *item)
+{
+    if (!item) return NULL;
+    const char *sp = strchr(item, ' ');
+    return strndup(item, sp ? (size_t)(sp - item) : strlen(item));
+}
+
+static void open_provider_picker(TuiApp *app)
+{
+    int count = 0;
+    const char *const *names = provider_names_available(&count);
+    if (count == 0)
+    {
+        chat_notice(app, "No providers available.");
+        return;
+    }
+    /* A stale model list from a previous provider must not leak into the
+     * next model picker. */
+    free_pending_models(app);
+    char *body = join_newline(names, count);
+    if (!body)
+    {
+        chat_notice(app, "Out of memory opening provider picker.");
+        return;
+    }
+    app->picker_context = PICKER_PROVIDER;
+    app->modal = tui_modal_open(TUI_MODAL_PICKER, "Select provider", body, NULL);
+    free(body);
+    if (!app->modal)
+    {
+        app->picker_context = PICKER_NONE;
+        chat_notice(app, "Out of memory opening provider picker.");
+    }
+}
+
+static void open_model_picker(TuiApp *app)
+{
+    if (app->pending_models_count == 0)
+    {
+        chat_notice(app, "No models available; use /model <name>.");
+        app->picker_context = PICKER_NONE;
+        return;
+    }
+    char *body = join_newline((const char *const *)app->pending_models,
+                              app->pending_models_count);
+    if (!body)
+    {
+        chat_notice(app, "Out of memory opening model picker.");
+        app->picker_context = PICKER_NONE;
+        return;
+    }
+    free_pending_models(app);
+    app->modal = tui_modal_open(TUI_MODAL_PICKER, "Select model", body, NULL);
+    free(body);
+    if (!app->modal)
+    {
+        app->picker_context = PICKER_NONE;
+        chat_notice(app, "Out of memory opening model picker.");
+    }
+}
+
+/* ---- main menu (Ctrl-M) ---- */
+
+static void open_menu(TuiApp *app)
+{
+    static const char *items =
+        "Provider / model\n"
+        "Reasoning effort\n"
+        "Change password\n"
+        "Delete session\n"
+        "Switch session\n"
+        "Theme\n"
+        "Export session\n"
+        "Rename session";
+    app->picker_context = PICKER_MENU;
+    app->modal = tui_modal_open(TUI_MODAL_PICKER, "Menu", items, NULL);
+    if (!app->modal)
+    {
+        app->picker_context = PICKER_NONE;
+        chat_notice(app, "Out of memory opening menu.");
+    }
+}
+
+static void open_effort_picker(TuiApp *app)
+{
+    const char *const *opts = provider_effort_options(app->provider);
+    if (!opts)
+    {
+        chat_notice(app, "Current provider has no effort levels.");
+        return;
+    }
+    int n = 0;
+    while (opts[n]) n++;
+    /* Collect levels + "default" into a single newline-joined string. */
+    size_t total = 1U;
+    for (int i = 0; i < n; i++) total += strlen(opts[i]) + 1U;
+    total += strlen("default") + 1U;
+    char *body = malloc(total);
+    if (!body)
+    {
+        chat_notice(app, "Out of memory opening effort picker.");
+        return;
+    }
+    size_t pos = 0;
+    for (int i = 0; i < n; i++)
+        pos += (size_t)snprintf(body + pos, total - pos, "%s\n", opts[i]);
+    (void)snprintf(body + pos, total - pos, "default");
+    app->picker_context = PICKER_EFFORT;
+    app->modal = tui_modal_open(TUI_MODAL_PICKER, "Reasoning effort", body, NULL);
+    free(body);
+    if (!app->modal)
+    {
+        app->picker_context = PICKER_NONE;
+        chat_notice(app, "Out of memory opening effort picker.");
+    }
+}
+
+static void open_theme_picker(TuiApp *app)
+{
+    static const char *items = "dark\nlight\nhighcontrast\nnone";
+    app->picker_context = PICKER_THEME;
+    app->modal = tui_modal_open(TUI_MODAL_PICKER, "Theme", items, NULL);
+    if (!app->modal)
+    {
+        app->picker_context = PICKER_NONE;
+        chat_notice(app, "Out of memory opening theme picker.");
+    }
+}
+
+static void open_session_picker(TuiApp *app, int context, const char *title)
+{
+    if (!app->ctx.sm)
+    {
+        chat_notice(app, "Session persistence disabled.");
+        return;
+    }
+    SessionList *list = session_manager_list_sessions(app->ctx.sm);
+    if (!list || list->count == 0)
+    {
+        if (list) session_list_free(list);
+        chat_notice(app, "No sessions found.");
+        return;
+    }
+    size_t total = 1U;
+    for (int i = 0; i < list->count; i++)
+        total += strlen(list->ids[i]) + strlen(list->titles[i]) + 3U;
+    char *body = malloc(total);
+    if (!body)
+    {
+        session_list_free(list);
+        chat_notice(app, "Out of memory opening session picker.");
+        return;
+    }
+    size_t pos = 0;
+    for (int i = 0; i < list->count; i++)
+        pos += (size_t)snprintf(body + pos, total - pos, "%s  %s\n",
+                                list->ids[i], list->titles[i]);
+    session_list_free(list);
+    app->picker_context = context;
+    app->modal = tui_modal_open(TUI_MODAL_PICKER, title, body, NULL);
+    free(body);
+    if (!app->modal)
+    {
+        app->picker_context = PICKER_NONE;
+        chat_notice(app, "Out of memory opening session picker.");
+    }
+}
+
+/* Pick a menu entry and open its next step (picker, input, or prompt). */
+static void picker_menu_select(TuiApp *app, const char *sel)
+{
+    if (strcmp(sel, "Provider / model") == 0)
+    {
+        /* No key shortcut for the provider picker; the menu is its entry
+         * point. A fetched model list opens the model picker next. */
+        open_provider_picker(app);
+    }
+    else if (strcmp(sel, "Reasoning effort") == 0)
+    {
+        open_effort_picker(app);
+    }
+    else if (strcmp(sel, "Change password") == 0)
+    {
+        /* Blocking prompts: defer until the menu modal has closed. */
+        app->picker_context = PICKER_NONE;
+        app->menu_action = MENU_ACTION_CHANGE_PASSWORD;
+    }
+    else if (strcmp(sel, "Delete session") == 0)
+    {
+        open_session_picker(app, PICKER_SESSION_DELETE, "Delete session");
+    }
+    else if (strcmp(sel, "Switch session") == 0)
+    {
+        open_session_picker(app, PICKER_SESSION_LOAD, "Switch session");
+    }
+    else if (strcmp(sel, "Theme") == 0)
+    {
+        open_theme_picker(app);
+    }
+    else if (strcmp(sel, "Export session") == 0)
+    {
+        open_session_picker(app, PICKER_SESSION_EXPORT, "Export session");
+    }
+    else if (strcmp(sel, "Rename session") == 0)
+    {
+        open_session_picker(app, PICKER_SESSION_RENAME, "Rename session");
+    }
+    else
+    {
+        app->picker_context = PICKER_NONE;
+    }
+}
+
+static void clear_menu_session(TuiApp *app)
+{
+    free(app->menu_session_id);
+    app->menu_session_id = NULL;
+}
+
+/* Commit the picker selection. Returns 1 when a replacement modal was
+ * opened (the caller must not close app->modal), 0 otherwise. */
+static int picker_commit(TuiApp *app)
+{
+    const char *sel = tui_modal_picker_selected(app->modal);
+    if (!sel)
+    {
+        app->picker_context = PICKER_NONE;
+        clear_menu_session(app);
+        app->input_action = INPUT_NONE;
+        app->confirm_action = CONFIRM_NONE;
+        return 0;
+    }
+    switch (app->picker_context)
+    {
+    case PICKER_PROVIDER:
+        (void)tui_worker_submit(app->worker, "provider", sel);
+        (void)tui_worker_submit(app->worker, "model-list", NULL);
+        app->picker_context = PICKER_MODEL;
+        set_status_msg(app, "Fetching models \xE2\x80\xA6");
+        return 0;
+    case PICKER_MODEL:
+        (void)tui_worker_submit(app->worker, "model", sel);
+        app->picker_context = PICKER_NONE;
+        return 0;
+    case PICKER_MENU:
+        picker_menu_select(app, sel);
+        return app->picker_context != PICKER_NONE;
+    case PICKER_EFFORT:
+        (void)tui_worker_submit(app->worker, "effort", sel);
+        app->picker_context = PICKER_NONE;
+        return 0;
+    case PICKER_THEME:
+        slash_theme(app, sel);
+        app->picker_context = PICKER_NONE;
+        return 0;
+    case PICKER_SESSION_LOAD:
+        clear_menu_session(app);
+        app->menu_session_id = session_id_from_item(sel);
+        if (app->menu_session_id)
+        {
+            (void)tui_worker_submit(app->worker, "load", app->menu_session_id);
+            clear_menu_session(app);
+        }
+        app->picker_context = PICKER_NONE;
+        return 0;
+    case PICKER_SESSION_DELETE:
+        clear_menu_session(app);
+        app->menu_session_id = session_id_from_item(sel);
+        app->picker_context = PICKER_NONE;
+        app->confirm_action = CONFIRM_DELETE;
+        app->modal = tui_modal_open(TUI_MODAL_CONFIRM, "Delete session",
+                                    "Delete this session permanently?",
+                                    NULL);
+        if (!app->modal)
+        {
+            app->confirm_action = CONFIRM_NONE;
+            clear_menu_session(app);
+        }
+        return 1;
+    case PICKER_SESSION_EXPORT:
+        clear_menu_session(app);
+        app->menu_session_id = session_id_from_item(sel);
+        app->picker_context = PICKER_NONE;
+        app->input_action = INPUT_EXPORT_PATH;
+        app->modal = tui_modal_open(TUI_MODAL_ASK_USER,
+                                    "Export path",
+                                    "Path (empty = <session id>.json)",
+                                    NULL);
+        if (!app->modal)
+        {
+            app->input_action = INPUT_NONE;
+            clear_menu_session(app);
+        }
+        return 1;
+    case PICKER_SESSION_RENAME:
+        clear_menu_session(app);
+        app->menu_session_id = session_id_from_item(sel);
+        app->picker_context = PICKER_NONE;
+        app->input_action = INPUT_RENAME_NAME;
+        app->modal = tui_modal_open(TUI_MODAL_ASK_USER, "Rename session",
+                                    "New name:", NULL);
+        if (!app->modal)
+        {
+            app->input_action = INPUT_NONE;
+            clear_menu_session(app);
+        }
+        return 1;
+    default:
+        app->picker_context = PICKER_NONE;
+        return 0;
+    }
+}
+
+/* Commit the text collected by a menu-opened input modal. */
+static void input_commit(TuiApp *app)
+{
+    const char *text = tui_modal_text(app->modal);
+    int action = app->input_action;
+    app->input_action = INPUT_NONE;
+    if (!text || !text[0])
+    {
+        clear_menu_session(app);
+        return; /* empty input cancels */
+    }
+    if (action == INPUT_EXPORT_PATH && app->menu_session_id)
+    {
+        char *arg = NULL;
+        if (asprintf(&arg, "%s\x1f%s", app->menu_session_id, text) >= 0)
+        {
+            (void)tui_worker_submit(app->worker, "export", arg);
+            free(arg);
+        }
+    }
+    else if (action == INPUT_RENAME_NAME && app->menu_session_id)
+    {
+        char *arg = NULL;
+        if (asprintf(&arg, "%s\x1f%s", app->menu_session_id, text) >= 0)
+        {
+            (void)tui_worker_submit(app->worker, "rename", arg);
+            free(arg);
+        }
+    }
+    clear_menu_session(app);
+}
+
+/* Commit a menu-opened confirm modal's decision. */
+static void confirm_commit(TuiApp *app)
+{
+    int yes = app->modal->selection;
+    int action = app->confirm_action;
+    app->confirm_action = CONFIRM_NONE;
+    if (action == CONFIRM_DELETE && yes && app->menu_session_id)
+        (void)tui_worker_submit(app->worker, "delete", app->menu_session_id);
+    clear_menu_session(app);
+}
+
 static void slash_save(TuiApp *app, const char *name)
 {
     if (!app->ctx.sm || !app->worker)
@@ -1318,7 +1990,32 @@ static void slash_save(TuiApp *app, const char *name)
     session_free(s);
 }
 
-static void slash_sessions(TuiApp *app)
+/* Case-insensitive substring (ASCII folding; portable, no strcasestr). */
+static int ci_contains(const char *haystack, const char *needle)
+{
+    if (!needle || !needle[0]) return 1;
+    if (!haystack) return 0;
+    size_t hn = strlen(haystack);
+    size_t nn = strlen(needle);
+    if (nn > hn) return 0;
+    for (size_t i = 0; i + nn <= hn; i++)
+    {
+        int match = 1;
+        for (size_t j = 0; j < nn; j++)
+        {
+            if (tolower((unsigned char)haystack[i + j]) !=
+                tolower((unsigned char)needle[j]))
+            {
+                match = 0;
+                break;
+            }
+        }
+        if (match) return 1;
+    }
+    return 0;
+}
+
+static void slash_sessions(TuiApp *app, const char *term)
 {
     if (!app->ctx.sm)
     {
@@ -1331,12 +2028,28 @@ static void slash_sessions(TuiApp *app)
         chat_notice(app, "No sessions found.");
         return;
     }
+    int shown = 0;
     for (int i = 0; i < list->count; i++)
     {
+        /* Case-insensitive filter over title and id (feature: session
+         * search). Empty term lists everything. */
+        if (term && term[0])
+        {
+            if (!ci_contains(list->titles[i], term) &&
+                !ci_contains(list->ids[i], term))
+                continue;
+        }
         char line[512];
         snprintf(line, sizeof(line), "  %s | %s | %s",
                  list->ids[i], list->titles[i], list->created_ats[i]);
         (void)tui_chat_append_error(app->chat, line);
+        shown++;
+    }
+    if (shown == 0)
+    {
+        char line[160];
+        snprintf(line, sizeof(line), "No sessions match: %s", term);
+        chat_notice(app, line);
     }
     session_list_free(list);
 }
@@ -1346,12 +2059,308 @@ static void slash_help(TuiApp *app)
     static const char *help =
         "/exit /quit  quit   /new  reset conversation\n"
         "/save <n> save session   /load <id> load session\n"
-        "/model <m> switch model  /sessions list sessions\n"
-        "/undo /redo change tracker   /clear clear pane\n"
-        "/openai-login /openai-logout  /help this text";
+        "/delete <id> delete   /rename <id> <name> rename\n"
+        "/model <m> switch model  /sessions [term] list/search\n"
+        "/provider <p> switch provider  /effort <v> reasoning effort\n"
+        "Ctrl-P menu   /copy [n] copy message\n"
+        "/edit <#|text> edit message   /regen <#> regenerate reply\n"
+        "/branch [id] list/switch branches\n"
+        "/theme <dark|light|highcontrast|none>\n"
+        "/export <id> [path]   /change-password\n"
+        "/openai-login /openai-logout  /lock /unlock\n"
+        "/undo /redo change tracker   /clear clear pane  /help this text";
     (void)tui_chat_begin_stream(app->chat, TUI_BLOCK_TOOL);
     (void)tui_chat_stream_append(app->chat, help);
     tui_chat_end_stream(app->chat);
+}
+
+/* ---- password change (two prompt modals, then a worker job) ---- */
+
+static void slash_change_password(TuiApp *app)
+{
+    if (tui_worker_busy(app->worker))
+    {
+        chat_notice(app, "Busy - wait for the current run.");
+        return;
+    }
+    if (!app->ctx.sm)
+    {
+        chat_notice(app, "Session persistence disabled.");
+        return;
+    }
+    char *pw1 = tui_app_prompt_password(app, "New database password: ");
+    if (!pw1) return;
+    char *pw2 = tui_app_prompt_password(app, "Confirm new database password: ");
+    if (!pw2)
+    {
+        memset(pw1, 0, strlen(pw1));
+        free(pw1);
+        return;
+    }
+    if (strcmp(pw1, pw2) != 0)
+    {
+        chat_notice(app, "Passwords do not match.");
+        memset(pw1, 0, strlen(pw1));
+        free(pw1);
+        memset(pw2, 0, strlen(pw2));
+        free(pw2);
+        return;
+    }
+    (void)tui_worker_submit(app->worker, "change-password", pw1);
+    memset(pw1, 0, strlen(pw1));
+    free(pw1);
+    memset(pw2, 0, strlen(pw2));
+    free(pw2);
+}
+
+/* ---- runtime theme switch ---- */
+
+static void slash_theme(TuiApp *app, const char *style)
+{
+    if (!style || !style[0])
+    {
+        chat_notice(app, "Usage: /theme dark|light|highcontrast|none");
+        return;
+    }
+    TuiTheme *nt = tui_theme_create(style, app->ctx.density, app->ctx.accent);
+    if (!nt)
+    {
+        chat_notice(app, "Theme switch failed (out of memory).");
+        return;
+    }
+    tui_theme_free(app->theme);
+    app->theme = nt;
+    /* The next render_all() recolors every plane from the new theme. */
+    char msg[96];
+    snprintf(msg, sizeof(msg), "Theme: %s", style);
+    chat_notice(app, msg);
+}
+
+/* ---- clipboard copy via OSC 52 ---- */
+
+static void osc52_copy(const char *text)
+{
+    static const char tbl[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t n = text ? strlen(text) : 0;
+    size_t cap = ((n + 2U) / 3U) * 4U + 1U;
+    char *b64 = malloc(cap);
+    if (!b64) return;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i += 3)
+    {
+        unsigned v = (unsigned)(unsigned char)text[i] << 16;
+        if (i + 1U < n) v |= (unsigned)(unsigned char)text[i + 1U] << 8;
+        if (i + 2U < n) v |= (unsigned)(unsigned char)text[i + 2U];
+        b64[o++] = tbl[(v >> 18) & 0x3f];
+        b64[o++] = tbl[(v >> 12) & 0x3f];
+        b64[o++] = (i + 1U < n) ? tbl[(v >> 6) & 0x3f] : '=';
+        b64[o++] = (i + 2U < n) ? tbl[v & 0x3f] : '=';
+    }
+    b64[o] = '\0';
+    char *seq = NULL;
+    if (asprintf(&seq, "\x1b]52;c;%s\x07", b64) >= 0)
+    {
+        /* OSC 52: set the terminal clipboard to base64 text; harmless in
+         * terminals that ignore it. */
+        ssize_t written = write(STDOUT_FILENO, seq, strlen(seq));
+        (void)written;
+        free(seq);
+    }
+    free(b64);
+}
+
+static void slash_copy(TuiApp *app, const char *arg)
+{
+    long want = -1;
+    if (arg && arg[0])
+    {
+        char *end = NULL;
+        want = strtol(arg, &end, 10);
+        if (!end || *end != '\0' || want <= 0)
+        {
+            chat_notice(app, "Usage: /copy [message number]");
+            return;
+        }
+    }
+    size_t count = tui_chat_block_count(app->chat);
+    long target = -1;
+    long seen = 0;
+    for (size_t i = 0; i < count; i++)
+    {
+        TuiBlockKind k = tui_chat_block_kind(app->chat, i);
+        if (k == TUI_BLOCK_USER || k == TUI_BLOCK_ASSISTANT)
+        {
+            seen++;
+            if (want > 0 && seen == want)
+            {
+                target = (long)i;
+                break;
+            }
+            target = (long)i; /* default: keep the last message */
+        }
+    }
+    if (target < 0)
+    {
+        chat_notice(app, "Nothing to copy.");
+        return;
+    }
+    const char *text = tui_chat_block_text(app->chat, (size_t)target);
+    osc52_copy(text);
+    chat_notice(app, "Copied message to clipboard.");
+}
+
+/* ---- edit / regenerate / branches ---- */
+
+/* Block index of the nth user/assistant message (1-based), or -1. */
+static long message_block_at(TuiApp *app, long n)
+{
+    size_t count = tui_chat_block_count(app->chat);
+    long seen = 0;
+    for (size_t i = 0; i < count; i++)
+    {
+        TuiBlockKind k = tui_chat_block_kind(app->chat, i);
+        if (k == TUI_BLOCK_USER || k == TUI_BLOCK_ASSISTANT)
+        {
+            seen++;
+            if (seen == n) return (long)i;
+        }
+    }
+    return -1;
+}
+
+static void slash_edit(TuiApp *app, const char *rest)
+{
+    char *end = NULL;
+    long n = strtol(rest, &end, 10);
+    if (!end || *end != ' ' || n < 1)
+    {
+        chat_notice(app, "Usage: /edit <message #> <new text>");
+        return;
+    }
+    const char *text = end + 1;
+    if (!text[0])
+    {
+        chat_notice(app, "Empty edit text.");
+        return;
+    }
+    long blk = message_block_at(app, n);
+    if (blk < 0)
+    {
+        chat_notice(app, "Message not found.");
+        return;
+    }
+    if (tui_chat_block_kind(app->chat, (size_t)blk) != TUI_BLOCK_USER)
+    {
+        chat_notice(app, "Only user messages can be edited.");
+        return;
+    }
+    char *arg = NULL;
+    if (asprintf(&arg, "%ld\x1f%s", n, text) >= 0)
+    {
+        (void)tui_worker_submit(app->worker, "edit", arg);
+        free(arg);
+    }
+}
+
+static void slash_regen(TuiApp *app, const char *rest)
+{
+    char *end = NULL;
+    long n = strtol(rest, &end, 10);
+    if (!end || *end != '\0' || n < 1)
+    {
+        chat_notice(app, "Usage: /regen <message #>");
+        return;
+    }
+    long blk = message_block_at(app, n);
+    if (blk < 0)
+    {
+        chat_notice(app, "Message not found.");
+        return;
+    }
+    if (tui_chat_block_kind(app->chat, (size_t)blk) != TUI_BLOCK_ASSISTANT)
+    {
+        chat_notice(app, "Only assistant replies can be regenerated.");
+        return;
+    }
+    char arg[32];
+    snprintf(arg, sizeof(arg), "%ld", n);
+    (void)tui_worker_submit(app->worker, "regen", arg);
+}
+
+/* Rebuild the scrollback from a messages_to_json_array() payload (branch
+ * switch). Best-effort: allocation failures just skip a block. */
+static void rebuild_chat(TuiApp *app, const char *json)
+{
+    if (!json) return;
+    cJSON *root = cJSON_Parse(json);
+    if (!root || !cJSON_IsArray(root))
+    {
+        if (root) cJSON_Delete(root);
+        return;
+    }
+    TuiChat *nc = tui_chat_create();
+    if (!nc)
+    {
+        cJSON_Delete(root);
+        return;
+    }
+    int count = cJSON_GetArraySize(root);
+    for (int i = 0; i < count; i++)
+    {
+        cJSON *m = cJSON_GetArrayItem(root, i);
+        if (!m) continue;
+        const char *role = cJSON_GetStringValue(cJSON_GetObjectItem(m, "role"));
+        const char *content =
+            cJSON_GetStringValue(cJSON_GetObjectItem(m, "content"));
+        const char *thinking =
+            cJSON_GetStringValue(cJSON_GetObjectItem(m, "thinking"));
+        if (thinking && thinking[0])
+        {
+            if (tui_chat_begin_stream(nc, TUI_BLOCK_THINK) == 0)
+            {
+                (void)tui_chat_stream_append(nc, thinking);
+                tui_chat_end_stream(nc);
+            }
+        }
+        if (role && strcmp(role, "user") == 0)
+        {
+            (void)tui_chat_begin_user(nc, content ? content : "");
+        }
+        else if (role && strcmp(role, "assistant") == 0)
+        {
+            if (tui_chat_begin_stream(nc, TUI_BLOCK_ASSISTANT) == 0)
+            {
+                (void)tui_chat_stream_append(nc, content ? content : "");
+                tui_chat_end_stream(nc);
+            }
+        }
+        cJSON *tc = cJSON_GetObjectItem(m, "tool_calls");
+        if (tc && cJSON_IsArray(tc))
+        {
+            int tn = cJSON_GetArraySize(tc);
+            for (int j = 0; j < tn; j++)
+            {
+                cJSON *call = cJSON_GetArrayItem(tc, j);
+                cJSON *fn = call ? cJSON_GetObjectItem(call, "function") : NULL;
+                const char *name = fn
+                    ? cJSON_GetStringValue(cJSON_GetObjectItem(fn, "name"))
+                    : NULL;
+                const char *result =
+                    cJSON_GetStringValue(cJSON_GetObjectItem(call, "result_content"));
+                const char *err =
+                    cJSON_GetStringValue(cJSON_GetObjectItem(call, "result_error"));
+                if (err && err[0]) result = err;
+                (void)tui_chat_append_tool(nc, name ? name : "tool",
+                                           result ? result : "");
+            }
+        }
+    }
+    tui_chat_destroy(app->chat);
+    app->chat = nc;
+    app->chat_top = 0;
+    app->auto_scroll = 1;
+    cJSON_Delete(root);
 }
 
 static void handle_command(TuiApp *app, const char *cmd)
@@ -1388,7 +2397,13 @@ static void handle_command(TuiApp *app, const char *cmd)
         else chat_notice(app, "Redone.");
         return;
     }
-    if (strcmp(cmd, "/sessions") == 0) { slash_sessions(app); return; }
+    if (strncmp(cmd, "/sessions", 9) == 0)
+    {
+        /* Optional filter term after "/sessions " searches titles/ids. */
+        const char *term = cmd[9] == ' ' ? cmd + 10 : NULL;
+        slash_sessions(app, term);
+        return;
+    }
     if (strncmp(cmd, "/save ", 6) == 0) { slash_save(app, cmd + 6); return; }
     if (strncmp(cmd, "/load ", 6) == 0)
     {
@@ -1400,9 +2415,119 @@ static void handle_command(TuiApp *app, const char *cmd)
         (void)tui_worker_submit(app->worker, "model", cmd + 7);
         return;
     }
-    if (strcmp(cmd, "/openai-login") == 0 || strcmp(cmd, "/openai-logout") == 0)
+    if (strncmp(cmd, "/provider ", 10) == 0)
     {
-        chat_notice(app, "Use --web mode for OpenAI device login.");
+        (void)tui_worker_submit(app->worker, "provider", cmd + 10);
+        return;
+    }
+    if (strncmp(cmd, "/effort ", 8) == 0)
+    {
+        (void)tui_worker_submit(app->worker, "effort", cmd + 8);
+        return;
+    }
+    if (strncmp(cmd, "/delete ", 8) == 0)
+    {
+        (void)tui_worker_submit(app->worker, "delete", cmd + 8);
+        return;
+    }
+    if (strncmp(cmd, "/rename ", 8) == 0)
+    {
+        /* "/rename <id> <name>": name may contain spaces, so split on the
+         * first space after the id. */
+        const char *rest = cmd + 8;
+        const char *sp = strchr(rest, ' ');
+        if (sp && sp[1])
+        {
+            char *arg = NULL;
+            if (asprintf(&arg, "%.*s\x1f%s", (int)(sp - rest), rest, sp + 1) >= 0)
+            {
+                (void)tui_worker_submit(app->worker, "rename", arg);
+                free(arg);
+            }
+        }
+        else
+        {
+            chat_notice(app, "Usage: /rename <id> <name>");
+        }
+        return;
+    }
+    if (strncmp(cmd, "/export", 7) == 0)
+    {
+        const char *rest = cmd[7] == ' ' ? cmd + 8 : NULL;
+        if (!rest || !rest[0])
+        {
+            chat_notice(app, "Usage: /export <id> [path]");
+            return;
+        }
+        const char *sp = strchr(rest, ' ');
+        char *arg = NULL;
+        int made = sp
+            ? asprintf(&arg, "%.*s\x1f%s", (int)(sp - rest), rest, sp + 1)
+            : asprintf(&arg, "%s\x1f", rest);
+        if (made >= 0)
+        {
+            (void)tui_worker_submit(app->worker, "export", arg);
+            free(arg);
+        }
+        return;
+    }
+    if (strcmp(cmd, "/change-password") == 0)
+    {
+        slash_change_password(app);
+        return;
+    }
+    if (strcmp(cmd, "/openai-login") == 0)
+    {
+        (void)tui_worker_submit(app->worker, "openai-login", NULL);
+        return;
+    }
+    if (strcmp(cmd, "/openai-logout") == 0)
+    {
+        (void)tui_worker_submit(app->worker, "openai-logout", NULL);
+        return;
+    }
+    if (strcmp(cmd, "/menu") == 0)
+    {
+        open_menu(app);
+        return;
+    }
+    if (strcmp(cmd, "/lock") == 0)
+    {
+        (void)tui_worker_submit(app->worker, "lock", NULL);
+        return;
+    }
+    if (strcmp(cmd, "/unlock") == 0)
+    {
+        (void)tui_worker_submit(app->worker, "unlock", NULL);
+        return;
+    }
+    if (strncmp(cmd, "/theme ", 7) == 0)
+    {
+        slash_theme(app, cmd + 7);
+        return;
+    }
+    if (strncmp(cmd, "/copy", 5) == 0)
+    {
+        slash_copy(app, cmd[5] == ' ' ? cmd + 6 : NULL);
+        return;
+    }
+    if (strncmp(cmd, "/edit ", 6) == 0)
+    {
+        slash_edit(app, cmd + 6);
+        return;
+    }
+    if (strncmp(cmd, "/regen ", 7) == 0)
+    {
+        slash_regen(app, cmd + 7);
+        return;
+    }
+    if (strncmp(cmd, "/branch", 7) == 0)
+    {
+        const char *bid = cmd[7] == ' ' ? cmd + 8 : NULL;
+        if (bid && bid[0])
+            (void)tui_worker_submit(app->worker, "branch", bid);
+        else
+            (void)tui_worker_submit(app->worker, "branch-info", NULL);
         return;
     }
     chat_notice(app, "Unknown command. Try /help.");
@@ -1511,8 +2636,22 @@ static void handle_key(TuiApp *app, const ncinput *ni)
         if (id == NCKEY_ENTER) key = 10;
         else if (id == NCKEY_ESC) key = 27;
         else if (id == NCKEY_BACKSPACE) key = 127;
+        else if (tui_modal_kind(app->modal) == TUI_MODAL_PICKER)
+        {
+            /* The picker also navigates with arrows / PgUp-PgDn and
+             * Ctrl-P/Ctrl-N, so route those into the modal dispatcher. */
+            if (id == NCKEY_UP) key = TUI_PICKER_KEY_UP;
+            else if (id == NCKEY_DOWN) key = TUI_PICKER_KEY_DOWN;
+            else if (id == NCKEY_PGUP) key = TUI_PICKER_KEY_PGUP;
+            else if (id == NCKEY_PGDOWN) key = TUI_PICKER_KEY_PGDOWN;
+            else if (key_is_ctrl(ni, 'P')) key = TUI_PICKER_KEY_UP;
+            else if (key_is_ctrl(ni, 'N')) key = TUI_PICKER_KEY_DOWN;
+            else if (id < 0x110000u && id >= 32u) key = ncinput_cp(ni);
+        }
         else if (id < 0x110000u && id >= 32u) key = ncinput_cp(ni);
-        if (key >= 0)
+        /* key == -1 means "nothing mapped"; the negative picker sentinels
+         * are valid keys and must reach the dispatcher. */
+        if (key != -1)
         {
             TuiModalAction action = tui_modal_dispatch_key(app->modal, key);
             if (action == TUI_MODAL_ACTION_QUIT)
@@ -1522,9 +2661,26 @@ static void handle_key(TuiApp *app, const ncinput *ni)
             }
             else if (action == TUI_MODAL_ACTION_ANSWERED)
             {
-                close_modal(app, 0); /* dispatch already answered the event */
+                int replaced = 0;
+                if (tui_modal_kind(app->modal) == TUI_MODAL_PICKER)
+                    replaced = picker_commit(app);
+                else if (tui_modal_kind(app->modal) == TUI_MODAL_ASK_USER &&
+                         app->modal->event == NULL &&
+                         app->input_action != INPUT_NONE)
+                    input_commit(app);
+                else if (tui_modal_kind(app->modal) == TUI_MODAL_CONFIRM &&
+                         app->confirm_action != CONFIRM_NONE)
+                    confirm_commit(app);
+                if (!replaced)
+                    close_modal(app, 0); /* dispatch already answered the event */
             }
         }
+        return;
+    }
+
+    if (key_is_ctrl(ni, 'M') || key_is_ctrl(ni, 'P')) /* main menu */
+    {
+        open_menu(app);
         return;
     }
 
@@ -1533,7 +2689,19 @@ static void handle_key(TuiApp *app, const ncinput *ni)
         if (tui_worker_busy(app->worker)) tui_worker_cancel(app->worker);
         return;
     }
-    if (id == NCKEY_ENTER) { submit_line(app); return; }
+    if (id == NCKEY_ENTER)
+    {
+        /* Shift+Enter inserts a newline (multiline input); plain Enter
+         * submits the whole buffer. */
+        if (ncinput_shift_p(ni))
+        {
+            tui_input_reset_history_walk(app->input);
+            (void)tui_input_insert(app->input, "\n");
+            return;
+        }
+        submit_line(app);
+        return;
+    }
     if (id == NCKEY_BACKSPACE)
     {
         tui_input_reset_history_walk(app->input); /* editing ends the walk */
@@ -1632,6 +2800,16 @@ static int app_loop(TuiApp *app)
     {
         check_signals(app);
         if (app->quit) break;
+        /* Run deferred blocking menu actions once their picker has
+         * closed (the password prompts cannot run inside modal
+         * dispatch). */
+        if (app->menu_action != MENU_ACTION_NONE && app->modal == NULL)
+        {
+            int act = app->menu_action;
+            app->menu_action = MENU_ACTION_NONE;
+            if (act == MENU_ACTION_CHANGE_PASSWORD)
+                slash_change_password(app);
+        }
         if (layout_planes(app) != 0)
         {
             /* Terminal too small: wait for a resize instead of failing */
@@ -1693,6 +2871,7 @@ TuiApp *tui_app_create(const TuiAppCtx *ctx)
     if (!app) return NULL;
     app->ctx = *ctx;
     app->model = ctx->model ? str_dup(ctx->model) : NULL;
+    app->provider = ctx->provider ? str_dup(ctx->provider) : NULL;
     app->session_id = ctx->session_id ? str_dup(ctx->session_id) : NULL;
     app->log_path = ctx->log_path ? str_dup(ctx->log_path) : default_log_path();
 
@@ -1850,6 +3029,8 @@ int tui_app_run(TuiApp *app, SessionManager *sm)
     wctx.evs = app->ctx.evs;
     wctx.jobs = app->ctx.jobs;
     wctx.sm = sm;
+    wctx.conf = app->ctx.conf;
+    wctx.oauth = app->ctx.oauth;
     wctx.safety = app->ctx.safety;
     wctx.agent_factory = app->ctx.agent_factory;
     wctx.agent_factory_userdata = app->ctx.agent_factory_userdata;
@@ -1901,6 +3082,11 @@ void tui_app_destroy(TuiApp *app)
     free(app->status_msg);
     free(app->session_id);
     free(app->model);
+    free(app->provider);
+    free(app->menu_session_id);
+    for (int i = 0; i < app->pending_models_count; i++)
+        free(app->pending_models[i]);
+    free(app->pending_models);
     free(app->log_path);
     free(app);
 }

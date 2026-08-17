@@ -1,7 +1,8 @@
 /*
  * test_tool_args.c - compaction of tool-call argument JSON into the
  * one-line header summary, including UTF-8 truncation and degradation
- * on unparseable input. Depends on: check, cJSON.
+ * on unparseable input, plus the human-readable tool labels. Depends
+ * on: check, cJSON.
  */
 
 #define _GNU_SOURCE
@@ -10,7 +11,34 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 #include "tui/tool_args.h"
+
+/* ---- human-readable labels ---- */
+
+START_TEST(test_label_maps_known_tools)
+{
+    ck_assert_str_eq(tool_args_label("bash"), "Bash");
+    ck_assert_str_eq(tool_args_label("read_file"), "Read");
+    ck_assert_str_eq(tool_args_label("write_file"), "Write");
+    ck_assert_str_eq(tool_args_label("web_search"), "Web Search");
+    ck_assert_str_eq(tool_args_label("python_execute"), "Python");
+    ck_assert_str_eq(tool_args_label("sqlite_query"), "SQLite Query");
+    ck_assert_str_eq(tool_args_label("tool_ask_user"), "Ask");
+}
+END_TEST
+
+START_TEST(test_label_passthrough_unknown)
+{
+    ck_assert_str_eq(tool_args_label("some_future_tool"), "some_future_tool");
+}
+END_TEST
+
+START_TEST(test_label_null_safe)
+{
+    ck_assert_str_eq(tool_args_label(NULL), "");
+}
+END_TEST
 
 START_TEST(test_compact_object_strings_bare)
 {
@@ -179,6 +207,12 @@ static Suite *suite(void)
     tcase_add_test(tc, test_compact_named_edit_degraded);
     tcase_add_test(tc, test_compact_named_non_edit_passthrough);
     suite_add_tcase(s, tc);
+
+    TCase *tc_label = tcase_create("labels");
+    tcase_add_test(tc_label, test_label_maps_known_tools);
+    tcase_add_test(tc_label, test_label_passthrough_unknown);
+    tcase_add_test(tc_label, test_label_null_safe);
+    suite_add_tcase(s, tc_label);
     return s;
 }
 

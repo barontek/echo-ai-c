@@ -673,6 +673,76 @@ START_TEST(test_tool_finish_failure_keeps_pending)
 }
 END_TEST
 
+START_TEST(test_truncate_after_drops_tail)
+{
+    /* The edit/regenerate flow truncates everything after the fork block,
+     * including an open streaming block. */
+    ck_assert_int_eq(tui_chat_begin_user(chat, "u1"), 0);
+    ck_assert_int_eq(tui_chat_begin_stream(chat, TUI_BLOCK_ASSISTANT), 0);
+    ck_assert_int_eq(tui_chat_stream_append(chat, "a1"), 0);
+    ck_assert_int_eq(tui_chat_begin_user(chat, "u2"), 0);
+    ck_assert_int_eq(tui_chat_begin_stream(chat, TUI_BLOCK_THINK), 0);
+    ck_assert_int_eq(tui_chat_stream_append(chat, "t"), 0);
+    ck_assert_int_eq(tui_chat_block_count(chat), 4);
+
+    /* Drop from block 1 (the assistant reply) onwards. */
+    ck_assert_int_eq(tui_chat_truncate_after(chat, 1), 0);
+    ck_assert_int_eq(tui_chat_block_count(chat), 1);
+    ck_assert_int_eq(tui_chat_block_kind(chat, 0), TUI_BLOCK_USER);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "u1");
+
+    /* The scrollback accepts a fresh stream after the truncate. */
+    ck_assert_int_eq(tui_chat_begin_stream(chat, TUI_BLOCK_ASSISTANT), 0);
+    ck_assert_int_eq(tui_chat_stream_append(chat, "a2"), 0);
+    ck_assert_int_eq(tui_chat_block_count(chat), 2);
+    ck_assert_str_eq(tui_chat_block_text(chat, 1), "a2");
+}
+END_TEST
+
+START_TEST(test_truncate_after_out_of_range_unchanged)
+{
+    ck_assert_int_eq(tui_chat_begin_user(chat, "u1"), 0);
+    ck_assert_int_eq(tui_chat_truncate_after(chat, 5), -1);
+    ck_assert_int_eq(tui_chat_block_count(chat), 1);
+    ck_assert_int_eq(tui_chat_truncate_after(chat, 1), -1); /* == count */
+    ck_assert_int_eq(tui_chat_block_count(chat), 1);
+}
+END_TEST
+
+START_TEST(test_tool_finish_named_fills_matching_pending)
+{
+    /* Parallel tools interleave: two pending blocks, results arrive in
+     * the opposite order and must land on their own calls. */
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "grep", NULL), 0);
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "web_search", NULL), 0);
+    ck_assert_int_eq(tui_chat_tool_finish_named(chat, "grep", "found 2"), 0);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "found 2");
+    ck_assert_str_eq(tui_chat_block_text(chat, 1), ""); /* still pending */
+    ck_assert_int_eq(tui_chat_tool_finish_named(chat, "web_search", "2 hits"), 0);
+    ck_assert_str_eq(tui_chat_block_text(chat, 1), "2 hits");
+}
+END_TEST
+
+START_TEST(test_tool_finish_named_skips_filled_blocks)
+{
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", NULL), 0);
+    ck_assert_int_eq(tui_chat_tool_finish_named(chat, "bash", "done"), 0);
+    /* A second finish for the same tool has no pending match: fallback
+     * appends a "<name>: <result>" block instead of overwriting. */
+    ck_assert_int_eq(tui_chat_tool_finish_named(chat, "bash", "again"), 0);
+    ck_assert_int_eq(tui_chat_block_count(chat), 2);
+    ck_assert_str_eq(tui_chat_block_text(chat, 1), "bash: again");
+}
+END_TEST
+
+START_TEST(test_tool_finish_named_no_pending_appends_fallback)
+{
+    ck_assert_int_eq(tui_chat_tool_finish_named(chat, "git", "ok"), 0);
+    ck_assert_int_eq(tui_chat_block_count(chat), 1);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "git: ok");
+}
+END_TEST
+
 static Suite *suite(void)
 {
     Suite *s = suite_create("tui_chat");
@@ -684,6 +754,11 @@ static Suite *suite(void)
     tcase_add_test(tc_life, test_begin_stream_rejects_other_kinds);
     tcase_add_test(tc_life, test_tool_and_error_blocks);
     tcase_add_test(tc_life, test_out_of_range_accessors_are_safe);
+    tcase_add_test(tc_life, test_truncate_after_drops_tail);
+    tcase_add_test(tc_life, test_truncate_after_out_of_range_unchanged);
+    tcase_add_test(tc_life, test_tool_finish_named_fills_matching_pending);
+    tcase_add_test(tc_life, test_tool_finish_named_skips_filled_blocks);
+    tcase_add_test(tc_life, test_tool_finish_named_no_pending_appends_fallback);
     suite_add_tcase(s, tc_life);
 
     TCase *tc_wrap = tcase_create("wrap");

@@ -62,6 +62,7 @@ add_executable(echo-ai
     src/llm/openai_compatible_stream.c
     src/llm/opencode_zen.c
     src/llm/factory.c
+    src/llm/provider_models.c
     src/tools/tool.c
     src/tools/registry.c
     src/tools/bash.c

@@ -22,7 +22,7 @@
 
 typedef enum {
     TUI_EV_CHUNK,       /* content delta of the in-flight assistant reply */
-    TUI_EV_THINK,       /* content delta inside a <think> block */
+    TUI_EV_THINK,       /* content delta inside a  thinking block */
     TUI_EV_TOOL_START,  /* text = tool name, extra = arguments JSON */
     TUI_EV_TOOL_END,    /* text = tool name, extra = result or error */
     TUI_EV_TITLE,       /* text = generated session title */
@@ -31,6 +31,11 @@ typedef enum {
     TUI_EV_RUN_DONE,    /* text = aggregated content, extra = error string */
     TUI_EV_SESSION,     /* text = session id (minted on first save) */
     TUI_EV_STATUS,      /* text = status-line message (job results, notices) */
+    TUI_EV_PROVIDER,    /* text = provider name (applied by a provider job) */
+    TUI_EV_MODEL,       /* text = model name (applied by a model job) */
+    TUI_EV_MODELS,      /* extra = newline-joined model list (picker data) */
+    TUI_EV_FORK,        /* text = message #, extra = new content (edit/regen) */
+    TUI_EV_HISTORY,     /* extra = JSON message array (branch switch) */
     TUI_EV_JOB,         /* UI -> worker: text = job name, extra = argument */
     TUI_EV_QUIT         /* worker teardown signal (no payload) */
 } TuiEventType;

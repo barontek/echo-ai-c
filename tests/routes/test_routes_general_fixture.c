@@ -284,6 +284,21 @@ const char *const *provider_names_available(int *count)
 
 /* Mirrors factory.c's capability map (factory.c is not linked here); the
  * real function is covered in test_factory.c. */
+const char *provider_default_base_url(const char *name)
+{
+    if (!name) return NULL;
+    if (strcmp(name, "ollama") == 0) return "http://localhost:11434";
+    if (strcmp(name, "openai") == 0)
+        return "https://chatgpt.com/backend-api/codex/responses";
+    if (strcmp(name, "openai_compatible") == 0)
+        return "http://localhost:1234";
+    if (strcmp(name, "opencode_zen") == 0)
+        return "https://opencode.ai/zen/v1";
+    if (strcmp(name, "opencode_go") == 0)
+        return "https://opencode.ai/zen/go/v1";
+    return NULL;
+}
+
 int provider_supports_effort(const char *name)
 {
     if (!name) return 0;

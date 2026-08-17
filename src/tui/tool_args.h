@@ -49,4 +49,18 @@ char *tool_args_compact(const char *json, size_t max_len);
 char *tool_args_compact_named(const char *tool_name, const char *json,
                               size_t max_len);
 
+/**
+ * tool_args_label - human-readable tool label for chat headers
+ * @name: raw tool name as the model called it (e.g. "read_file"); may be
+ *   NULL.
+ *
+ * Maps known tool names to friendly labels ("Bash", "Read", "Web
+ * Search"); unknown names pass through unchanged. The raw name stays the
+ * block title so tool_end can match pending blocks by name while the
+ * header displays this label.
+ *
+ * Return: static string (never freed); never NULL.
+ */
+const char *tool_args_label(const char *name);
+
 #endif /* ECHO_TOOL_ARGS_H */

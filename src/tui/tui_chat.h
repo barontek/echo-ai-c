@@ -149,6 +149,24 @@ int tui_chat_begin_tool(TuiChat *chat, const char *name, const char *args);
 int tui_chat_tool_finish(TuiChat *chat, const char *name, const char *result);
 
 /**
+ * tui_chat_tool_finish_named - fill the pending tool block matching a name
+ * @chat: scrollback; non-NULL.
+ * @name: finished tool name (the block title from begin_tool), borrowed.
+ * @result: result or error text, borrowed.
+ *
+ * Like tui_chat_tool_finish but scans ALL pending (empty-text) tool
+ * blocks and fills the newest one whose title matches @name — parallel
+ * tool results can arrive interleaved, so the last-block assumption does
+ * not hold. Falls back to tui_chat_tool_finish semantics (append
+ * "<name>: <result>") when no pending match exists.
+ *
+ * Return: 0 on success, -1 on allocation failure (pending block stays
+ *   pending).
+ */
+int tui_chat_tool_finish_named(TuiChat *chat, const char *name,
+                               const char *result);
+
+/**
  * tui_chat_append_error - append an error block
  * @chat: scrollback; non-NULL.
  * @text: error text, borrowed.
@@ -156,6 +174,20 @@ int tui_chat_tool_finish(TuiChat *chat, const char *name, const char *result);
  * Return: 0 on success, -1 on allocation failure.
  */
 int tui_chat_append_error(TuiChat *chat, const char *text);
+
+/**
+ * tui_chat_truncate_after - drop every block from @idx onwards
+ * @chat: scrollback; non-NULL.
+ * @idx: first block to remove; must be < tui_chat_block_count().
+ *
+ * Used by the edit/regenerate flow: the fork message replaces everything
+ * after its block, so the stale tail (including any open streaming block)
+ * is discarded before the new reply streams in.
+ *
+ * Return: 0 on success, -1 when @idx is out of range (scrollback
+ *   unchanged).
+ */
+int tui_chat_truncate_after(TuiChat *chat, size_t idx);
 
 /**
  * tui_chat_block_count - number of blocks (open streaming block included)

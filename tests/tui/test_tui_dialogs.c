@@ -201,6 +201,195 @@ START_TEST(test_approval_event_gets_decision)
 }
 END_TEST
 
+/* ---- picker list selection ---- */
+
+START_TEST(test_picker_opens_with_items)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "ollama\nopenai\nzen",
+                                 NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_picker_item_count(m), 3);
+    ck_assert_int_eq(tui_modal_picker_visible_count(m), 3);
+    ck_assert_str_eq(tui_modal_picker_visible_at(m, 0), "ollama");
+    ck_assert_str_eq(tui_modal_picker_visible_at(m, 2), "zen");
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 0);
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_empty_body_opens_empty)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_picker_item_count(m), 0);
+    ck_assert_int_eq(tui_modal_picker_visible_count(m), 0);
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_enter_selects_cursor_item)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "ollama\nopenai\nzen",
+                                 NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, TUI_PICKER_KEY_DOWN),
+                     TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, TUI_PICKER_KEY_DOWN),
+                     TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 2);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 10), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_str_eq(tui_modal_picker_selected(m), "zen");
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_up_clamps_at_top)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "a\nb", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, TUI_PICKER_KEY_UP),
+                     TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 0);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 10), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_str_eq(tui_modal_picker_selected(m), "a");
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_esc_cancels)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "a\nb", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 27), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_ptr_null(tui_modal_picker_selected(m));
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_filter_restricts_and_selects)
+{
+    /* Type "op": only the two "open*" entries remain and cursor clamps. */
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "ollama\nopenai\nopencode_zen",
+                                 NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 'o'), TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 'p'), TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_picker_visible_count(m), 2);
+    ck_assert_str_eq(tui_modal_picker_visible_at(m, 0), "openai");
+    ck_assert_str_eq(tui_modal_picker_visible_at(m, 1), "opencode_zen");
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 10), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_str_eq(tui_modal_picker_selected(m), "openai");
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_filter_empty_selects_first)
+{
+    /* A filter with no matches must not select out of bounds: Enter on an
+     * empty visible list cancels (selection stays NULL). */
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "ollama\nopenai", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 'z'), TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_picker_visible_count(m), 0);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 10), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_ptr_null(tui_modal_picker_selected(m));
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_backspace_restores_filter)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "ollama\nopenai", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 'o'), TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 127), TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_picker_visible_count(m), 2);
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_ctrl_p_n_navigate)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "a\nb\nc", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 16), TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 0); /* up at top clamps */
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 14), TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 1); /* ctrl-n moves down */
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_picker_window_scrolls_top)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick",
+                                 "m1\nm2\nm3\nm4\nm5\nm6\nm7\nm8", NULL);
+    ck_assert_ptr_nonnull(m);
+    tui_modal_picker_set_window(m, 3);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, TUI_PICKER_KEY_DOWN),
+                     TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, TUI_PICKER_KEY_DOWN),
+                     TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, TUI_PICKER_KEY_DOWN),
+                     TUI_MODAL_ACTION_NONE);
+    /* cursor 3 with window 3: top must scroll to 1 to keep it visible */
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 3);
+    ck_assert_int_eq(tui_modal_picker_top(m), 1);
+    tui_modal_close(m);
+}
+
+END_TEST
+
+/* ---- generic confirm modal ---- */
+
+START_TEST(test_confirm_y_records_yes)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_CONFIRM, "Delete", "Sure?", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 'y'), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_int_eq(m->selection, 1);
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_confirm_n_and_esc_record_no)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_CONFIRM, "Delete", "Sure?", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 'n'), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_int_eq(m->selection, 0);
+    tui_modal_close(m);
+
+    m = tui_modal_open(TUI_MODAL_CONFIRM, "Delete", "Sure?", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 27), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_int_eq(m->selection, 0);
+    tui_modal_close(m);
+}
+
+END_TEST
+
+START_TEST(test_confirm_other_keys_ignored)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_CONFIRM, "Delete", "Sure?", NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 'x'), TUI_MODAL_ACTION_NONE);
+    ck_assert_int_eq(tui_modal_dispatch_key(m, ' '), TUI_MODAL_ACTION_NONE);
+    tui_modal_close(m);
+}
+
+END_TEST
+
 static Suite *suite(void)
 {
     Suite *s = suite_create("tui_dialogs");
@@ -227,6 +416,25 @@ static Suite *suite(void)
     tcase_add_test(tc_rt, test_approval_event_gets_decision);
     tcase_set_timeout(tc_rt, 10);
     suite_add_tcase(s, tc_rt);
+
+    TCase *tc_picker = tcase_create("picker");
+    tcase_add_test(tc_picker, test_picker_opens_with_items);
+    tcase_add_test(tc_picker, test_picker_empty_body_opens_empty);
+    tcase_add_test(tc_picker, test_picker_enter_selects_cursor_item);
+    tcase_add_test(tc_picker, test_picker_up_clamps_at_top);
+    tcase_add_test(tc_picker, test_picker_esc_cancels);
+    tcase_add_test(tc_picker, test_picker_filter_restricts_and_selects);
+    tcase_add_test(tc_picker, test_picker_filter_empty_selects_first);
+    tcase_add_test(tc_picker, test_picker_backspace_restores_filter);
+    tcase_add_test(tc_picker, test_picker_ctrl_p_n_navigate);
+    tcase_add_test(tc_picker, test_picker_window_scrolls_top);
+    suite_add_tcase(s, tc_picker);
+
+    TCase *tc_confirm = tcase_create("confirm");
+    tcase_add_test(tc_confirm, test_confirm_y_records_yes);
+    tcase_add_test(tc_confirm, test_confirm_n_and_esc_record_no);
+    tcase_add_test(tc_confirm, test_confirm_other_keys_ignored);
+    suite_add_tcase(s, tc_confirm);
     return s;
 }
 

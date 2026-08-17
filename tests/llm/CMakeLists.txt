@@ -119,3 +119,13 @@ target_compile_definitions(test_openai_oauth PRIVATE OPENAI_OAUTH_TEST=1)
 target_include_directories(test_openai_oauth PRIVATE ../../src)
 target_link_libraries(test_openai_oauth PRIVATE echo_ai_test_deps)
 add_test(NAME test_openai_oauth COMMAND test_openai_oauth)
+
+add_executable(test_provider_models
+    ../../src/llm/provider_models.c
+    ../../src/utils/string_utils.c
+    test_provider_models.c
+)
+target_compile_definitions(test_provider_models PRIVATE PROVIDER_MODELS_TEST=1)
+target_include_directories(test_provider_models PRIVATE ../../src)
+target_link_libraries(test_provider_models PRIVATE echo_ai_test_deps)
+add_test(NAME test_provider_models COMMAND test_provider_models)

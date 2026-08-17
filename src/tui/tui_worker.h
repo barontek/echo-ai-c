@@ -30,6 +30,8 @@ typedef struct {
     TuiEvents *evs;         /* worker -> UI event ring */
     TuiEvents *jobs;        /* UI -> worker job ring */
     SessionManager *sm;     /* borrowed; may be NULL */
+    Conf *conf;             /* borrowed; resolves provider switch settings */
+    OpenAIOAuth *oauth;     /* borrowed; device login / logout */
     SafetyConfig *safety;   /* borrowed; attached to rebuilt agents */
     tui_agent_factory_fn agent_factory; /* for /new; may be NULL */
     void *agent_factory_userdata;
@@ -66,7 +68,14 @@ void tui_worker_destroy(TuiWorker *w);
  * tui_worker_submit - queue a job for the worker
  * @w: worker; non-NULL.
  * @job: job name: "run" (arg = user input), "new" (reset conversation),
- *   "load" (arg = session id), "model" (arg = model name).
+ *   "load" (arg = session id), "model" (arg = model name),
+ *   "provider" (arg = canonical provider name), "model-list" (fetch the
+ *   current provider's models for the picker), "effort" (arg = effort
+ *   value or "default"), "delete" (arg = session id), "rename" (arg =
+ *   "id\x1fname"), "export" (arg = "id\x1fpath"), "change-password"
+ *   (arg = new password), "openai-login", "openai-logout", "lock",
+ *   "unlock", "edit" (arg = "message#\x1fnew text"), "regen" (arg =
+ *   message#), "branch" (arg = branch id), "branch-info".
  * @arg: job argument, borrowed; NULL allowed.
  *
  * "run" jobs queue even while a run is in flight (type-ahead); they

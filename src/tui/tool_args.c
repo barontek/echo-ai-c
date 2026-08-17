@@ -158,3 +158,36 @@ char *tool_args_compact_named(const char *tool_name, const char *json,
         return tool_args_compact_edit(json, max_len);
     return tool_args_compact(json, max_len);
 }
+
+/* Human-readable tool label for the chat header ("bash" -> "Bash",
+ * "read_file" -> "Read"). Unknown names pass through unchanged; never
+ * returns NULL (empty input yields ""). The raw name stays the block
+ * title so tool_end can match pending blocks by name. */
+const char *tool_args_label(const char *name)
+{
+    if (!name) return "";
+    if (strcmp(name, "bash") == 0) return "Bash";
+    if (strcmp(name, "read_file") == 0) return "Read";
+    if (strcmp(name, "write_file") == 0) return "Write";
+    if (strcmp(name, "edit") == 0) return "Edit";
+    if (strcmp(name, "web_search") == 0) return "Web Search";
+    if (strcmp(name, "deep_search") == 0) return "Deep Search";
+    if (strcmp(name, "web_fetch") == 0) return "Fetch";
+    if (strcmp(name, "python_execute") == 0) return "Python";
+    if (strcmp(name, "git") == 0) return "Git";
+    if (strcmp(name, "list_dir") == 0) return "List";
+    if (strcmp(name, "glob") == 0) return "Glob";
+    if (strcmp(name, "grep") == 0) return "Grep";
+    if (strcmp(name, "sqlite_query") == 0) return "SQLite Query";
+    if (strcmp(name, "sqlite_schema") == 0) return "SQLite Schema";
+    if (strcmp(name, "tool_ask_user") == 0) return "Ask";
+    if (strcmp(name, "memory") == 0) return "Memory";
+    if (strcmp(name, "notes") == 0) return "Notes";
+    if (strcmp(name, "semantic_search") == 0) return "Semantic Search";
+    if (strcmp(name, "tool_delegate") == 0) return "Delegate";
+    if (strcmp(name, "rest_api") == 0) return "REST";
+    if (strcmp(name, "tool_humanizer") == 0) return "Humanizer";
+    if (strcmp(name, "tool_browser") == 0) return "Browser";
+    if (strcmp(name, "ingest_document") == 0) return "Ingest";
+    return name;
+}

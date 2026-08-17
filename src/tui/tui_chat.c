@@ -70,6 +70,31 @@ static void invalidate_wrap(TuiChatBlock *blk)
     blk->wrap_lines = 0;
 }
 
+static void block_free_contents(TuiChatBlock *blk)
+{
+    free(blk->text);
+    free(blk->title);
+    free(blk->args);
+    free(blk->wrap_starts);
+    blk->text = NULL;
+    blk->title = NULL;
+    blk->args = NULL;
+    blk->wrap_starts = NULL;
+    blk->wrap_width = 0;
+    blk->wrap_lines = 0;
+}
+
+int tui_chat_truncate_after(TuiChat *chat, size_t idx)
+{
+    if (!chat) return -1;
+    if (idx >= chat->count) return -1;
+    for (size_t i = idx; i < chat->count; i++)
+        block_free_contents(&chat->blocks[i]);
+    chat->count = idx;
+    chat->streaming_open = 0;
+    return 0;
+}
+
 static void seal_streaming(TuiChat *chat)
 {
     chat->streaming_open = 0;
@@ -222,6 +247,31 @@ int tui_chat_tool_finish(TuiChat *chat, const char *name, const char *result)
             return 0;
         }
     }
+    return tui_chat_append_tool(chat, name, result);
+}
+
+int tui_chat_tool_finish_named(TuiChat *chat, const char *name,
+                               const char *result)
+{
+    if (!chat) return -1;
+    /* Match the LAST still-pending tool block whose title equals the
+     * finished tool's name: parallel tool results may arrive out of
+     * order, so the newest unclosed block of the same tool is the one
+     * this end event belongs to. */
+    for (size_t i = chat->count; i > 0; i--)
+    {
+        TuiChatBlock *blk = &chat->blocks[i - 1];
+        if (blk->kind != TUI_BLOCK_TOOL) continue;
+        if (blk->text[0] != '\0') continue; /* already filled */
+        if (name && blk->title && strcmp(blk->title, name) != 0) continue;
+        char *copy = str_dup(result ? result : "");
+        if (!copy) return -1; /* block stays pending */
+        free(blk->text);
+        blk->text = copy;
+        invalidate_wrap(blk);
+        return 0;
+    }
+    /* No pending match (missed start event): append a fallback block. */
     return tui_chat_append_tool(chat, name, result);
 }
 

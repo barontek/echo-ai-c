@@ -64,10 +64,10 @@
             curl-impersonate
             # Optional (not a build dependency): the browser tool spawns
             # whichever Chromium-family binary it discovers at runtime
-            # (ECHO_BROWSER_BIN, $BROWSER, then PATH). Brave here just
-            # guarantees a headful-capable browser is on PATH in the dev
-            # shell; other browsers work without any of this.
-            brave
+            # (ECHO_BROWSER_BIN, $BROWSER, then PATH). A browser is NOT
+            # pinned here anymore: users with a system browser (or
+            # ECHO_BROWSER_BIN) get one on PATH already, and pinning brave
+            # made every dev-shell entry download ~500MB from the cache.
           ];
 
           shellHook = ''
