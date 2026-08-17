@@ -226,3 +226,17 @@ density = compact
 # transparent/blurred terminal (e.g. kitty) shows through. The status
 # bar, error highlights, and modal backdrop stay opaque.
 # transparent = false
+
+# --- keybindings (optional overrides) ---
+# leader = ctrl+x        # the leader key prefixing chord bindings
+# leader_timeout = 2000  # ms to complete a leader chord
+# Keymaps override the default bindings. The key string accepts
+# modifiers (ctrl/shift/alt/meta/super), key names (enter, esc, tab,
+# backspace, del, home, end, pgup, pgdown, up/down/left/right, space,
+# f1-f12), the leader token (<leader> or leader), comma-separated
+# alternatives, and space-separated chords. "none" disables a binding.
+# Examples:
+# keymap_menu.open = ctrl+p        # palette on Ctrl-P only
+# keymap_chat.clear = ctrl+k
+# keymap_app.exit = none           # never quit via a key chord
+# keymap_session.list = <leader>l

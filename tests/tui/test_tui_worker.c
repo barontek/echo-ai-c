@@ -19,6 +19,7 @@
 #include "session/session_branch.h"
 #include "llm/provider_models.h"
 #include "llm/factory.h"
+#include "tools/tool.h"
 #include "config/config.h"
 #include "utils/string_utils.h"
 
@@ -107,6 +108,7 @@ void agent_set_title_callback(Agent *a, title_callback cb, void *ud)
 /* ---- stubs: session persistence (load path only) ---- */
 
 static Session *stub_loaded_session = NULL;
+static int stub_load_has_messages = 0;
 static int stub_delete_result = 0;
 static int stub_save_result = 0;
 static int stub_save_calls = 0;
@@ -122,6 +124,18 @@ Session *session_manager_load_session_alloc(SessionManager *sm, const char *id)
     stub_loaded_session = calloc(1, sizeof(Session));
     if (!stub_loaded_session) return NULL;
     stub_loaded_session->title = str_dup("old title");
+    if (stub_load_has_messages)
+    {
+        stub_loaded_session->messages_count = 2;
+        stub_loaded_session->messages = calloc(2, sizeof(Message));
+        if (stub_loaded_session->messages)
+        {
+            stub_loaded_session->messages[0].role = str_dup("user");
+            stub_loaded_session->messages[0].content = str_dup("hello");
+            stub_loaded_session->messages[1].role = str_dup("assistant");
+            stub_loaded_session->messages[1].content = str_dup("hi there");
+        }
+    }
     return stub_loaded_session;
 }
 
@@ -199,10 +213,88 @@ void message_free_all(Message *msgs, int count)
     (void)msgs; (void)count;
 }
 
+static int stub_summarize_result = 0;
+static int stub_summarize_calls = 0;
+
+int agent_perform_summarization(Agent *agent, int original_count)
+{
+    (void)agent;
+    (void)original_count;
+    stub_summarize_calls++;
+    return stub_summarize_result;
+}
+
+/* ---- stubs: bash tool for the shell job ---- */
+
+static int stub_bash_execute_calls = 0;
+static const char *stub_bash_content = NULL;
+static const char *stub_bash_error = NULL;
+
+ToolResult *tool_result_create(const char *content)
+{
+    ToolResult *r = calloc(1, sizeof(ToolResult));
+    if (!r) return NULL;
+    r->content = content ? str_dup(content) : NULL;
+    return r;
+}
+
+ToolResult *tool_result_error(const char *error, const char *category)
+{
+    ToolResult *r = calloc(1, sizeof(ToolResult));
+    if (!r) return NULL;
+    r->error = error ? str_dup(error) : NULL;
+    r->error_category = category ? str_dup(category) : NULL;
+    return r;
+}
+
+void tool_result_free(ToolResult *r)
+{
+    if (!r) return;
+    free(r->content);
+    free(r->error);
+    free(r->error_category);
+    free(r);
+}
+
+static ToolResult *stub_bash_execute(Tool *self, const char *args_json)
+{
+    (void)self;
+    (void)args_json;
+    stub_bash_execute_calls++;
+    if (stub_bash_error)
+        return tool_result_error(stub_bash_error, "exec_error");
+    return tool_result_create(stub_bash_content ? stub_bash_content : "");
+}
+
+static Tool stub_bash_tool;
+
+Tool *registry_get(const char *name)
+{
+    if (name && strcmp(name, "bash") == 0)
+        return &stub_bash_tool;
+    return NULL;
+}
+
 cJSON *messages_to_json_array(Message *msgs, int count)
 {
-    (void)msgs; (void)count;
-    return NULL; /* branch-switch test: history event omitted is fine */
+    /* Real serialization so the load job's HISTORY event can be asserted;
+     * the branch-switch test ignores HISTORY, so it stays green. */
+    cJSON *arr = cJSON_CreateArray();
+    if (!arr) return NULL;
+    for (int i = 0; i < count; i++)
+    {
+        cJSON *m = cJSON_CreateObject();
+        if (!m)
+        {
+            cJSON_Delete(arr);
+            return NULL;
+        }
+        cJSON_AddStringToObject(m, "role", msgs[i].role ? msgs[i].role : "");
+        cJSON_AddStringToObject(m, "content",
+                                msgs[i].content ? msgs[i].content : "");
+        cJSON_AddItemToArray(arr, m);
+    }
+    return arr;
 }
 
 int session_manager_fork_branch(SessionManager *sm, const char *session_id,
@@ -346,7 +438,19 @@ static void reset_stubs(void)
         free(stub_saved_session);
     }
     free(stub_export_json);
-    free(stub_loaded_session);
+    if (stub_loaded_session)
+    {
+        for (int i = 0; i < stub_loaded_session->messages_count; i++)
+        {
+            free(stub_loaded_session->messages[i].role);
+            free(stub_loaded_session->messages[i].content);
+        }
+        free(stub_loaded_session->messages);
+        free(stub_loaded_session->title);
+        free(stub_loaded_session);
+    }
+    stub_loaded_session = NULL;
+    stub_load_has_messages = 0;
     stub_set_model_result = 0;
     stub_set_model_name = NULL;
     stub_set_provider_result = 0;
@@ -361,7 +465,6 @@ static void reset_stubs(void)
     stub_fetch_count = 0U;
     stub_fetch_models = NULL;
     stub_load_session_result = 0;
-    stub_loaded_session = NULL;
     stub_delete_result = 0;
     stub_save_result = 0;
     stub_save_calls = 0;
@@ -378,6 +481,12 @@ static void reset_stubs(void)
     stub_switch_result = 0;
     stub_switch_calls = 0;
     stub_tag_calls = 0;
+    stub_summarize_result = 0;
+    stub_summarize_calls = 0;
+    stub_bash_execute_calls = 0;
+    stub_bash_content = NULL;
+    stub_bash_error = NULL;
+    memset(&stub_bash_tool, 0, sizeof(stub_bash_tool));
     stub_branch_info = NULL;
 }
 
@@ -909,6 +1018,135 @@ START_TEST(test_branch_info_job_lists_metadata)
 
 END_TEST
 
+START_TEST(test_load_job_swaps_messages_and_pushes_history)
+{
+    reset_stubs();
+    stub_load_session_result = 1;
+    stub_load_has_messages = 1;
+    Fixture fx = make_fixture("");
+    fx.agent->session_id = str_dup("old-id");
+    ck_assert_int_eq(tui_worker_submit(fx.worker, "load", "s123"), 0);
+
+    /* The loaded transcript must reach the UI as a HISTORY event (the
+     * chat pane is rebuilt from this JSON on session switch). */
+    TuiEvent *ev = wait_for_event(&fx, TUI_EV_HISTORY, NULL);
+    ck_assert_ptr_nonnull(ev);
+    ck_assert_ptr_nonnull(ev->extra);
+    ck_assert(strstr(ev->extra, "hello") != NULL);
+    ck_assert(strstr(ev->extra, "hi there") != NULL);
+    tui_event_free(ev);
+
+    TuiEvent *sev = wait_for_event(&fx, TUI_EV_STATUS, NULL);
+    ck_assert_ptr_nonnull(sev);
+    ck_assert(sev->text && strstr(sev->text, "Loaded session:") != NULL);
+    tui_event_free(sev);
+
+    ck_assert_str_eq(fx.agent->session_id, "s123");
+    ck_assert_int_eq(fx.agent->messages_count, 2);
+    ck_assert_ptr_nonnull(fx.agent->messages);
+
+    destroy_fixture(&fx);
+}
+
+END_TEST
+
+START_TEST(test_load_job_empty_session_still_clears_scrollback)
+{
+    reset_stubs();
+    stub_load_session_result = 1; /* messages_count stays 0 */
+    Fixture fx = make_fixture("");
+    ck_assert_int_eq(tui_worker_submit(fx.worker, "load", "s9"), 0);
+
+    /* A session with no messages must still clear the old scrollback. */
+    TuiEvent *ev = wait_for_event(&fx, TUI_EV_HISTORY, NULL);
+    ck_assert_ptr_nonnull(ev);
+    ck_assert_ptr_nonnull(ev->extra);
+    ck_assert_str_eq(ev->extra, "[]");
+    tui_event_free(ev);
+
+    destroy_fixture(&fx);
+}
+
+END_TEST
+
+START_TEST(test_compact_job_invokes_summarizer)
+{
+    reset_stubs();
+    stub_summarize_result = 0;
+    Fixture fx = make_fixture("");
+    fx.agent->session_id = str_dup("s1");
+    ck_assert_int_eq(tui_worker_submit(fx.worker, "compact", NULL), 0);
+
+    TuiEvent *ev = wait_for_event(&fx, TUI_EV_STATUS, "Session summarized.");
+    ck_assert_ptr_nonnull(ev);
+    tui_event_free(ev);
+    ck_assert_int_eq(stub_summarize_calls, 1);
+
+    destroy_fixture(&fx);
+}
+
+END_TEST
+
+START_TEST(test_compact_job_reports_skipped_on_failure)
+{
+    reset_stubs();
+    stub_summarize_result = -1;
+    Fixture fx = make_fixture("");
+    fx.agent->session_id = str_dup("s1");
+    ck_assert_int_eq(tui_worker_submit(fx.worker, "compact", NULL), 0);
+
+    TuiEvent *ev = wait_for_event(&fx, TUI_EV_STATUS, NULL);
+    ck_assert_ptr_nonnull(ev);
+    ck_assert(ev->text && strstr(ev->text, "Compaction skipped") != NULL);
+    tui_event_free(ev);
+
+    destroy_fixture(&fx);
+}
+
+END_TEST
+
+START_TEST(test_shell_job_runs_command_via_bash_tool)
+{
+    reset_stubs();
+    stub_bash_tool.execute = stub_bash_execute;
+    stub_bash_content = "hi from shell";
+    Fixture fx = make_fixture("");
+    ck_assert_int_eq(tui_worker_submit(fx.worker, "shell", "echo hi"), 0);
+
+    TuiEvent *start = wait_for_event(&fx, TUI_EV_TOOL_START, "shell");
+    ck_assert_ptr_nonnull(start);
+    ck_assert(start->extra && strstr(start->extra, "echo hi") != NULL);
+    tui_event_free(start);
+
+    TuiEvent *end = wait_for_event(&fx, TUI_EV_TOOL_END, "shell");
+    ck_assert_ptr_nonnull(end);
+    ck_assert(end->extra && strstr(end->extra, "hi from shell") != NULL);
+    tui_event_free(end);
+    ck_assert_int_eq(stub_bash_execute_calls, 1);
+
+    destroy_fixture(&fx);
+}
+
+END_TEST
+
+START_TEST(test_shell_job_reports_error_result)
+{
+    reset_stubs();
+    stub_bash_tool.execute = stub_bash_execute;
+    stub_bash_error = "command rejected by safety policy";
+    Fixture fx = make_fixture("");
+    ck_assert_int_eq(tui_worker_submit(fx.worker, "shell", "rm -rf /"), 0);
+
+    TuiEvent *end = wait_for_event(&fx, TUI_EV_TOOL_END, "shell");
+    ck_assert_ptr_nonnull(end);
+    ck_assert(end->extra && strstr(end->extra, "safety policy") != NULL);
+    tui_event_free(end);
+
+    destroy_fixture(&fx);
+}
+
+END_TEST
+
 Suite *tui_worker_suite(void)
 {
     Suite *s = suite_create("tui_worker");
@@ -934,6 +1172,12 @@ Suite *tui_worker_suite(void)
     tcase_add_test(tc, test_regen_job_requires_active_session);
     tcase_add_test(tc, test_branch_switch_job);
     tcase_add_test(tc, test_branch_info_job_lists_metadata);
+    tcase_add_test(tc, test_load_job_swaps_messages_and_pushes_history);
+    tcase_add_test(tc, test_load_job_empty_session_still_clears_scrollback);
+    tcase_add_test(tc, test_compact_job_invokes_summarizer);
+    tcase_add_test(tc, test_compact_job_reports_skipped_on_failure);
+    tcase_add_test(tc, test_shell_job_runs_command_via_bash_tool);
+    tcase_add_test(tc, test_shell_job_reports_error_result);
     tcase_set_timeout(tc, 60);
     suite_add_tcase(s, tc);
     return s;

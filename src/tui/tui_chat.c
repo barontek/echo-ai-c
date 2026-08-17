@@ -95,8 +95,71 @@ int tui_chat_truncate_after(TuiChat *chat, size_t idx)
     return 0;
 }
 
+/* Drop leading and trailing whitespace-only lines from a block's text.
+ * Model and tool output commonly begins/ends with "\n" (or several blank
+ * lines), which would render as empty rows on top of the block-separator
+ * row. Only blank lines at the edges are removed — blank lines inside
+ * the content are paragraph separators and stay. */
+static void trim_blank_lines(TuiChatBlock *blk)
+{
+    if (!blk || !blk->text) return;
+    size_t len = strlen(blk->text);
+    if (len == 0) return;
+
+    /* drop trailing whitespace-only lines */
+    size_t end = len;
+    while (end > 0)
+    {
+        size_t ws = end;
+        while (ws > 0 && (blk->text[ws - 1] == ' ' || blk->text[ws - 1] == '\t'))
+            ws--;
+        if (ws > 0 && blk->text[ws - 1] == '\n')
+        {
+            end = ws - 1; /* the whole line was blank: drop it */
+            continue;
+        }
+        break;
+    }
+    /* drop leading whitespace-only lines */
+    size_t start = 0;
+    while (start < end)
+    {
+        size_t ls = start;
+        while (ls < end && (blk->text[ls] == ' ' || blk->text[ls] == '\t'))
+            ls++;
+        if (ls < end && blk->text[ls] == '\n')
+        {
+            start = ls + 1;
+            continue;
+        }
+        break;
+    }
+    /* a remainder of pure whitespace has no visible content at all */
+    int all_ws = 1;
+    for (size_t i = start; i < end; i++)
+    {
+        if (blk->text[i] != ' ' && blk->text[i] != '\t' && blk->text[i] != '\n')
+        {
+            all_ws = 0;
+            break;
+        }
+    }
+    if (all_ws)
+        start = end;
+
+    if (start != 0 || end != len)
+    {
+        size_t newlen = end - start;
+        memmove(blk->text, blk->text + start, newlen);
+        blk->text[newlen] = '\0';
+        invalidate_wrap(blk);
+    }
+}
+
 static void seal_streaming(TuiChat *chat)
 {
+    if (chat->streaming_open && chat->count > 0)
+        trim_blank_lines(&chat->blocks[chat->count - 1]);
     chat->streaming_open = 0;
 }
 
@@ -169,6 +232,7 @@ int tui_chat_begin_user(TuiChat *chat, const char *text)
         chat->streaming_open = was_streaming;
         return -1;
     }
+    trim_blank_lines(&chat->blocks[chat->count - 1]);
     return 0;
 }
 
@@ -221,6 +285,8 @@ int tui_chat_append_tool(TuiChat *chat, const char *name, const char *result)
     if (asprintf(&line, "%s: %s", name ? name : "(tool)", result ? result : "") < 0)
         return -1;
     int rc = block_append(chat, TUI_BLOCK_TOOL, line);
+    if (rc == 0)
+        trim_blank_lines(&chat->blocks[chat->count - 1]);
     free(line);
     return rc;
 }
@@ -244,6 +310,7 @@ int tui_chat_tool_finish(TuiChat *chat, const char *name, const char *result)
             free(last->text);
             last->text = copy;
             invalidate_wrap(last);
+            trim_blank_lines(last);
             return 0;
         }
     }
@@ -269,6 +336,7 @@ int tui_chat_tool_finish_named(TuiChat *chat, const char *name,
         free(blk->text);
         blk->text = copy;
         invalidate_wrap(blk);
+        trim_blank_lines(blk);
         return 0;
     }
     /* No pending match (missed start event): append a fallback block. */
@@ -278,7 +346,10 @@ int tui_chat_tool_finish_named(TuiChat *chat, const char *name,
 int tui_chat_append_error(TuiChat *chat, const char *text)
 {
     if (!chat) return -1;
-    return block_append(chat, TUI_BLOCK_ERROR, text);
+    int rc = block_append(chat, TUI_BLOCK_ERROR, text);
+    if (rc == 0)
+        trim_blank_lines(&chat->blocks[chat->count - 1]);
+    return rc;
 }
 
 size_t tui_chat_block_count(const TuiChat *chat)

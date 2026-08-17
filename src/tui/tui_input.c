@@ -117,18 +117,53 @@ void tui_input_destroy(TuiInput *in)
     free(in);
 }
 
+/* Paste/insert normalization: CRLF pairs and lone CR become LF, so
+ * pasted Windows text never injects carriage returns into the editor. */
+static size_t normalize_eols(const char *text, size_t n, char *out)
+{
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++)
+    {
+        if (text[i] == '\r')
+        {
+            if (i + 1 < n && text[i + 1] == '\n')
+                i++; /* the LF of a CRLF pair is consumed here */
+            out[o++] = '\n';
+        }
+        else
+        {
+            out[o++] = text[i];
+        }
+    }
+    return o;
+}
+
 int tui_input_insert(TuiInput *in, const char *text)
 {
     if (!in || !text) return -1;
     size_t n = strlen(text);
     if (n == 0) return 0;
 
-    if (grow_buffer(in, in->len + n + 1) != 0) return -1;
+    char *norm = NULL;
+    if (memchr(text, '\r', n))
+    {
+        norm = malloc(n + 1);
+        if (!norm) return -1;
+        n = normalize_eols(text, n, norm);
+        text = norm;
+    }
+
+    if (grow_buffer(in, in->len + n + 1) != 0)
+    {
+        free(norm);
+        return -1;
+    }
 
     memmove(in->buf + in->cursor + n, in->buf + in->cursor, in->len - in->cursor + 1);
     memcpy(in->buf + in->cursor, text, n);
     in->len += n;
     in->cursor += n;
+    free(norm);
     return 0;
 }
 
@@ -323,4 +358,11 @@ void tui_input_reset_history_walk(TuiInput *in)
     in->walking = 0;
     free(in->draft);
     in->draft = NULL;
+}
+
+void tui_input_seed_history(TuiInput *in, const char *const *entries, int count)
+{
+    if (!in || !entries || count <= 0) return;
+    for (int i = 0; i < count; i++)
+        history_push(in, entries[i]);
 }

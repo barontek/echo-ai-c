@@ -180,4 +180,19 @@ const char *tui_input_history_forward(TuiInput *in);
  */
 void tui_input_reset_history_walk(TuiInput *in);
 
+/**
+ * tui_input_seed_history - preload history from a persistent store
+ * @in: editor; non-NULL.
+ * @entries: array of @count borrowed strings, oldest first; may be NULL
+ *   when @count is 0.
+ * @count: number of entries.
+ *
+ * Pushes every entry through the normal history path (consecutive dedup
+ * and the cap both apply), so a TUI restart can restore the user's
+ * prompt history without touching the current buffer.
+ *
+ * Return: void.
+ */
+void tui_input_seed_history(TuiInput *in, const char *const *entries, int count);
+
 #endif /* ECHO_TUI_INPUT_H */

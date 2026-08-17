@@ -481,6 +481,28 @@ START_TEST(test_approval_empty_list)
 }
 END_TEST
 
+START_TEST(test_allow_tool_always_removes_from_approval)
+{
+    SafetyConfig *cfg = safety_config_create();
+    cfg->require_approval_for = malloc(sizeof(char *) * 2);
+    ck_assert_ptr_nonnull(cfg->require_approval_for);
+    cfg->require_approval_for[0] = str_dup("bash");
+    cfg->require_approval_for[1] = str_dup("git");
+    cfg->require_approval_count = 2;
+
+    ck_assert_int_eq(safety_needs_approval(cfg, "bash"), 1);
+    /* removing bash stops the prompt; git still prompts */
+    ck_assert_int_eq(safety_allow_tool_always(cfg, "bash"), 1);
+    ck_assert_int_eq(safety_needs_approval(cfg, "bash"), 0);
+    ck_assert_int_eq(safety_needs_approval(cfg, "git"), 1);
+    /* a tool not in the list reports 0 (nothing changed) */
+    ck_assert_int_eq(safety_allow_tool_always(cfg, "bash"), 0);
+    ck_assert_int_eq(safety_allow_tool_always(NULL, "bash"), -1);
+    ck_assert_int_eq(safety_allow_tool_always(cfg, NULL), -1);
+    safety_config_free(cfg);
+}
+END_TEST
+
 /* --- safety.mode --- */
 
 START_TEST(test_mode_default_is_restricted)
@@ -818,6 +840,7 @@ Suite *safety_suite(void)
     tcase_add_test(tc_app, test_approval_null_args);
     tcase_add_test(tc_app, test_approval_default_tools);
     tcase_add_test(tc_app, test_approval_empty_list);
+    tcase_add_test(tc_app, test_allow_tool_always_removes_from_approval);
     suite_add_tcase(s, tc_app);
 
     TCase *tc_mode = tcase_create("Mode");

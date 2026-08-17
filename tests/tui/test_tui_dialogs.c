@@ -176,6 +176,85 @@ static void *wait_thread(void *arg)
     return NULL;
 }
 
+/* Run one approval modal against a real round-trip event and return the
+ * worker-observed result. */
+static int approval_result_with(const char *keys, size_t nkeys)
+{
+    TuiEvents *evs = tui_events_init(4);
+    ck_assert_ptr_nonnull(evs);
+    TuiEvent *ev = tui_events_push(evs, TUI_EV_APPROVAL, "bash", "{}");
+    ck_assert_ptr_nonnull(ev);
+    ck_assert_ptr_eq(tui_events_pop(evs), ev);
+
+    int result = -1;
+    WaitArgs args = {.ev = ev, .result = &result};
+    pthread_t t;
+    ck_assert_int_eq(pthread_create(&t, NULL, wait_thread, &args), 0);
+    usleep(50000);
+    TuiModal *m = tui_modal_open(TUI_MODAL_APPROVAL, "a", NULL, ev);
+    for (size_t i = 0; i < nkeys; i++)
+        (void)tui_modal_dispatch_key(m, keys[i]);
+    tui_modal_close(m);
+    pthread_join(t, NULL);
+
+    tui_event_free(ev);
+    tui_events_destroy(evs);
+    return result;
+}
+
+START_TEST(test_approval_allow_once_via_enter)
+{
+    /* default selection is "Allow once": plain Enter -> allow (1) */
+    ck_assert_int_eq(approval_result_with((const char[]){10}, 1), 1);
+}
+END_TEST
+
+START_TEST(test_approval_always_via_navigation)
+{
+    /* navigate right once to "Always", Enter -> allow with result 2 */
+    ck_assert_int_eq(approval_result_with((const char[]){'l', 10}, 2), 2);
+}
+END_TEST
+
+START_TEST(test_approval_reject_via_navigation)
+{
+    /* navigate to "Reject" (right twice), Enter -> deny (0) */
+    ck_assert_int_eq(approval_result_with((const char[]){'l', 'l', 10}, 3), 0);
+}
+END_TEST
+
+START_TEST(test_approval_reject_via_esc_never_allows)
+{
+    ck_assert_int_eq(approval_result_with((const char[]){27}, 1), 0);
+}
+END_TEST
+
+START_TEST(test_approval_quick_allow_and_reject_keys)
+{
+    ck_assert_int_eq(approval_result_with((const char[]){'y'}, 1), 1);
+    ck_assert_int_eq(approval_result_with((const char[]){'n'}, 1), 0);
+}
+END_TEST
+
+START_TEST(test_approval_selection_moves)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_APPROVAL, "a", NULL, NULL);
+    ck_assert_ptr_nonnull(m);
+    ck_assert_int_eq(m->selection, 0); /* defaults to Allow once */
+    (void)tui_modal_dispatch_key(m, 'l');
+    ck_assert_int_eq(m->selection, 1); /* Always */
+    (void)tui_modal_dispatch_key(m, 'l');
+    ck_assert_int_eq(m->selection, 2); /* Reject */
+    (void)tui_modal_dispatch_key(m, 'l');
+    ck_assert_int_eq(m->selection, 0); /* wraps */
+    (void)tui_modal_dispatch_key(m, 'h');
+    ck_assert_int_eq(m->selection, 2); /* backwards */
+    (void)tui_modal_dispatch_key(m, '2');
+    ck_assert_int_eq(m->selection, 1); /* direct select */
+    tui_modal_close(m);
+}
+END_TEST
+
 START_TEST(test_approval_event_gets_decision)
 {
     TuiEvents *evs = tui_events_init(4);
@@ -390,6 +469,64 @@ START_TEST(test_confirm_other_keys_ignored)
 
 END_TEST
 
+START_TEST(test_picker_headers_skip_and_never_commit)
+{
+    /* rows: header, item, header, item — headers are skipped by the
+     * cursor and never committed */
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick",
+                                 "Session\nNew\nModel\nList", NULL);
+    ck_assert_ptr_nonnull(m);
+    int flags[] = { 1, 0, 1, 0 };
+    ck_assert_int_eq(tui_modal_picker_set_headers(m, flags, 4), 0);
+    ck_assert_int_eq(tui_modal_picker_item_count(m), 4);
+
+    /* the cursor lands on the first selectable row (index 1), not the
+     * leading header */
+    ck_assert_int_eq(tui_modal_picker_visible_is_header(m, 0), 1);
+    ck_assert_int_eq(tui_modal_picker_visible_is_header(m, 1), 0);
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 1);
+
+    /* navigation skips headers: down from item 1 goes to item 3 */
+    (void)tui_modal_dispatch_key(m, TUI_PICKER_KEY_DOWN);
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 3);
+    (void)tui_modal_dispatch_key(m, TUI_PICKER_KEY_UP);
+    ck_assert_int_eq(tui_modal_picker_cursor(m), 1);
+
+    /* committing selects a real item, never a header */
+    ck_assert_int_eq(tui_modal_dispatch_key(m, 10), TUI_MODAL_ACTION_ANSWERED);
+    ck_assert_str_eq(tui_modal_picker_selected(m), "New");
+    tui_modal_close(m);
+}
+END_TEST
+
+START_TEST(test_picker_header_stays_when_child_matches)
+{
+    /* filtering keeps a header only while one of its children matches */
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick",
+                                 "App\nQuit\nSession\nSave", NULL);
+    ck_assert_ptr_nonnull(m);
+    int flags[] = { 1, 0, 1, 0 };
+    ck_assert_int_eq(tui_modal_picker_set_headers(m, flags, 4), 0);
+
+    (void)tui_modal_dispatch_key(m, 's'); /* matches "Save" under Session */
+    ck_assert_int_eq(tui_modal_picker_visible_count(m), 2); /* header + Save */
+    ck_assert_int_eq(tui_modal_picker_visible_is_header(m, 0), 1);
+    ck_assert_str_eq(tui_modal_picker_visible_at(m, 1), "Save");
+    tui_modal_close(m);
+}
+END_TEST
+
+START_TEST(test_picker_set_headers_bad_count_rejected)
+{
+    TuiModal *m = tui_modal_open(TUI_MODAL_PICKER, "Pick", "a\nb", NULL);
+    ck_assert_ptr_nonnull(m);
+    int flags[] = { 1, 0, 0 };
+    ck_assert_int_eq(tui_modal_picker_set_headers(m, flags, 3), -1); /* != 2 */
+    ck_assert_int_eq(tui_modal_picker_set_headers(m, NULL, 0), -1);
+    tui_modal_close(m);
+}
+END_TEST
+
 static Suite *suite(void)
 {
     Suite *s = suite_create("tui_dialogs");
@@ -414,6 +551,12 @@ static Suite *suite(void)
 
     TCase *tc_rt = tcase_create("roundtrip");
     tcase_add_test(tc_rt, test_approval_event_gets_decision);
+    tcase_add_test(tc_rt, test_approval_allow_once_via_enter);
+    tcase_add_test(tc_rt, test_approval_always_via_navigation);
+    tcase_add_test(tc_rt, test_approval_reject_via_navigation);
+    tcase_add_test(tc_rt, test_approval_reject_via_esc_never_allows);
+    tcase_add_test(tc_rt, test_approval_quick_allow_and_reject_keys);
+    tcase_add_test(tc_rt, test_approval_selection_moves);
     tcase_set_timeout(tc_rt, 10);
     suite_add_tcase(s, tc_rt);
 
@@ -428,6 +571,9 @@ static Suite *suite(void)
     tcase_add_test(tc_picker, test_picker_backspace_restores_filter);
     tcase_add_test(tc_picker, test_picker_ctrl_p_n_navigate);
     tcase_add_test(tc_picker, test_picker_window_scrolls_top);
+    tcase_add_test(tc_picker, test_picker_headers_skip_and_never_commit);
+    tcase_add_test(tc_picker, test_picker_header_stays_when_child_matches);
+    tcase_add_test(tc_picker, test_picker_set_headers_bad_count_rejected);
     suite_add_tcase(s, tc_picker);
 
     TCase *tc_confirm = tcase_create("confirm");

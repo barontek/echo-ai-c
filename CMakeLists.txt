@@ -115,7 +115,16 @@ add_executable(echo-ai
     src/tui/tui_input.c
     src/tui/tui_chat.c
     src/tui/tui_dialogs.c
+    src/tui/tui_keys.c
+    src/tui/tui_command.c
+    src/tui/tui_prompt_store.c
+    src/tui/tui_session_store.c
+    src/tui/tui_autocomplete.c
+    src/tui/tui_model_store.c
     src/tui/tui_stream.c
+    src/tui/tui_render.c
+    src/tui/tui_cmd.c
+    src/tui/tui_picker.c
     src/tui/markdown.c
     src/tui/tool_args.c
     src/tui/tui_worker.c

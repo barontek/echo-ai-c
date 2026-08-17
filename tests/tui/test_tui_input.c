@@ -307,6 +307,47 @@ START_TEST(test_set_text_failure_keeps_content)
 }
 END_TEST
 
+START_TEST(test_seed_history_preloads_oldest_first)
+{
+    TuiInput *in = tui_input_create(3);
+    ck_assert_ptr_nonnull(in);
+    static const char *entries[] = { "old", "middle", "new" };
+    tui_input_seed_history(in, entries, 3);
+
+    /* walking back should surface newest first */
+    const char *w = tui_input_history_back(in);
+    ck_assert_ptr_nonnull(w);
+    ck_assert_str_eq(w, "new");
+    w = tui_input_history_back(in);
+    ck_assert_str_eq(w, "middle");
+    w = tui_input_history_back(in);
+    ck_assert_str_eq(w, "old");
+    tui_input_destroy(in);
+}
+END_TEST
+
+
+START_TEST(test_insert_normalizes_crlf)
+{
+    TuiInput *in = tui_input_create(0);
+    ck_assert_ptr_nonnull(in);
+    ck_assert_int_eq(tui_input_insert(in, "a\r\nb\rc\n"), 0);
+    ck_assert_str_eq(tui_input_text(in), "a\nb\nc\n");
+    ck_assert_uint_eq(tui_input_cursor(in), 6);
+    tui_input_destroy(in);
+}
+END_TEST
+
+START_TEST(test_insert_without_cr_is_unchanged)
+{
+    TuiInput *in = tui_input_create(0);
+    ck_assert_ptr_nonnull(in);
+    ck_assert_int_eq(tui_input_insert(in, "plain\nmulti\nline"), 0);
+    ck_assert_str_eq(tui_input_text(in), "plain\nmulti\nline");
+    tui_input_destroy(in);
+}
+END_TEST
+
 static Suite *suite(void)
 {
     Suite *s = suite_create("tui_input");
@@ -325,6 +366,9 @@ static Suite *suite(void)
     tcase_add_test(tc, test_history_back_forward_walk);
     tcase_add_test(tc, test_history_cap_and_dedupe);
     tcase_add_test(tc, test_history_zero_cap_disabled);
+    tcase_add_test(tc, test_seed_history_preloads_oldest_first);
+    tcase_add_test(tc, test_insert_normalizes_crlf);
+    tcase_add_test(tc, test_insert_without_cr_is_unchanged);
     tcase_add_test(tc, test_set_text_replaces_buffer);
     tcase_add_test(tc, test_insert_failure_preserves_buffer);
     tcase_add_test(tc, test_submit_failure_keeps_buffer);

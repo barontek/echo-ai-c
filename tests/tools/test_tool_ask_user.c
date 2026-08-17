@@ -15,13 +15,14 @@
 Tool *tool_ask_user_create(SafetyConfig *safety);
 
 static char *captured_question = NULL;
+static const char *stub_answer_text = "the answer";
 
 static char *stub_answer(const char *question, void *userdata)
 {
     (void)userdata;
     free(captured_question);
     captured_question = str_dup(question);
-    return str_dup("the answer");
+    return str_dup(stub_answer_text);
 }
 
 static char *stub_cancel(const char *question, void *userdata)
@@ -64,6 +65,48 @@ START_TEST(test_ask_user_null_callback_answer_is_cancelled)
 }
 END_TEST
 
+START_TEST(test_ask_user_options_are_numbered_and_resolvable)
+{
+    /* options are appended to the question as numbered lines */
+    registry_set_ask_user_callback(stub_answer, NULL);
+    stub_answer_text = "the answer";
+    Tool *tool = tool_ask_user_create(NULL);
+    ck_assert_ptr_nonnull(tool);
+    ToolResult *r = tool->execute(
+        tool, "{\"question\":\"pick\",\"options\":[\"red\",\"green\",\"blue\"]}");
+    ck_assert_ptr_nonnull(r);
+    ck_assert_ptr_null(r->error);
+    ck_assert_str_eq(r->content, "the answer");
+    ck_assert(strstr(captured_question, "1. red") != NULL);
+    ck_assert(strstr(captured_question, "3. blue") != NULL);
+    tool_result_free(r);
+
+    /* a bare option number resolves to that option's text */
+    stub_answer_text = "2";
+    r = tool->execute(tool,
+                      "{\"question\":\"pick\",\"options\":[\"red\",\"green\",\"blue\"]}");
+    ck_assert_ptr_nonnull(r);
+    ck_assert_str_eq(r->content, "green");
+    tool_result_free(r);
+
+    /* an out-of-range or non-numeric answer passes through unchanged */
+    stub_answer_text = "9";
+    r = tool->execute(tool,
+                      "{\"question\":\"pick\",\"options\":[\"red\",\"green\"]}");
+    ck_assert_str_eq(r->content, "9");
+    tool_result_free(r);
+    stub_answer_text = "two";
+    r = tool->execute(tool,
+                      "{\"question\":\"pick\",\"options\":[\"red\",\"green\"]}");
+    ck_assert_str_eq(r->content, "two");
+    tool_result_free(r);
+
+    tool->destroy(tool);
+    registry_set_ask_user_callback(NULL, NULL);
+    stub_answer_text = "the answer";
+}
+END_TEST
+
 START_TEST(test_ask_user_missing_question_is_validation_error)
 {
     Tool *tool = tool_ask_user_create(NULL);
@@ -85,6 +128,7 @@ int main(void)
     tcase_add_test(tc, test_ask_user_uses_callback_and_returns_answer);
     tcase_add_test(tc, test_ask_user_null_callback_answer_is_cancelled);
     tcase_add_test(tc, test_ask_user_missing_question_is_validation_error);
+    tcase_add_test(tc, test_ask_user_options_are_numbered_and_resolvable);
     suite_add_tcase(suite, tc);
 
     SRunner *runner = srunner_create(suite);

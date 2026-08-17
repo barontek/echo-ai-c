@@ -630,6 +630,25 @@ int safety_needs_approval(const SafetyConfig *cfg, const char *tool_name)
     return 0;
 }
 
+int safety_allow_tool_always(SafetyConfig *cfg, const char *tool_name)
+{
+    if (!cfg || !tool_name) return -1;
+    for (int i = 0; i < cfg->require_approval_count; i++)
+    {
+        if (strcmp(cfg->require_approval_for[i], tool_name) == 0)
+        {
+            free(cfg->require_approval_for[i]);
+            memmove(cfg->require_approval_for + i,
+                    cfg->require_approval_for + i + 1,
+                    (size_t)(cfg->require_approval_count - i - 1) *
+                        sizeof(char *));
+            cfg->require_approval_count--;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int safety_audit_log(const SafetyConfig *cfg, const char *entry)
 {
     if (!cfg || !cfg->audit_log_path || !entry) return -1;

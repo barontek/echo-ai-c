@@ -105,6 +105,8 @@ TuiModal *tui_modal_open(TuiModalKind kind, const char *title,
             return NULL;
         }
     }
+    if (kind == TUI_MODAL_APPROVAL)
+        m->selection = 0; /* default to "Allow once" */
     return m;
 }
 
@@ -114,6 +116,9 @@ void tui_modal_close(TuiModal *m)
     tui_input_destroy(m->input);
     for (int i = 0; i < m->item_count; i++) free(m->items[i]);
     free(m->items);
+    for (int i = 0; i < m->values_count; i++) free(m->values[i]);
+    free(m->values);
+    free(m->is_header);
     free(m->visible);
     free(m->body);
     free(m->title);
@@ -221,6 +226,21 @@ static int pick_contains(const char *haystack, const char *needle)
     return 0;
 }
 
+static int row_is_header(const TuiModal *m, int item_index)
+{
+    return m && m->is_header && item_index >= 0 && item_index < m->header_count &&
+           m->is_header[item_index];
+}
+
+/* First non-header visible row (the cursor never rests on a header). */
+static int first_selectable_row(const TuiModal *m)
+{
+    for (int i = 0; i < m->visible_count; i++)
+        if (!row_is_header(m, m->visible[i]))
+            return i;
+    return 0;
+}
+
 /* Rebuild the visible[] list against the filter; on allocation failure
  * keep the previous list (best-effort filtering, same as history). */
 static void picker_rebuild(TuiModal *m)
@@ -230,7 +250,7 @@ static void picker_rebuild(TuiModal *m)
     {
         m->visible_count = m->item_count;
         for (int i = 0; i < m->item_count; i++) m->visible[i] = i;
-        m->cursor = 0;
+        m->cursor = first_selectable_row(m);
         m->top = 0;
         return;
     }
@@ -239,12 +259,31 @@ static void picker_rebuild(TuiModal *m)
     if (!nv) return; /* keep the old visible list */
     int n = 0;
     for (int i = 0; i < m->item_count; i++)
-        if (pick_contains(m->items[i], filter)) nv[n++] = i;
+    {
+        if (row_is_header(m, i))
+        {
+            /* keep a header only while it has a matching child below it */
+            for (int j = i + 1; j < m->item_count; j++)
+            {
+                if (row_is_header(m, j)) break;
+                if (pick_contains(m->items[j], filter))
+                {
+                    nv[n++] = i;
+                    break;
+                }
+            }
+        }
+        else if (pick_contains(m->items[i], filter))
+        {
+            nv[n++] = i;
+        }
+    }
     free(m->visible);
     m->visible = nv;
     m->visible_count = n;
     if (m->cursor >= m->visible_count) m->cursor = m->visible_count > 0
                                                     ? m->visible_count - 1 : 0;
+    m->cursor = first_selectable_row(m);
     m->top = 0;
 }
 
@@ -252,6 +291,12 @@ static void picker_move(TuiModal *m, int delta)
 {
     if (m->visible_count == 0) return;
     m->cursor += delta;
+    if (m->cursor < 0) m->cursor = 0;
+    if (m->cursor >= m->visible_count) m->cursor = m->visible_count - 1;
+    /* never rest on a header row */
+    while (m->cursor >= 0 && m->cursor < m->visible_count &&
+           row_is_header(m, m->visible[m->cursor]))
+        m->cursor += delta;
     if (m->cursor < 0) m->cursor = 0;
     if (m->cursor >= m->visible_count) m->cursor = m->visible_count - 1;
     if (m->window < 1) m->window = 1;
@@ -301,22 +346,56 @@ TuiModalAction tui_modal_dispatch_key(TuiModal *m, int c)
         return TUI_MODAL_ACTION_NONE; /* cannot be dismissed otherwise */
 
     case TUI_MODAL_APPROVAL:
-        if (c == 'y' || c == 'Y' || c == 10 || c == 13)
+        /* Three options, navigated with h/l (or arrows / tab / 1-3):
+         * 0 Allow once, 1 Always (until restart), 2 Reject. Enter commits
+         * the selected option; y/n are quick allow-once/reject. Esc always
+         * rejects — the safety boundary must never map a dismiss to allow.
+         * The result encodes the choice: 1 allow-once, 2 always, 0 reject
+         * (the worker treats any non-zero as allow; the UI reads
+         * m->selection to apply the "always" rule). */
+        if (c == 'h' || c == 'H' || c == TUI_PICKER_KEY_UP)
         {
+            m->selection = m->selection <= 0 ? 2 : m->selection - 1;
+            return TUI_MODAL_ACTION_NONE;
+        }
+        if (c == 'l' || c == 'L' || c == TUI_PICKER_KEY_DOWN || c == '\t')
+        {
+            m->selection = (m->selection + 1) % 3;
+            return TUI_MODAL_ACTION_NONE;
+        }
+        if (c == '1') { m->selection = 0; return TUI_MODAL_ACTION_NONE; }
+        if (c == '2') { m->selection = 1; return TUI_MODAL_ACTION_NONE; }
+        if (c == '3') { m->selection = 2; return TUI_MODAL_ACTION_NONE; }
+        if (c == 10 || c == 13)
+        {
+            int result = m->selection == 2 ? 0 : (m->selection == 1 ? 2 : 1);
+            if (m->event) (void)tui_event_answer(m->event, NULL, result);
+            return TUI_MODAL_ACTION_ANSWERED;
+        }
+        if (c == 'y' || c == 'Y')
+        {
+            m->selection = 0;
             if (m->event) (void)tui_event_answer(m->event, NULL, 1);
             return TUI_MODAL_ACTION_ANSWERED;
         }
         if (c == 'n' || c == 'N' || c == 27)
         {
+            m->selection = 2;
             if (m->event) (void)tui_event_answer(m->event, NULL, 0);
             return TUI_MODAL_ACTION_ANSWERED;
         }
-        return TUI_MODAL_ACTION_NONE; /* cannot be dismissed otherwise */
+        return TUI_MODAL_ACTION_NONE; /* cannot be dismissed as "allow" */
 
     case TUI_MODAL_PICKER:
         if (c == 10 || c == 13) /* Enter: commit the selection */
         {
-            m->selection = m->visible_count > 0 ? m->visible[m->cursor] : -1;
+            /* the cursor never rests on a header, but guard anyway so a
+             * header can never commit; an empty visible list still
+             * cancels (selection -1) like before */
+            int sel = m->visible_count > 0 ? m->visible[m->cursor] : -1;
+            if (sel >= 0 && row_is_header(m, sel))
+                return TUI_MODAL_ACTION_NONE;
+            m->selection = sel;
             if (m->event)
                 (void)tui_event_answer(m->event,
                                        tui_modal_picker_selected(m), 0);
@@ -420,4 +499,58 @@ const char *tui_modal_picker_selected(const TuiModal *m)
 {
     if (!m || m->selection < 0 || m->selection >= m->item_count) return NULL;
     return m->items[m->selection];
+}
+
+int tui_modal_picker_selected_index(const TuiModal *m)
+{
+    if (!m) return -1;
+    return m->selection;
+}
+
+int tui_modal_picker_set_values(TuiModal *m, const char *const *values, int count)
+{
+    if (!m || !values || count < 0 || count != m->item_count) return -1;
+    char **copy = calloc((size_t)count, sizeof(char *));
+    if (!copy) return -1;
+    for (int i = 0; i < count; i++)
+    {
+        copy[i] = str_dup(values[i] ? values[i] : "");
+        if (!copy[i])
+        {
+            for (int j = 0; j < i; j++) free(copy[j]);
+            free(copy);
+            return -1;
+        }
+    }
+    m->values = copy;
+    m->values_count = count;
+    return 0;
+}
+
+const char *tui_modal_picker_selected_value(const TuiModal *m)
+{
+    if (!m || !m->values || m->selection < 0 || m->selection >= m->values_count)
+        return NULL;
+    return m->values[m->selection];
+}
+
+int tui_modal_picker_set_headers(TuiModal *m, const int *flags, int count)
+{
+    if (!m || !flags || count < 0 || count != m->item_count) return -1;
+    int *copy = calloc((size_t)(count > 0 ? count : 1), sizeof(int));
+    if (!copy) return -1;
+    for (int i = 0; i < count; i++)
+        copy[i] = flags[i] ? 1 : 0;
+    free(m->is_header);
+    m->is_header = copy;
+    m->header_count = count;
+    /* re-filter so the cursor lands on a selectable row */
+    picker_rebuild(m);
+    return 0;
+}
+
+int tui_modal_picker_visible_is_header(const TuiModal *m, int row)
+{
+    if (!m || row < 0 || row >= m->visible_count) return 0;
+    return row_is_header(m, m->visible[row]);
 }

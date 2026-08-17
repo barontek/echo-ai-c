@@ -23,6 +23,7 @@
 #include "../llm/factory.h"
 #include "../llm/provider_models.h"
 #include "../tools/registry.h"
+#include "../agent/agent_summarize.h"
 #include "../utils/string_utils.h"
 #include "../utils/logging.h"
 
@@ -232,9 +233,79 @@ static void job_load(TuiWorker *w, const char *session_id)
     }
     free(w->ctx.agent->session_id);
     w->ctx.agent->session_id = id_copy;
-    char msg[256];
-    snprintf(msg, sizeof(msg), "Loaded session: %s", s->title);
+
+    /* Swap the loaded messages into the agent, mirroring
+     * job_branch_switch: free the old transcript and copy the loaded
+     * one. On allocation failure the agent keeps its previous messages
+     * (the new session id is already set, but the store is intact). */
+    if (w->ctx.agent->messages)
+    {
+        message_free_all(w->ctx.agent->messages, w->ctx.agent->messages_count);
+        w->ctx.agent->messages = NULL;
+        w->ctx.agent->messages_count = 0;
+    }
+    int swap_ok = 1;
+    if (s->messages_count > 0)
+    {
+        w->ctx.agent->messages = calloc((size_t)s->messages_count,
+                                        sizeof(Message));
+        if (!w->ctx.agent->messages)
+        {
+            swap_ok = 0;
+        }
+        else
+        {
+            for (int i = 0; i < s->messages_count; i++)
+            {
+                if (message_copy(&w->ctx.agent->messages[i],
+                                 &s->messages[i]) != 0)
+                {
+                    message_free_all(w->ctx.agent->messages, i);
+                    w->ctx.agent->messages = NULL;
+                    swap_ok = 0;
+                    break;
+                }
+            }
+            if (swap_ok)
+                w->ctx.agent->messages_count = s->messages_count;
+        }
+    }
+    char *title = s->title ? str_dup(s->title) : NULL;
     session_free(s);
+
+    /* Rebuild the UI scrollback from the loaded transcript; the UI
+     * replaces its chat model with this JSON (empty JSON when the swap
+     * failed or the session had no messages). */
+    cJSON *arr = swap_ok
+        ? messages_to_json_array(w->ctx.agent->messages,
+                                 w->ctx.agent->messages_count)
+        : NULL;
+    if (arr)
+    {
+        char *json = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        if (json)
+        {
+            (void)tui_events_push(w->ctx.evs, TUI_EV_HISTORY, NULL, json);
+            free(json);
+        }
+    }
+    else if (swap_ok && w->ctx.agent->messages_count == 0)
+    {
+        /* A genuinely empty session still clears the old scrollback. */
+        (void)tui_events_push(w->ctx.evs, TUI_EV_HISTORY, NULL, "[]");
+    }
+
+    char msg[256];
+    if (title)
+    {
+        snprintf(msg, sizeof(msg), "Loaded session: %s", title);
+        free(title);
+    }
+    else
+    {
+        snprintf(msg, sizeof(msg), "Loaded session: %s", session_id);
+    }
     (void)tui_events_push(w->ctx.evs, TUI_EV_STATUS, msg, NULL);
     (void)tui_events_push(w->ctx.evs, TUI_EV_SESSION, session_id, NULL);
 }
@@ -549,6 +620,79 @@ static void job_change_password(TuiWorker *w, const char *password)
     {
         (void)tui_events_push(w->ctx.evs, TUI_EV_STATUS,
                               "Password change failed.", NULL);
+    }
+}
+
+/* /compact: force a context-window summarization now. The summarizer is
+ * agent-side (agent_summarize.c); this job just invokes it on the worker
+ * thread and reports the outcome. */
+/* !cmd shell mode: run the command through the bash tool (safety checks
+ * and the execution timeout apply), surfacing the result as a "shell"
+ * tool block in the chat. */
+static void job_shell(TuiWorker *w, const char *command)
+{
+    if (!command || !command[0])
+    {
+        (void)tui_events_push(w->ctx.evs, TUI_EV_STATUS, "Empty shell command.", NULL);
+        return;
+    }
+    Tool *tool = registry_get("bash");
+    if (!tool || !tool->execute)
+    {
+        (void)tui_events_push(w->ctx.evs, TUI_EV_RUN_DONE, NULL,
+                              "Shell tool unavailable.");
+        return;
+    }
+    cJSON *o = cJSON_CreateObject();
+    if (!o)
+    {
+        (void)tui_events_push(w->ctx.evs, TUI_EV_RUN_DONE, NULL,
+                              "Shell command could not be prepared.");
+        return;
+    }
+    cJSON_AddStringToObject(o, "command", command);
+    char *args = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!args)
+    {
+        (void)tui_events_push(w->ctx.evs, TUI_EV_RUN_DONE, NULL,
+                              "Shell command could not be prepared.");
+        return;
+    }
+    (void)tui_events_push(w->ctx.evs, TUI_EV_TOOL_START, "shell", command);
+    ToolResult *res = tool->execute(tool, args);
+    free(args);
+    if (res)
+    {
+        if (res->content)
+            (void)tui_events_push(w->ctx.evs, TUI_EV_TOOL_END, "shell",
+                                  res->content);
+        else if (res->error)
+            (void)tui_events_push(w->ctx.evs, TUI_EV_TOOL_END, "shell",
+                                  res->error);
+        else
+            (void)tui_events_push(w->ctx.evs, TUI_EV_TOOL_END, "shell", "");
+        tool_result_free(res);
+    }
+    else
+    {
+        (void)tui_events_push(w->ctx.evs, TUI_EV_TOOL_END, "shell",
+                              "Shell command produced no result.");
+    }
+}
+
+static void job_compact(TuiWorker *w)
+{
+    if (agent_perform_summarization(w->ctx.agent,
+                                    w->ctx.agent->messages_count) == 0)
+    {
+        (void)tui_events_push(w->ctx.evs, TUI_EV_STATUS,
+                              "Session summarized.", NULL);
+    }
+    else
+    {
+        (void)tui_events_push(w->ctx.evs, TUI_EV_STATUS,
+                              "Compaction skipped (too small or failed).", NULL);
     }
 }
 
@@ -932,6 +1076,8 @@ static void job_dispatch(TuiWorker *w, TuiEvent *ev)
     else if (strcmp(ev->text, "unlock") == 0) job_unlock(w);
     else if (strcmp(ev->text, "edit") == 0) job_edit(w, ev->extra);
     else if (strcmp(ev->text, "regen") == 0) job_regen(w, ev->extra);
+    else if (strcmp(ev->text, "shell") == 0) job_shell(w, ev->extra);
+    else if (strcmp(ev->text, "compact") == 0) job_compact(w);
     else if (strcmp(ev->text, "branch") == 0) job_branch_switch(w, ev->extra);
     else if (strcmp(ev->text, "branch-info") == 0) job_branch_info(w);
     else

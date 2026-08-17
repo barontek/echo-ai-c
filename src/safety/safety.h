@@ -234,6 +234,22 @@ int safety_check_file_size(const SafetyConfig *cfg, size_t size);
 int safety_needs_approval(const SafetyConfig *cfg, const char *tool_name);
 
 /**
+ * safety_allow_tool_always - stop asking for approval for a tool
+ * @cfg: safety config; non-NULL.
+ * @tool_name: tool name to drop from require_approval_for; non-NULL.
+ *
+ * Runtime-only, matching the "allow until restarted" semantics: removes
+ * the tool from the in-memory approval list so future calls skip the
+ * approval gate. The on-disk config is untouched. No-op in
+ * SAFETY_MODE_APPROVE_ALL (every tool still prompts) and
+ * SAFETY_MODE_UNRESTRICTED (nothing prompts anyway).
+ *
+ * Return: 1 when the tool was removed (previously approval-required),
+ * 0 when it was not in the list, -1 on NULL arguments.
+ */
+int safety_allow_tool_always(SafetyConfig *cfg, const char *tool_name);
+
+/**
  * safety_audit_log - append a JSON line to the audit log file
  * @cfg: safety config; must be non-NULL.
  * @entry: JSON text embedded verbatim as the "entry" field — callers must

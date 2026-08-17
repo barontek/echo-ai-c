@@ -51,6 +51,10 @@ typedef struct {
     /* TUI_MODAL_PICKER state (all owned, unused otherwise) */
     char **items;      /* every item offered */
     int item_count;
+    char **values;     /* parallel commit values (owned); NULL = text is the value */
+    int values_count;
+    int *is_header;    /* parallel flags (owned): 1 = non-selectable header row */
+    int header_count;
     int *visible;      /* items[] indices passing the current filter */
     int visible_count;
     int cursor;        /* row into visible[] */
@@ -176,6 +180,15 @@ int tui_modal_picker_visible_count(const TuiModal *m);
 const char *tui_modal_picker_visible_at(const TuiModal *m, int row);
 
 /**
+ * tui_modal_picker_visible_is_header - is a visible row a header?
+ * @m: picker modal; non-NULL.
+ * @row: row into the visible list, 0-based.
+ *
+ * Return: 1 when the row is a non-selectable category header, else 0.
+ */
+int tui_modal_picker_visible_is_header(const TuiModal *m, int row);
+
+/**
  * tui_modal_picker_cursor / tui_modal_picker_top - list viewport
  * @m: picker modal; non-NULL.
  *
@@ -209,5 +222,59 @@ void tui_modal_picker_set_window(TuiModal *m, int rows);
  * Return: borrowed pointer to the selected item string, or NULL.
  */
 const char *tui_modal_picker_selected(const TuiModal *m);
+
+/**
+ * tui_modal_picker_selected_index - the committed item's index
+ * @m: picker modal; non-NULL.
+ *
+ * Only meaningful after Enter committed a selection.
+ *
+ * Return: the items[] index of the committed selection, or -1 when no
+ *   selection has been made.
+ */
+int tui_modal_picker_selected_index(const TuiModal *m);
+
+/**
+ * tui_modal_picker_set_values - attach commit values to a picker
+ * @m: picker modal; non-NULL.
+ * @values: array of @count borrowed strings aligned with the picker's
+ *   item order; copied by the modal. Must be non-NULL.
+ * @count: number of values; must equal the picker's item count.
+ *
+ * The picker normally commits the selected item's text; with values set,
+ * tui_modal_picker_selected_value() returns the parallel value (used by
+ * the command palette, where the display text is a title but the commit
+ * value is a command name). Must be called before the modal is answered.
+ *
+ * Return: 0 on success, -1 on allocation failure (modal unchanged) or a
+ *   count/item mismatch.
+ */
+int tui_modal_picker_set_values(TuiModal *m, const char *const *values, int count);
+
+/**
+ * tui_modal_picker_selected_value - the committed value of the selection
+ * @m: picker modal; non-NULL.
+ *
+ * Only meaningful after Enter committed a selection and values were set.
+ *
+ * Return: borrowed value string, or NULL when no values were attached.
+ */
+const char *tui_modal_picker_selected_value(const TuiModal *m);
+
+/**
+ * tui_modal_picker_set_headers - mark rows as non-selectable headers
+ * @m: picker modal; non-NULL.
+ * @flags: array of @count ints (1 = header) aligned with the item order;
+ *   must be non-NULL.
+ * @count: must equal the picker's item count.
+ *
+ * Header rows render as category titles and are skipped by navigation,
+ * filtering and selection (they never commit). Used by the command
+ * palette to group commands by category with a "Suggested" head.
+ *
+ * Return: 0 on success, -1 on allocation failure (modal unchanged) or a
+ *   count mismatch.
+ */
+int tui_modal_picker_set_headers(TuiModal *m, const int *flags, int count);
 
 #endif /* ECHO_TUI_DIALOGS_H */

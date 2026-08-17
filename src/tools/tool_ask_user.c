@@ -34,8 +34,48 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
         return tool_result_error("missing 'question' argument", "validation_error");
     }
 
+    /* Optional numbered options: appended to the question as "1. opt"
+     * lines; a bare integer answer resolves to the matching option. */
+    cJSON *opts = cJSON_GetObjectItem(args, "options");
+    int opt_count = opts && cJSON_IsArray(opts) ? cJSON_GetArraySize(opts) : 0;
+    char **opt_text = NULL;
+    if (opt_count > 0)
+    {
+        opt_text = calloc((size_t)opt_count, sizeof(char *));
+        if (!opt_text)
+        {
+            cJSON_Delete(args);
+            return tool_result_error("out of memory", "execution_error");
+        }
+        cJSON *item;
+        int k = 0;
+        cJSON_ArrayForEach(item, opts)
+        {
+            const char *s = cJSON_GetStringValue(item);
+            if (s && k < opt_count)
+                opt_text[k++] = str_dup(s);
+        }
+        opt_count = k;
+    }
+
     char *q = str_dup(cJSON_GetStringValue(question));
     cJSON_Delete(args);
+    if (!q)
+    {
+        for (int i = 0; i < opt_count; i++) free(opt_text[i]);
+        free(opt_text);
+        return tool_result_error("out of memory", "execution_error");
+    }
+    for (int i = 0; i < opt_count; i++)
+    {
+        char *nb = NULL;
+        if (asprintf(&nb, "%s\n%d. %s", q, i + 1,
+                     opt_text[i] ? opt_text[i] : "") >= 0)
+        {
+            free(q);
+            q = nb;
+        }
+    }
 
     char *answer = NULL;
     if (registry_has_ask_user_callback())
@@ -44,6 +84,8 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
         if (!answer)
         {
             free(q);
+            for (int i = 0; i < opt_count; i++) free(opt_text[i]);
+            free(opt_text);
             return tool_result_error("question cancelled", "cancelled");
         }
     }
@@ -61,6 +103,8 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
              * instead. */
             free(answer);
             free(q);
+            for (int i = 0; i < opt_count; i++) free(opt_text[i]);
+            free(opt_text);
             return tool_result_error("failed reading user input",
                                      "execution_error");
         }
@@ -68,7 +112,25 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
             answer[len - 1] = '\0';
     }
 
+    /* Resolve a bare option number to its text */
+    if (opt_count > 0 && answer)
+    {
+        char *end = NULL;
+        long n = strtol(answer, &end, 10);
+        if (end && *end == '\0' && n >= 1 && n <= opt_count && opt_text[n - 1])
+        {
+            char *resolved = str_dup(opt_text[n - 1]);
+            if (resolved)
+            {
+                free(answer);
+                answer = resolved;
+            }
+        }
+    }
+
     free(q);
+    for (int i = 0; i < opt_count; i++) free(opt_text[i]);
+    free(opt_text);
 
     ToolResult *tr = tool_result_create(answer ? answer : "(user did not respond)");
     free(answer);
@@ -110,7 +172,9 @@ Tool *tool_ask_user_create(SafetyConfig *safety)
     t->description = str_dup("Ask the user a question and wait for their response");
     t->parameters_schema = str_dup(
         "{\"type\":\"object\",\"properties\":{"
-        "\"question\":{\"type\":\"string\",\"description\":\"Question to ask the user\"}"
+        "\"question\":{\"type\":\"string\",\"description\":\"Question to ask the user\"},"
+        "\"options\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},"
+        "\"description\":\"Optional numbered choices; the user may answer with a number\"}"
         "},\"required\":[\"question\"]}"
     );
     t->execute = ask_user_execute;

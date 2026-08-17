@@ -62,6 +62,64 @@ target_include_directories(test_tui_dialogs PRIVATE ../../src)
 target_link_libraries(test_tui_dialogs PRIVATE echo_ai_test_deps)
 add_test(NAME test_tui_dialogs COMMAND test_tui_dialogs)
 
+# --- tui_keys (keymap model: parsing, bindings, leader chords) ---
+add_executable(test_tui_keys
+    test_tui_keys.c
+    ../../src/tui/tui_keys.c
+)
+target_include_directories(test_tui_keys PRIVATE ../../src)
+target_link_libraries(test_tui_keys PRIVATE echo_ai_test_deps)
+add_test(NAME test_tui_keys COMMAND test_tui_keys)
+
+# --- tui_command (command registry: names, slashes, handlers) ---
+add_executable(test_tui_command
+    test_tui_command.c
+    ../../src/tui/tui_command.c
+)
+target_include_directories(test_tui_command PRIVATE ../../src)
+target_link_libraries(test_tui_command PRIVATE echo_ai_test_deps)
+add_test(NAME test_tui_command COMMAND test_tui_command)
+
+# --- tui_prompt_store (persistent history + stash JSONL) ---
+add_executable(test_tui_prompt_store
+    test_tui_prompt_store.c
+    ../../src/tui/tui_prompt_store.c
+    ../../src/utils/string_utils.c
+)
+target_include_directories(test_tui_prompt_store PRIVATE ../../src)
+target_link_libraries(test_tui_prompt_store PRIVATE echo_ai_test_deps)
+add_test(NAME test_tui_prompt_store COMMAND test_tui_prompt_store)
+
+# --- tui_session_store (pins + quick-switch slot resolution) ---
+add_executable(test_tui_session_store
+    test_tui_session_store.c
+    ../../src/tui/tui_session_store.c
+    ../../src/utils/string_utils.c
+)
+target_include_directories(test_tui_session_store PRIVATE ../../src)
+target_link_libraries(test_tui_session_store PRIVATE echo_ai_test_deps)
+add_test(NAME test_tui_session_store COMMAND test_tui_session_store)
+
+# --- tui_autocomplete (slash-command completion) ---
+add_executable(test_tui_autocomplete
+    test_tui_autocomplete.c
+    ../../src/tui/tui_autocomplete.c
+    ../../src/tui/tui_command.c
+)
+target_include_directories(test_tui_autocomplete PRIVATE ../../src)
+target_link_libraries(test_tui_autocomplete PRIVATE echo_ai_test_deps)
+add_test(NAME test_tui_autocomplete COMMAND test_tui_autocomplete)
+
+# --- tui_model_store (recent/favorite model lists) ---
+add_executable(test_tui_model_store
+    test_tui_model_store.c
+    ../../src/tui/tui_model_store.c
+    ../../src/utils/string_utils.c
+)
+target_include_directories(test_tui_model_store PRIVATE ../../src)
+target_link_libraries(test_tui_model_store PRIVATE echo_ai_test_deps)
+add_test(NAME test_tui_model_store COMMAND test_tui_model_store)
+
 # --- tui_stream (think/content chunk classifier) ---
 add_executable(test_tui_stream
     test_tui_stream.c

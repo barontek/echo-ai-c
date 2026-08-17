@@ -743,6 +743,63 @@ START_TEST(test_tool_finish_named_no_pending_appends_fallback)
 }
 END_TEST
 
+/* ---- trailing blank-line trimming (regression: empty rows between
+ * messages when model/tool output ends with newlines) ---- */
+
+START_TEST(test_seal_trims_trailing_blank_lines)
+{
+    ck_assert_int_eq(tui_chat_begin_stream(chat, TUI_BLOCK_ASSISTANT), 0);
+    ck_assert_int_eq(tui_chat_stream_append(chat, "reply text\n\n"), 0);
+    tui_chat_end_stream(chat);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "reply text");
+
+    /* interior blank lines are paragraph separators and must survive */
+    ck_assert_int_eq(tui_chat_begin_stream(chat, TUI_BLOCK_ASSISTANT), 0);
+    ck_assert_int_eq(tui_chat_stream_append(chat, "para one\n\npara two\n\n"), 0);
+    tui_chat_end_stream(chat);
+    ck_assert_str_eq(tui_chat_block_text(chat, 1), "para one\n\npara two");
+}
+END_TEST
+
+START_TEST(test_begin_user_trims_its_own_text)
+{
+    ck_assert_int_eq(tui_chat_begin_user(chat, "hello\n\n"), 0);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "hello");
+}
+END_TEST
+
+START_TEST(test_tool_results_trim_trailing_blanks)
+{
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "browser", "open"), 0);
+    ck_assert_int_eq(tui_chat_tool_finish(chat, "browser",
+                                         "result text\n\n\n"), 0);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "result text");
+
+    /* pending-block path via finish_named */
+    ck_assert_int_eq(tui_chat_begin_tool(chat, "bash", "ls"), 0);
+    ck_assert_int_eq(tui_chat_tool_finish_named(chat, "bash", "a\nb\n\n"), 0);
+    ck_assert_str_eq(tui_chat_block_text(chat, 1), "a\nb");
+}
+END_TEST
+
+START_TEST(test_trim_keeps_content_trailing_space_line)
+{
+    /* a final line with content keeps its trailing space; only
+     * whitespace-ONLY lines are dropped */
+    ck_assert_int_eq(tui_chat_begin_user(chat, "text "), 0);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "text ");
+}
+END_TEST
+
+START_TEST(test_trim_whitespace_only_block_becomes_empty)
+{
+    ck_assert_int_eq(tui_chat_begin_stream(chat, TUI_BLOCK_ASSISTANT), 0);
+    ck_assert_int_eq(tui_chat_stream_append(chat, "  \n\t\n"), 0);
+    tui_chat_end_stream(chat);
+    ck_assert_str_eq(tui_chat_block_text(chat, 0), "");
+}
+END_TEST
+
 static Suite *suite(void)
 {
     Suite *s = suite_create("tui_chat");
@@ -815,6 +872,15 @@ static Suite *suite(void)
     tcase_add_test(tc_tool, test_begin_tool_fault_injection);
     tcase_add_test(tc_tool, test_tool_finish_failure_keeps_pending);
     suite_add_tcase(s, tc_tool);
+
+    TCase *tc_trim = tcase_create("trim_trailing_blank");
+    tcase_add_checked_fixture(tc_trim, setup_chat, teardown_chat);
+    tcase_add_test(tc_trim, test_seal_trims_trailing_blank_lines);
+    tcase_add_test(tc_trim, test_begin_user_trims_its_own_text);
+    tcase_add_test(tc_trim, test_tool_results_trim_trailing_blanks);
+    tcase_add_test(tc_trim, test_trim_keeps_content_trailing_space_line);
+    tcase_add_test(tc_trim, test_trim_whitespace_only_block_becomes_empty);
+    suite_add_tcase(s, tc_trim);
 
     return s;
 }
