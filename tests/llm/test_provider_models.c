@@ -6,7 +6,9 @@
  */
 
 #define _GNU_SOURCE
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
+#endif
 #include <check.h>
 #include <stdlib.h>
 #include <string.h>
