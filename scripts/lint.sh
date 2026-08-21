@@ -31,6 +31,9 @@ if [ ! -f "$BUILD_DIR/compile_commands.json" ]; then
 fi
 
 INC_FILE="$(mktemp)"
+# Initialized empty so the EXIT trap can't hit an unbound variable when we
+# exit early (no compile_commands, no files to lint) before mktemp below.
+SUMMARY_FILE=""
 trap 'rm -f "$INC_FILE" "$SUMMARY_FILE"' EXIT
 while IFS= read -r line; do
     case "$line" in
@@ -49,7 +52,8 @@ else
 fi
 
 if [ "${#FILES[@]}" -eq 0 ]; then
-    echo "error: no files to lint" >&2
+    echo "error: no files to lint — git ls-files 'src/*.c' matched nothing" >&2
+    echo "  (missing .git? in CI containers, git must be installed before actions/checkout)" >&2
     exit 1
 fi
 

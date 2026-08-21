@@ -177,10 +177,16 @@ jobs:
     container: debian:sid-20260803-slim
 
     steps:
+    # git must be installed before checkout (same as backend-arch): without
+    # it actions/checkout falls back to a REST download that creates no
+    # .git, and scripts/lint.sh's `git ls-files` then finds no files.
+    - name: install git for checkout
+      run: apt-get update && apt-get install -y git
+
     - uses: actions/checkout@v4
 
     - name: install deps
-      run: apt-get update && apt-get install -y cmake git gcc clang-tidy cppcheck pkgconf pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check libnotcurses-dev libunistring-dev libncurses-dev libdeflate-dev
+      run: apt-get install -y cmake gcc clang-tidy cppcheck pkgconf pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check libnotcurses-dev libunistring-dev libncurses-dev libdeflate-dev
 
     - name: configure
       run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
@@ -218,8 +224,10 @@ jobs:
       run: |
         # TSan on modern kernels needs ASLR off (setarch -R) or it aborts
         # with "unexpected memory mapping"; fall back to plain ctest if
-        # setarch is unavailable.
-        if command -v setarch >/dev/null 2>&1; then
+        # setarch is unavailable OR the container forbids personality(2)
+        # ("Operation not permitted"), so probe before committing to it.
+        if command -v setarch >/dev/null 2>&1 \
+           && setarch "$(uname -m)" -R true 2>/dev/null; then
           setarch "$(uname -m)" -R ctest --test-dir build-tsan -V
         else
           ctest --test-dir build-tsan -V
