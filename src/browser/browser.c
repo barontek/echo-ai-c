@@ -194,6 +194,18 @@ static const char *candidate_bundles[] = {
 };
 #endif
 
+/* Escape hatch for hermetic tests and strict-config users: when set,
+ * only explicit configuration (binary argument, ECHO_BROWSER_BIN,
+ * $BROWSER) is honored — the PATH-name and macOS-bundle candidate
+ * lists are skipped. Without it, discovery "succeeds" on any machine
+ * with a browser installed (e.g. CI runners) even when the test asked
+ * for nothing to be configured. */
+static int fallback_disabled(void)
+{
+    const char *v = getenv("ECHO_BROWSER_NO_FALLBACK");
+    return v && v[0];
+}
+
 static char *resolve_binary(const char *explicit)
 {
     if (explicit && explicit[0])
@@ -217,6 +229,8 @@ static char *resolve_binary(const char *explicit)
                                        : path_lookup(env);
         if (found) return found;
     }
+    if (fallback_disabled()) return NULL;
+
     for (int i = 0; candidate_names[i]; i++)
     {
         char *found = path_lookup(candidate_names[i]);

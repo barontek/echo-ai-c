@@ -32,6 +32,9 @@ Configuration (all optional, nothing hardcoded):
 - `ECHO_BROWSER_USER_DATA_DIR` — persistent profile (default: temp
   dir, deleted on close).
 - `ECHO_BROWSER_FLAGS` — extra args appended to the command line.
+- `ECHO_BROWSER_NO_FALLBACK` — when set, skip the PATH-name and macOS
+  app-bundle candidate lists; only explicit configuration is honored
+  (used by tests to stay hermetic on machines with browsers installed).
 
 Security notes: a spawned browser cannot be socket-policy-checked the
 way libcurl calls are; the browser's own networking is out of the

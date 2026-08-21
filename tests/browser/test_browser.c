@@ -976,13 +976,18 @@ END_TEST
 
 START_TEST(test_browser_open_binary_not_found)
 {
-    /* Discovery must fail cleanly when nothing is configured. */
+    /* Discovery must fail cleanly when nothing is configured.
+     * ECHO_BROWSER_NO_FALLBACK skips the PATH-name/macOS-bundle lists,
+     * which would otherwise find a real browser on machines that have
+     * one installed (e.g. macOS CI runners). */
     char *old_bin = getenv("ECHO_BROWSER_BIN");
     char *old_path = getenv("PATH");
     char *old_browser = getenv("BROWSER");
+    char *old_nofb = getenv("ECHO_BROWSER_NO_FALLBACK");
     setenv("ECHO_BROWSER_BIN", "", 1);
     unsetenv("BROWSER");
     setenv("PATH", "/nonexistent-dir", 1);
+    setenv("ECHO_BROWSER_NO_FALLBACK", "1", 1);
 
     char *err = NULL;
     BrowserSession *s = browser_open(NULL, &err);
@@ -997,6 +1002,8 @@ START_TEST(test_browser_open_binary_not_found)
     else unsetenv("PATH");
     if (old_browser) setenv("BROWSER", old_browser, 1);
     else unsetenv("BROWSER");
+    if (old_nofb) setenv("ECHO_BROWSER_NO_FALLBACK", old_nofb, 1);
+    else unsetenv("ECHO_BROWSER_NO_FALLBACK");
 }
 END_TEST
 

@@ -342,13 +342,17 @@ END_TEST
 START_TEST(test_tool_browser_open_failure_reports_error)
 {
     /* No injected session: navigate auto-opens and must fail with a
-     * useful message when no browser is discoverable. */
+     * useful message when no browser is discoverable.
+     * ECHO_BROWSER_NO_FALLBACK keeps the macOS bundle list from finding
+     * a real browser on machines that have one installed. */
     char *old_bin = getenv("ECHO_BROWSER_BIN");
     char *old_path = getenv("PATH");
     char *old_browser = getenv("BROWSER");
+    char *old_nofb = getenv("ECHO_BROWSER_NO_FALLBACK");
     setenv("ECHO_BROWSER_BIN", "", 1);
     unsetenv("BROWSER");
     setenv("PATH", "/nonexistent-dir", 1);
+    setenv("ECHO_BROWSER_NO_FALLBACK", "1", 1);
 
     Tool *t = tool_browser_create(NULL);
     ck_assert_ptr_nonnull(t);
@@ -361,6 +365,8 @@ START_TEST(test_tool_browser_open_failure_reports_error)
 
     if (old_bin) setenv("ECHO_BROWSER_BIN", old_bin, 1);
     else unsetenv("ECHO_BROWSER_BIN");
+    if (old_nofb) setenv("ECHO_BROWSER_NO_FALLBACK", old_nofb, 1);
+    else unsetenv("ECHO_BROWSER_NO_FALLBACK");
     if (old_path) setenv("PATH", old_path, 1);
     else unsetenv("PATH");
     if (old_browser) setenv("BROWSER", old_browser, 1);

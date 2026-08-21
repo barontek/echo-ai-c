@@ -60,6 +60,11 @@ typedef struct {
  * requested; the process is a child of the caller and is reaped by
  * browser_close().
  *
+ * Discovery order: cfg->binary, ECHO_BROWSER_BIN, $BROWSER, then
+ * PATH-name and (macOS) app-bundle candidate lists. Setting
+ * ECHO_BROWSER_NO_FALLBACK in the environment skips those last two
+ * lists — discovery then fails unless explicitly configured.
+ *
  * Return: caller-owned BrowserSession (release with browser_close()),
  * or NULL on failure. The returned session is not thread-safe:
  * serialize all calls on it.
