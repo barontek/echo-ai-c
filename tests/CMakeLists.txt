@@ -15,6 +15,11 @@ target_link_libraries(echo_ai_test_deps INTERFACE
     PkgConfig::SQLITE3
     PkgConfig::OPENSSL
     PkgConfig::CJSON
+    # TUI test targets compile tui sources that include
+    # <notcurses/notcurses.h>. On Linux that resolves through the default
+    # /usr/include, but Homebrew headers live under /opt/homebrew/include,
+    # so the pkg-config cflags must be on every test target too.
+    PkgConfig::NOTCURSES
     Threads::Threads
     m
 )
