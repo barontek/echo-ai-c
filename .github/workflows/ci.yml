@@ -181,7 +181,12 @@ jobs:
     # it actions/checkout falls back to a REST download that creates no
     # .git, and scripts/lint.sh's `git ls-files` then finds no files.
     - name: install git for checkout
-      run: apt-get update && apt-get install -y git
+      run: |
+        apt-get update && apt-get install -y git
+        # The workspace is mounted with the host runner UID as owner; every
+        # later git invocation fails with "detected dubious ownership"
+        # unless the path is marked safe.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
     - uses: actions/checkout@v4
 
