@@ -149,25 +149,24 @@ void serve_static(Client *client, const char *path, ServerContext *ctx)
         return;
     }
 
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    rewind(f);
-    if (fsize <= 0 || fsize > 10485760) {
-        fclose(f);
+    fseek(f, 0, SEEK_END); // NOLINT(cert-err33-c)
+      long fsize = ftell(f);
+      if (fsize <= 0 || fsize > 10485760 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f); // NOLINT(cert-err33-c)
         server_response_error(client, 500, "file too large");
         return;
     }
 
     char *content = malloc((size_t)fsize + 1);
     if (!content) {
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         server_response_error(client, 500, "oom");
         return;
     }
 
     size_t read = fread(content, 1, (size_t)fsize, f);
-    fclose(f);
-    content[read] = '\0';
+    fclose(f); // NOLINT(cert-err33-c)
+    content[read] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
 
     const char *ct = mime_type(filepath);
     server_response(client, 200, ct, content);

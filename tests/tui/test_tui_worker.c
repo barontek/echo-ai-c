@@ -9,6 +9,7 @@
 #define _GNU_SOURCE
 #include <check.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,13 +29,13 @@
 static int stub_set_model_result = 0;
 static const char *stub_set_model_name = NULL;
 static int stub_set_provider_result = 0;
-static int stub_set_provider_calls = 0;
+static _Atomic int stub_set_provider_calls = 0;
 static const char *stub_set_provider_name = NULL;
 static const char *stub_set_provider_base_url = NULL;
 static const char *stub_set_provider_token = NULL;
 static const char *stub_set_provider_effort = NULL;
-static int stub_set_provider_num_ctx = 0;
-static int stub_set_provider_keep_alive = 0;
+static _Atomic int stub_set_provider_num_ctx = 0;
+static _Atomic int stub_set_provider_keep_alive = 0;
 static int stub_fetch_result = 0;
 static size_t stub_fetch_count = 0U;
 static const char *const *stub_fetch_models = NULL;
@@ -111,7 +112,7 @@ static Session *stub_loaded_session = NULL;
 static int stub_load_has_messages = 0;
 static int stub_delete_result = 0;
 static int stub_save_result = 0;
-static int stub_save_calls = 0;
+static _Atomic int stub_save_calls = 0;
 static Session *stub_saved_session = NULL;
 static char *stub_export_json = NULL;
 static int stub_change_password_result = 0;
@@ -188,13 +189,13 @@ OpenAIOAuthDeviceResult openai_oauth_device_poll(OpenAIOAuth *auth,
 
 /* ---- stubs: message + branch APIs (fork/regen/switch jobs) ---- */
 
-static int stub_fork_calls = 0;
+static _Atomic int stub_fork_calls = 0;
 static int stub_fork_result = 0;
 static const char *stub_fork_content = NULL;
-static int stub_fork_index = -1;
+static _Atomic int stub_fork_index = -1;
 static int stub_switch_result = 0;
-static int stub_switch_calls = 0;
-static int stub_tag_calls = 0;
+static _Atomic int stub_switch_calls = 0;
+static _Atomic int stub_tag_calls = 0;
 static const char *stub_branch_info = NULL;
 
 int message_copy(Message *dst, const Message *src)
@@ -214,7 +215,7 @@ void message_free_all(Message *msgs, int count)
 }
 
 static int stub_summarize_result = 0;
-static int stub_summarize_calls = 0;
+static _Atomic int stub_summarize_calls = 0;
 
 int agent_perform_summarization(Agent *agent, int original_count)
 {
@@ -226,7 +227,7 @@ int agent_perform_summarization(Agent *agent, int original_count)
 
 /* ---- stubs: bash tool for the shell job ---- */
 
-static int stub_bash_execute_calls = 0;
+static _Atomic int stub_bash_execute_calls = 0;
 static const char *stub_bash_content = NULL;
 static const char *stub_bash_error = NULL;
 
@@ -353,7 +354,7 @@ LLMResponse *agent_run_streaming_context_new(Agent *agent,
 
 /* ---- stubs: registry / oauth wiring (lock/unlock jobs) ---- */
 
-static int stub_attach_session_calls = 0;
+static _Atomic int stub_attach_session_calls = 0;
 
 void registry_set_session_manager(SessionManager *sm) { (void)sm; }
 
@@ -549,7 +550,20 @@ static void destroy_fixture(Fixture *fx)
     tui_worker_destroy(fx->worker);
     tui_events_destroy(fx->evs);
     tui_events_destroy(fx->jobs);
-    free(fx->agent); /* agent_destroy is stubbed; the worker won't free it */
+    /* agent_destroy is stubbed, so release what the worker jobs stored
+     * on the agent: session ids are heap-owned everywhere (str_dup), and
+     * a load job swaps in a transcript array that must go too
+     * (message_free_all is a no-op stub; the shallow copies own no heap
+     * fields, but the array itself is a real allocation). */
+    free(fx->agent->session_id);
+    if (fx->agent->messages)
+    {
+        message_free_all(fx->agent->messages, fx->agent->messages_count);
+        free(fx->agent->messages);
+        fx->agent->messages = NULL;
+        fx->agent->messages_count = 0;
+    }
+    free(fx->agent); /* the struct itself; fields released above */
     conf_free(fx->conf);
     unlink(fx->conf_path);
     free(fx->conf_path);
@@ -573,6 +587,16 @@ static TuiEvent *wait_for_event(Fixture *fx, TuiEventType type,
         usleep(10000);
     }
     return NULL;
+}
+
+/* Some worker work happens AFTER the event that reports it (regen tags
+ * the fresh reply once streaming finished, past the FORK event), so a
+ * popped event does not order those stub writes. Poll the atomic counter
+ * (bounded, same 2s budget as wait_for_event) before asserting on it. */
+static void wait_for_stub_count(_Atomic int *counter, int expected)
+{
+    for (int i = 0; i < 200 && atomic_load(counter) < expected; i++)
+        usleep(10000);
 }
 
 /* ---- tests ---- */
@@ -883,7 +907,7 @@ static void seed_context(Fixture *fx)
     fx->agent->messages[2].role = (char *)"assistant";
     fx->agent->messages[2].content = (char *)"yo";
     fx->agent->messages_count = 3;
-    fx->agent->session_id = (char *)"s1";
+    fx->agent->session_id = str_dup("s1");
 }
 
 static void unseed_context(Fixture *fx)
@@ -954,6 +978,7 @@ START_TEST(test_regen_job_forks_and_tags)
     ck_assert_int_eq(stub_fork_calls, 1);
     ck_assert_int_eq(stub_fork_index, 1); /* db idx of the assistant msg */
     ck_assert_int_eq(fx.agent->messages_count, 2); /* truncated, no append */
+    wait_for_stub_count(&stub_tag_calls, 1); /* tag trails the FORK event */
     ck_assert_int_eq(stub_tag_calls, 1);
 
     unseed_context(&fx);
@@ -986,7 +1011,7 @@ START_TEST(test_branch_switch_job)
     reset_stubs();
     stub_load_session_result = 1;
     Fixture fx = make_fixture("");
-    fx.agent->session_id = (char *)"s1";
+    fx.agent->session_id = str_dup("s1");
     ck_assert_int_eq(tui_worker_submit(fx.worker, "branch", "b2"), 0);
 
     TuiEvent *ev = wait_for_event(&fx, TUI_EV_STATUS, "Switched branch.");
@@ -1004,7 +1029,7 @@ START_TEST(test_branch_info_job_lists_metadata)
     reset_stubs();
     stub_branch_info = str_dup("[{\"message_id\":\"m1\"}]");
     Fixture fx = make_fixture("");
-    fx.agent->session_id = (char *)"s1";
+    fx.agent->session_id = str_dup("s1");
     ck_assert_int_eq(tui_worker_submit(fx.worker, "branch-info", NULL), 0);
 
     TuiEvent *ev = wait_for_event(&fx, TUI_EV_RUN_DONE, NULL);

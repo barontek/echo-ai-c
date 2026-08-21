@@ -14,6 +14,8 @@
 #include "tui/tui_model_store.h"
 #include "utils/string_utils.h"
 
+extern void tui_model_store_test_set_alloc_fail(int nth_allocation);
+
 static char path[256];
 
 static void setup_store(void)
@@ -108,6 +110,78 @@ START_TEST(test_favorite_toggle_and_preserves_recent)
 }
 END_TEST
 
+/* Regression: record_recent/toggle_favorite used `n` uninitialized when
+ * the nr/nf calloc failed (goto done before n = 0) — an indeterminate
+ * read in the free_list(nr, n) argument, caught by clang-tidy
+ * (clang-diagnostic-sometimes-uninitialized). The crash is garbage-value
+ * dependent, so the tests assert the deterministic contract: rc == -1 and
+ * nothing committed. Load consumes 2 callocs (recent + favorites), so the
+ * target list allocation is the 3rd. */
+START_TEST(test_record_recent_nr_calloc_fail_is_clean)
+{
+    tui_model_store_test_set_alloc_fail(3);
+    ck_assert_int_eq(tui_model_store_record_recent(path, "a", 5), -1);
+    tui_model_store_test_set_alloc_fail(-1);
+
+    char **recent = NULL;
+    char **fav = NULL;
+    int rc = 0, fc = 0;
+    ck_assert_int_eq(tui_model_store_load(path, &recent, &rc, &fav, &fc), 0);
+    ck_assert_int_eq(rc, 0); /* nothing committed */
+    free_all(recent, rc);
+    free_all(fav, fc);
+
+    /* normal operation still works after the injected failure */
+    ck_assert_int_eq(tui_model_store_record_recent(path, "a", 5), 0);
+}
+END_TEST
+
+START_TEST(test_toggle_favorite_nf_calloc_fail_is_clean)
+{
+    /* no pre-populated file: load does exactly 2 callocs (recent + fav
+     * empty arrays), so the nf calloc below is the 3rd and fails here */
+    tui_model_store_test_set_alloc_fail(3);
+    int now = -1;
+    ck_assert_int_eq(tui_model_store_toggle_favorite(path, "f1", &now), -1);
+    tui_model_store_test_set_alloc_fail(-1);
+
+    char **recent = NULL;
+    char **fav = NULL;
+    int rc = 0, fc = 0;
+    ck_assert_int_eq(tui_model_store_load(path, &recent, &rc, &fav, &fc), 0);
+    ck_assert_int_eq(rc, 0); /* nothing committed */
+    ck_assert_int_eq(fc, 0);
+    free_all(recent, rc);
+    free_all(fav, fc);
+
+    /* normal operation still works after the injected failure */
+    ck_assert_int_eq(tui_model_store_toggle_favorite(path, "f1", &now), 0);
+    ck_assert_int_eq(now, 1);
+}
+END_TEST
+
+/* Regression: tui_model_store_load leaked the initial empty recent/fav
+ * arrays when a parse-time allocation failed (clang-analyzer-unix.Malloc).
+ * On old code, the arrays stay non-NULL (and LSan flags the leak); on the
+ * fixed code load returns -1 with both out-pointers NULLed. */
+START_TEST(test_load_parse_alloc_fail_does_not_leak)
+{
+    FILE *fp = fopen(path, "w");
+    ck_assert_ptr_nonnull(fp);
+    fputs("{\"recent\":[\"a\",\"b\"]}", fp);
+    fclose(fp);
+
+    tui_model_store_test_set_alloc_fail(3); /* parse_list("recent") calloc */
+    char **recent = NULL;
+    char **fav = NULL;
+    int rc = 99, fc = 99;
+    ck_assert_int_eq(tui_model_store_load(path, &recent, &rc, &fav, &fc), -1);
+    tui_model_store_test_set_alloc_fail(-1);
+    ck_assert_ptr_null(recent);
+    ck_assert_ptr_null(fav);
+}
+END_TEST
+
 static Suite *tui_model_store_suite(void)
 {
     Suite *s = suite_create("tui_model_store");
@@ -117,6 +191,9 @@ static Suite *tui_model_store_suite(void)
     tcase_add_test(tc, test_record_recent_front_inserts_and_dedups);
     tcase_add_test(tc, test_record_recent_caps);
     tcase_add_test(tc, test_favorite_toggle_and_preserves_recent);
+    tcase_add_test(tc, test_record_recent_nr_calloc_fail_is_clean);
+    tcase_add_test(tc, test_toggle_favorite_nf_calloc_fail_is_clean);
+    tcase_add_test(tc, test_load_parse_alloc_fail_does_not_leak);
     suite_add_tcase(s, tc);
     return s;
 }

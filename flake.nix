@@ -42,6 +42,8 @@
             cmake
             gnumake
             clang
+            clang-tools # clang-tidy (static-analysis CI gate; scripts/lint.sh)
+            cppcheck    # static-analysis CI gate (scripts/cppcheck.sh)
             gcc
             pkg-config
             libuv

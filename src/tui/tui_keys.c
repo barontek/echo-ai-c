@@ -179,7 +179,7 @@ int tui_key_parse(const char *spec, int *alt_count, int *lens,
 
     char buf[256];
     if (strlen(spec) >= sizeof(buf)) return -1;
-    strcpy(buf, spec);
+    strlcpy(buf, spec, sizeof(buf));
 
     int alts = 0;
     char *save = NULL;
@@ -265,7 +265,7 @@ static const char *keyid_to_name(uint32_t id)
     if (id >= TUI_KEYID_F1 && id <= TUI_KEYID_F12)
     {
         static char fbuf[4];
-        snprintf(fbuf, sizeof(fbuf), "f%u", (unsigned)(id - TUI_KEYID_F1 + 1));
+        snprintf(fbuf, sizeof(fbuf), "f%u", (unsigned)(id - TUI_KEYID_F1 + 1)); // NOLINT(cert-err33-c)
         return fbuf;
     }
     return NULL;
@@ -315,7 +315,7 @@ void tui_keymap_destroy(TuiKeymap *km)
 static void copy_field(char *dst, size_t cap, const char *src)
 {
     if (cap == 0) return;
-    snprintf(dst, cap, "%s", src);
+    snprintf(dst, cap, "%s", src); // NOLINT(cert-err33-c)
 }
 
 static int binding_index(const TuiKeymap *km, const char *name)

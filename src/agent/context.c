@@ -30,7 +30,7 @@ static void *context_test_calloc(size_t nmemb, size_t size)
 {
     context_test_alloc_counter++;
     if (context_test_alloc_counter == context_test_alloc_fail_at) return NULL;
-    return calloc(nmemb, size);
+    return calloc(nmemb, size); // NOLINT(clang-analyzer-optin.portability.UnixAPI)
 }
 
 static char *context_test_strdup(const char *s)
@@ -228,9 +228,10 @@ Message *smart_select_alloc(Message *msgs, int count, int keep_count)
         int dropped = 0;
         for (int i = 0; i < count && dropped < result_count; i++)
         {
+            /* the loop guard keeps dropped < result_count, so every
+             * selected entry reached here is simply counted as dropped */
             if (!selected_flags[i]) continue;
-            if (dropped >= result_count) selected_flags[i] = 0;
-            else dropped++;
+            dropped++;
         }
     }
 
@@ -337,7 +338,7 @@ Message *trim_messages_by_tokens_new(Message *msgs, int *count, int max_tokens)
     for (int i = 0; i < *count; i++)
         if (keep[i]) new_count++;
 
-    Message *trimmed = calloc(new_count, sizeof(Message));
+    Message *trimmed = calloc(new_count, sizeof(Message)); // NOLINT(clang-analyzer-optin.portability.UnixAPI)
     if (!trimmed) {
         free(keep);
         return msgs;

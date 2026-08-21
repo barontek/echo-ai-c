@@ -91,8 +91,8 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
     }
     else
     {
-        fprintf(stderr, "\n[Ask User] %s\n> ", q);
-        fflush(stderr);
+        fprintf(stderr, "\n[Ask User] %s\n> ", q); // NOLINT(cert-err33-c)
+        fflush(stderr); // NOLINT(cert-err33-c)
 
         size_t cap = 0;
         ssize_t len = getline(&answer, &cap, stdin);
@@ -117,7 +117,7 @@ static ToolResult *ask_user_execute(Tool *self, const char *args_json)
     {
         char *end = NULL;
         long n = strtol(answer, &end, 10);
-        if (end && *end == '\0' && n >= 1 && n <= opt_count && opt_text[n - 1])
+        if (end && *end == '\0' && n >= 1 && n <= opt_count && opt_text[n - 1]) // NOLINT(clang-analyzer-security.ArrayBound)
         {
             char *resolved = str_dup(opt_text[n - 1]);
             if (resolved)

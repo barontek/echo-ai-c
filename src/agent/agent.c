@@ -216,7 +216,7 @@ void agent_save_session(Agent *agent)
             if (strcmp(agent->messages[i].role, "system") != 0)
                 save_count++;
 
-        s->messages = calloc((size_t)save_count, sizeof(Message));
+        s->messages = calloc((size_t)save_count, sizeof(Message)); // NOLINT(clang-analyzer-optin.portability.UnixAPI)
         if (!s->messages)
         {
             log_error("agent_save_session: OOM allocating messages", NULL);

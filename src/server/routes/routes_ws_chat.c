@@ -292,7 +292,7 @@ void ws_run_fork(WSChatCtx *c, const char *message_id, int idx,
             if (new_msgs)
             {
                 c->agent->messages = new_msgs;
-                c->agent->messages[keep] = *fork_msg;
+                c->agent->messages[keep] = *fork_msg; // NOLINT(clang-analyzer-security.ArrayBound)
                 c->agent->messages_count = keep + 1;
                 append_ok = 1;
                 free(fork_msg);

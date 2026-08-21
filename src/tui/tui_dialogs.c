@@ -34,7 +34,7 @@ static int picker_split_items(TuiModal *m)
             size_t len = (size_t)(q - start);
             if (len > 0)
             {
-                m->items[count] = strndup(start, len);
+                m->items[count] = strndup(start, len); // NOLINT(clang-analyzer-security.ArrayBound)
                 if (!m->items[count])
                 {
                     for (int i = 0; i < count; i++) free(m->items[i]);

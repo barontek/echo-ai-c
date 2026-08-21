@@ -33,9 +33,13 @@ static char *generate_unlock_token(void)
 
     char *token = malloc(4 + sizeof(random_bytes) * 2 + 1);
     if (!token) return NULL;
-    memcpy(token, "tok_", 4);
+    memcpy(token, "tok_", 4);  // NOLINT(bugprone-not-null-terminated-result)
+                               // TODO(routes_auth): verified 2026-08-18: token is
+                               // malloc(4 + 2*32 + 1); the last snprintf iteration
+                               // (i == 31, line 40) writes the NUL at token[68], the
+                               // final byte of the 69-byte buffer.
     for (size_t i = 0; i < sizeof(random_bytes); i++)
-        snprintf(token + 4 + i * 2, 3, "%02x", random_bytes[i]);
+        snprintf(token + 4 + i * 2, 3, "%02x", random_bytes[i]); // NOLINT(cert-err33-c)
     return token;
 }
 

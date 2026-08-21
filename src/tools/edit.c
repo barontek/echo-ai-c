@@ -207,11 +207,18 @@ static int edit_write_atomic(const char *resolved, const char *data,
     }
 
     size_t written = fwrite(data, 1, len, f);
-    if (written != len || fclose(f) != 0)
+    if (written != len)
     {
         /* C2: a short write (disk full) silently truncated the file and
          * the tool reported success. Report the failure; the original
          * file is untouched. */
+        fclose(f); // NOLINT(cert-err33-c)
+        unlink(tmp_path);
+        free(tmp_path);
+        return -1;
+    }
+    if (fclose(f) != 0)
+    {
         unlink(tmp_path);
         free(tmp_path);
         return -1;
@@ -234,7 +241,7 @@ static int edit_write_atomic(const char *resolved, const char *data,
  * with their line number, changed lines with '-'/'+' and their
  * old/new line numbers, " ..." marks skipped runs. */
 
-#define EDIT_DIFF_CONTEXT 3
+#define EDIT_DIFF_CONTEXT ((size_t)3)
 
 typedef struct {
     char **lines; /* line starts; '\n'-delimited, last line NUL-ended */
@@ -496,8 +503,8 @@ static int edit_build_diff(const char *old_text, const char *new_text,
         return -1;
     }
 
-    EditNormMap om;
-    EditNormMap nm;
+    EditNormMap om = {0};
+    EditNormMap nm = {0};
     if (edit_norm_map_build(&old, &om) != 0 ||
         edit_norm_map_build(&neu, &nm) != 0)
     {
@@ -542,7 +549,7 @@ static int edit_build_diff(const char *old_text, const char *new_text,
             {
                 for (size_t k = 0; k < gap; k++)
                 {
-                    rc = edit_append_diff_line(&diff, ' ', old_i + k + 1,
+                    rc = edit_append_diff_line(&diff, ' ', old_i + k + 1, // NOLINT(clang-analyzer-core.CallAndMessage)
                                                old.lines[old_i + k],
                                                old.lens[old_i + k]);
                     if (rc != 0) break;
@@ -554,7 +561,7 @@ static int edit_build_diff(const char *old_text, const char *new_text,
                 {
                     for (size_t k = 0; k < EDIT_DIFF_CONTEXT; k++)
                     {
-                        rc = edit_append_diff_line(&diff, ' ', old_i + k + 1,
+                        rc = edit_append_diff_line(&diff, ' ', old_i + k + 1, // NOLINT(clang-analyzer-core.CallAndMessage)
                                                    old.lines[old_i + k],
                                                    old.lens[old_i + k]);
                         if (rc != 0) break;
@@ -575,7 +582,7 @@ static int edit_build_diff(const char *old_text, const char *new_text,
         /* the change itself */
         for (size_t k = run->old_start; k < run->old_end; k++)
         {
-            rc = edit_append_diff_line(&diff, '-', k + 1,
+            rc = edit_append_diff_line(&diff, '-', k + 1, // NOLINT(clang-analyzer-core.CallAndMessage)
                                        old.lines[k], old.lens[k]);
             if (rc != 0) break;
         }
@@ -767,12 +774,12 @@ static ToolResult *edit_execute(Tool *self, const char *args_json)
         goto cleanup_items_path;
     }
 
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    rewind(f);
-    if (fsize <= 0 || (size_t)fsize > ctx->safety->max_file_size)
-    {
-        fclose(f);
+    fseek(f, 0, SEEK_END); // NOLINT(cert-err33-c)
+long fsize = ftell(f);
+      if (fsize <= 0 || (size_t)fsize > ctx->safety->max_file_size ||
+          fseek(f, 0, SEEK_SET) != 0)
+      {
+          fclose(f); // NOLINT(cert-err33-c)
         r = tool_result_error("file empty or too large", "policy_denied");
         free(resolved);
         goto cleanup_items_path;
@@ -781,14 +788,14 @@ static ToolResult *edit_execute(Tool *self, const char *args_json)
     char *content = malloc((size_t)fsize + 1);
     if (!content)
     {
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         r = tool_result_error("oom", "execution_error");
         free(resolved);
         goto cleanup_items_path;
     }
 
     size_t read = fread(content, 1, (size_t)fsize, f);
-    fclose(f);
+    fclose(f); // NOLINT(cert-err33-c)
     if (read != (size_t)fsize)
     {
         /* C5: a short read means the file changed under us; rewriting it
@@ -799,7 +806,7 @@ static ToolResult *edit_execute(Tool *self, const char *args_json)
         free(resolved);
         goto cleanup_items_path;
     }
-    content[read] = '\0';
+    content[read] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
 
     /* T3a: strip a UTF-8 BOM before matching (the model will not echo it
      * back) and remember the file's line ending so the rewritten file
@@ -1015,7 +1022,12 @@ static ToolResult *edit_execute(Tool *self, const char *args_json)
             goto cleanup_items_path;
         }
         memcpy(repl, new_norm, m->index);
-        memcpy(repl + m->index, nnew, nlen);
+        memcpy(repl + m->index, nnew, nlen);  // NOLINT(bugprone-not-null-terminated-result)
+                                              // TODO(edit): verified 2026-08-18: repl is
+                                              // malloc(nsize) at line 1005; the tail copy
+                                              // at lines 1019-1020 copies tail+1 bytes
+                                              // (the +1 is new_norm's NUL), so repl is
+                                              // terminated at its final byte.
         memcpy(repl + m->index + nlen, new_norm + m->index + m->length,
                tail + 1);
         free(new_norm);

@@ -2,6 +2,9 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror -g)
 if(ENABLE_SANITIZERS)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
+elseif(ENABLE_TSAN)
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
 endif()
 
 add_library(echo_ai_test_deps INTERFACE)
@@ -38,7 +41,9 @@ check_c_source_compiles(
 )
 set(CMAKE_REQUIRED_FLAGS "")
 
-if(HAS_LIBFUZZER)
+# Fuzz targets are ASan/UBSan-based by design and cannot combine with
+# -fsanitize=thread, so they are skipped entirely under a TSan build.
+if(HAS_LIBFUZZER AND NOT ENABLE_TSAN)
     # fuzz_cdp_line — CDP pipe-line dispatcher (cdp.c under CDP_TEST)
     add_executable(fuzz_cdp_line
         ../src/browser/cdp.c

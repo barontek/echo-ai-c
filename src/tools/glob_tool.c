@@ -34,7 +34,12 @@ static ToolResult *glob_execute(Tool *self, const char *args_json)
     cJSON_Delete(args);
 
     GlobCtx *gctx = (GlobCtx *)self->ctx;
-    if (gctx && gctx->safety && !safety_check_path(gctx->safety, pattern))
+    if (!gctx || !gctx->safety)
+    {
+        free(pattern);
+        return tool_result_error("tool context missing", "execution_error");
+    }
+    if (!safety_check_path(gctx->safety, pattern))
     {
         free(pattern);
         return tool_result_error("pattern rejected by safety check", "validation_error");

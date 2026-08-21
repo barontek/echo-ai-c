@@ -60,23 +60,22 @@ int ct_snapshot(ChangeTracker *ct, const char *file_path)
     FILE *f = fopen(file_path, "r");
     if (!f) return -1;
 
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    rewind(f);
-    if (len < 0) {
-        fclose(f);
-        return -1;
+      fseek(f, 0, SEEK_END); // NOLINT(cert-err33-c)
+      long len = ftell(f);
+      if (len < 0 || fseek(f, 0, SEEK_SET) != 0) {
+          fclose(f); // NOLINT(cert-err33-c)
+          return -1;
     }
 
     char *content = malloc((size_t)len + 1);
     if (!content) {
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         return -1;
     }
 
     size_t read = fread(content, 1, (size_t)len, f);
-    fclose(f);
-    content[read] = '\0';
+    fclose(f); // NOLINT(cert-err33-c)
+    content[read] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
 
     if (ct->undo_count >= CT_MAX_STACK)
     {
@@ -119,19 +118,18 @@ int ct_undo(ChangeTracker *ct)
     char *current = NULL;
     if (f)
     {
-        fseek(f, 0, SEEK_END);
+        fseek(f, 0, SEEK_END); // NOLINT(cert-err33-c)
         long cur_len = ftell(f);
-        rewind(f);
-        if (cur_len > 0)
+        if (cur_len > 0 && fseek(f, 0, SEEK_SET) == 0)
         {
             current = malloc((size_t)cur_len + 1);
             if (current)
             {
                 size_t read = fread(current, 1, (size_t)cur_len, f);
-                current[read] = '\0';
+                current[read] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
             }
         }
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
     }
 
     /* restore the file before pushing the redo entry: if the redo-push

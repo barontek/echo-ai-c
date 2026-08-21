@@ -150,7 +150,7 @@ static int run_with_timeout(const char *command, int timeout_secs,
                     {
                         (void)kill(-pid, SIGKILL);
                         if (!child_done) (void)waitpid(pid, &status, 0);
-                        if (pipe_open) close(pipefd[0]);
+                        if (pipe_open) close(pipefd[0]); // cppcheck-suppress identicalInnerCondition
                         return -4;
                     }
                     tmp_path = str_dup(tmpl);
@@ -159,7 +159,7 @@ static int run_with_timeout(const char *command, int timeout_secs,
                         close(fd);
                         (void)kill(-pid, SIGKILL);
                         if (!child_done) (void)waitpid(pid, &status, 0);
-                        if (pipe_open) close(pipefd[0]);
+                        if (pipe_open) close(pipefd[0]); // cppcheck-suppress identicalInnerCondition
                         return -4;
                     }
                     tmpf = fdopen(fd, "wb");
@@ -171,7 +171,7 @@ static int run_with_timeout(const char *command, int timeout_secs,
                         tmp_path = NULL;
                         (void)kill(-pid, SIGKILL);
                         if (!child_done) (void)waitpid(pid, &status, 0);
-                        if (pipe_open) close(pipefd[0]);
+                        if (pipe_open) close(pipefd[0]); // cppcheck-suppress identicalInnerCondition
                         return -4;
                     }
                     /* Everything seen so far (the full window) goes
@@ -182,7 +182,7 @@ static int run_with_timeout(const char *command, int timeout_secs,
                         bash_output_cleanup(tmp_path, tmpf);
                         (void)kill(-pid, SIGKILL);
                         if (!child_done) (void)waitpid(pid, &status, 0);
-                        if (pipe_open) close(pipefd[0]);
+                        if (pipe_open) close(pipefd[0]); // cppcheck-suppress identicalInnerCondition
                         return -4;
                     }
                 }
@@ -192,7 +192,7 @@ static int run_with_timeout(const char *command, int timeout_secs,
                     bash_output_cleanup(tmp_path, tmpf);
                     (void)kill(-pid, SIGKILL);
                     if (!child_done) (void)waitpid(pid, &status, 0);
-                    if (pipe_open) close(pipefd[0]);
+                    if (pipe_open) close(pipefd[0]); // cppcheck-suppress identicalInnerCondition
                     return -4;
                 }
 
@@ -215,12 +215,8 @@ static int run_with_timeout(const char *command, int timeout_secs,
                 }
                 continue;
             }
-            if (n == 0)
-            {
-                close(pipefd[0]);
-                pipe_open = 0;
-            }
-            else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            if (n == 0 ||
+                (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
             {
                 close(pipefd[0]);
                 pipe_open = 0;

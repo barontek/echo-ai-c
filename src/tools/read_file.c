@@ -129,25 +129,25 @@ static ToolResult *read_file_execute(Tool *self, const char *args_json)
         return tool_result_error("file not found", "file_not_found");
     }
 
-    fseek(fp, 0, SEEK_END);
+    fseek(fp, 0, SEEK_END); // NOLINT(cert-err33-c)
     long size = ftell(fp);
-    if (size > (long)ctx->safety->max_file_size)
+    if (size < 0 || size > (long)ctx->safety->max_file_size)
     {
-        fclose(fp);
+        fclose(fp); // NOLINT(cert-err33-c)
         free(resolved);
         return tool_result_error("file exceeds max size", "policy_denied");
     }
-    fseek(fp, 0, SEEK_SET);
+    fseek(fp, 0, SEEK_SET); // NOLINT(cert-err33-c)
 
     char *content = malloc((size_t)size + 1);
     if (!content) {
-        fclose(fp);
+        fclose(fp); // NOLINT(cert-err33-c)
         free(resolved);
         return NULL;
     }
 
     size_t read_size = fread(content, 1, (size_t)size, fp);
-    fclose(fp);
+    fclose(fp); // NOLINT(cert-err33-c)
     free(resolved);
     if (read_size != (size_t)size)
     {
@@ -157,7 +157,7 @@ static ToolResult *read_file_execute(Tool *self, const char *args_json)
         return tool_result_error("read failed: file incomplete",
                                  "execution_error");
     }
-    content[read_size] = '\0';
+    content[read_size] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
 
     /* Split into lines on '\n' (pi semantics: a trailing newline yields
      * a final empty line). */

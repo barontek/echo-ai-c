@@ -300,7 +300,9 @@ static int migration_finalize_recovery(SessionManager *sm, int committed,
     {
         char *verifier = data_path(sm->data_dir, VERIFIER_FILE);
         if (!verifier)
-            result = -1;
+            result = -1;  // NOLINT(bugprone-branch-clone): shared error
+                          // assignment; TODO(migration): branches differ,
+                          // only the failure outcome is identical
         else if (stat(verifier_new, &st) == 0 &&
                  rename(verifier_new, verifier) != 0)
             result = -1;
@@ -313,7 +315,8 @@ static int migration_finalize_recovery(SessionManager *sm, int committed,
         if (result == 0 && remove_if_exists(verifier_new) != 0) result = -1;
     }
     else if (stat(salt, &st) != 0)
-    {
+    {  // NOLINT(bugprone-branch-clone): shared error outcome;
+       // TODO(migration): branches differ in condition, only failure is same
         result = -1;
     }
     else if (remove_if_exists(verifier_new) != 0)

@@ -160,11 +160,11 @@ static ToolResult *deep_search_execute(Tool *self, const char *args_json)
                 cJSON_AddStringToObject(fe, "url", url_item->valuestring);
                 size_t clen = fr->content ? strlen(fr->content) : 0;
                 size_t snippet_len = clen < 2000 ? clen : 2000;
-                char *snippet = malloc(snippet_len + 1);
-                if (snippet)
-                {
-                    memcpy(snippet, fr->content, snippet_len);
-                    snippet[snippet_len] = '\0';
+char *snippet = malloc(snippet_len + 1);
+                  if (snippet)
+                  {
+                      if (fr->content) memcpy(snippet, fr->content, snippet_len);
+                      snippet[snippet_len] = '\0';
                     cJSON_AddStringToObject(fe, "content_snippet", snippet);
                     free(snippet);
                 }

@@ -76,7 +76,7 @@ static AgentConfig *load_agent_config(Conf *conf)
      * factory.c's provider_default_base_url — same mapping the WS
      * provider-switch path uses). */
     char provider_key[64];
-    snprintf(provider_key, sizeof(provider_key), "%s.base_url", cfg->provider);
+    snprintf(provider_key, sizeof(provider_key), "%s.base_url", cfg->provider); // NOLINT(cert-err33-c)
     v = conf_get(conf, provider_key);
     cfg->base_url = v ? v : provider_default_base_url(cfg->provider);
     if (!cfg->base_url)
@@ -311,7 +311,7 @@ static void run_chat(Conf *conf)
     while (1)
     {
         printf("> ");
-        fflush(stdout);
+        fflush(stdout); // NOLINT(cert-err33-c)
 
         ssize_t len = getline(&line, &line_cap, stdin);
         if (len < 0) break;
@@ -637,7 +637,7 @@ static void run_web(Conf *conf, const char *config_path)
     registry_set_change_tracker(ctx.change_tracker);
 
     char pbuf[16];
-    snprintf(pbuf, sizeof(pbuf), "%d", port);
+    snprintf(pbuf, sizeof(pbuf), "%d", port); // NOLINT(cert-err33-c)
     log_info("starting web server", "port", pbuf, NULL);
     server_start(&ctx);
 
@@ -681,7 +681,7 @@ int main(int argc, char *argv[])
 
     if (log_init() != 0)
     {
-        fprintf(stderr, "fatal: logging subsystem unavailable (stderr not writable)\n");
+        fprintf(stderr, "fatal: logging subsystem unavailable (stderr not writable)\n"); // NOLINT(cert-err33-c)
         return 1;
     }
     if (debug) log_set_level(LOG_DEBUG);

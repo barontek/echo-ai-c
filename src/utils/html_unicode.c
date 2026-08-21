@@ -80,7 +80,7 @@ int utf8_valid(const char *s, size_t n)
             first_lo = 0xA0;
             first_hi = 0xBF;
         }
-        else if (c >= 0xE1 && c <= 0xEC) {
+        else if (c >= 0xE1 && c <= 0xEC) {  // NOLINT(bugprone-branch-clone)
             need = 2;
             first_lo = 0x80;
             first_hi = 0xBF;

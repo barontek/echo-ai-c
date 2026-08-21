@@ -26,6 +26,19 @@ Build flags below assume the environment from the section above is active (`nix 
 - Release builds add `-O2 -D_FORTIFY_SOURCE=2`; sanitizers stay on in CI even for "release" test runs.
 - Never disable a warning class to "get it compiling." Fix the underlying issue or ask.
 
+Static analysis
+
+- clang-tidy and cppcheck (or scan-build) are a CI gate, run separately from the sanitizer/test run — sanitizers only catch bugs on lines a test actually runs; static analysis catches the unexercised paths they miss.
+- Findings are treated the same as a compiler warning under `-Werror` — fix it or get a documented `// TODO(reason:)` exception, never silenced with a blanket pragma.
+- A NOLINT on `bugprone-not-null-terminated-result` must cite the terminator-write line — the exact line that writes the NUL, traced against the allocation size and offset accumulation — never a prose "it's terminated later" claim. Template: src/utils/html_assembly.c:59.
+- Purpose is to catch gaps like the ones in "Known gaps" (memory_get_dup, tool_delegate.c loop-phase sites) before a human has to notice and write the fault-injection test for them.
+
+Concurrency
+
+- Any file touching shared or global state across more than one thread — subprocess spawning, async LLM/tool calls, server request handling — gets a ThreadSanitizer (TSan) build/run.
+- TSan runs as a separate build from ASan/UBSan — they are not combinable — in its own CI stage, apart from the sanitizer/test run.
+- A thread-safety claim in a doc comment (Documentation standards item 4) needs a TSan run backing it, not just the comment.
+
 Memory ownership
 
 - Every `malloc`/`calloc`/`realloc`/`strdup` call has a documented owner. If a function returns allocated memory, name it so (`_alloc`, `_dup`, `_new`) and state who frees it.
@@ -230,6 +243,8 @@ Verification discipline
 - `git stash` and rerun the previous behavior when a fix is claimed, to confirm the bug reproduces on old code and is gone on new code.
 - Audit findings — from the agent itself or a second reviewing agent — aren't accepted at face value; verify via actual code path tracing with specific line numbers before marking fixed.
 - No fix is "done" until it's run under sanitizers at least once.
+- Fail→pass test evidence and sanitizer output cited as proof of a fix must come from an actual command invocation in that session — show the raw command and its output, not a paraphrase or a claim that it was run.
+- Any new function with a non-trivial multi-allocation commit path (the "Fault-injection testing" pattern) ships its fault-injection test in the same PR, or the PR is blocked — enforced as a CI check, not a reviewer-remembers-to-check convention, so "Known gaps" stops being a dated snapshot and becomes an enforced rule.
 
 Fault-injection testing (allocation-failure regression tests)
 

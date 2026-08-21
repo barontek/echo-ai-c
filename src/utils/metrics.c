@@ -192,27 +192,27 @@ char *metrics_render_new(Metrics *m)
     {
         CounterMetric *cm = &m->counters[i];
         if (cm->help && cm->help[0])
-            fprintf(stream, "# HELP %s %s\n", cm->name, cm->help);
-        fprintf(stream, "# TYPE %s counter\n", cm->name);
-        fprintf(stream, "%s %lld\n", cm->name, cm->count);
+            fprintf(stream, "# HELP %s %s\n", cm->name, cm->help); // NOLINT(cert-err33-c)
+        fprintf(stream, "# TYPE %s counter\n", cm->name); // NOLINT(cert-err33-c)
+        fprintf(stream, "%s %lld\n", cm->name, cm->count); // NOLINT(cert-err33-c)
     }
 
     for (int i = 0; i < m->histograms_count; i++)
     {
         HistogramMetric *hm = &m->histograms[i];
         if (hm->help && hm->help[0])
-            fprintf(stream, "# HELP %s %s\n", hm->name, hm->help);
-        fprintf(stream, "# TYPE %s histogram\n", hm->name);
-        fprintf(stream, "%s_count %lld\n", hm->name, hm->total_count);
-        fprintf(stream, "%s_sum %.0f\n", hm->name, hm->total_sum);
+            fprintf(stream, "# HELP %s %s\n", hm->name, hm->help); // NOLINT(cert-err33-c)
+        fprintf(stream, "# TYPE %s histogram\n", hm->name); // NOLINT(cert-err33-c)
+        fprintf(stream, "%s_count %lld\n", hm->name, hm->total_count); // NOLINT(cert-err33-c)
+        fprintf(stream, "%s_sum %.0f\n", hm->name, hm->total_sum); // NOLINT(cert-err33-c)
         for (int j = 0; j < hm->bucket_count; j++)
         {
-            fprintf(stream, "%s_bucket{le=\"%.0f\"} %lld\n",
+            fprintf(stream, "%s_bucket{le=\"%.0f\"} %lld\n", // NOLINT(cert-err33-c)
                     hm->name, hm->buckets[j], hm->bucket_counts[j]);
         }
-        fprintf(stream, "%s_bucket{le=\"+Inf\"} %lld\n", hm->name, hm->total_count);
+        fprintf(stream, "%s_bucket{le=\"+Inf\"} %lld\n", hm->name, hm->total_count); // NOLINT(cert-err33-c)
     }
 
-    fclose(stream);
+    fclose(stream); // NOLINT(cert-err33-c)
     return buf;
 }

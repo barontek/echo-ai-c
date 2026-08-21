@@ -49,3 +49,15 @@ target_compile_definitions(test_change_tracker PRIVATE CHANGE_TRACKER_TEST=1)
 target_include_directories(test_change_tracker PRIVATE ../../src)
 target_link_libraries(test_change_tracker PRIVATE echo_ai_test_deps)
 add_test(NAME test_change_tracker COMMAND test_change_tracker)
+
+# encryption file-store fault-injection: salt/pepper/verifier close-failure
+add_executable(test_encryption
+    ../../src/session/encryption.c
+    ../../src/utils/string_utils.c
+    ../../src/utils/logging.c
+    test_encryption.c
+)
+target_compile_definitions(test_encryption PRIVATE ENCRYPTION_TEST=1)
+target_include_directories(test_encryption PRIVATE ../../src)
+target_link_libraries(test_encryption PRIVATE echo_ai_test_deps)
+add_test(NAME test_encryption COMMAND test_encryption)

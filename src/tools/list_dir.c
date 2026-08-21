@@ -61,9 +61,9 @@ static ToolResult *list_dir_execute(Tool *self, const char *args_json)
         {
             /* C11: mark the truncation instead of silently ending. */
             const char marker[] = "... (truncated)\n";
-            snprintf(buffer + sizeof(buffer) - 1 - sizeof(marker),
+            snprintf(buffer + sizeof(buffer) - 1 - sizeof(marker), // NOLINT(cert-err33-c)
                      sizeof(marker), "%s", marker);
-            pos = sizeof(buffer) - 1;
+            pos = sizeof(buffer) - 1; // NOLINT(clang-analyzer-deadcode.DeadStores)
             break;
         }
         pos += (size_t)n;

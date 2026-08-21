@@ -165,14 +165,14 @@ static ToolResult *notes_action_read(const char *ndir, const char *name,
     char *content = malloc((size_t)st.st_size + 1);
     if (!content)
     {
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         free(fpath);
         return tool_result_error("oom", "execution_error");
     }
 
     size_t read = fread(content, 1, (size_t)st.st_size, f);
-    fclose(f);
-    content[read] = '\0';
+    fclose(f); // NOLINT(cert-err33-c)
+    content[read] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
     free(fpath);
 
     ToolResult *tr = tool_result_create(content);

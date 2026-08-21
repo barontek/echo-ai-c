@@ -780,8 +780,8 @@ int session_manager_log_event(SessionManager *sm, const char *session_id,
     char ts[64];
     struct tm tm_storage;
     struct tm *tm_ptr = localtime_r(&now, &tm_storage);
-    if (tm_ptr) strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm_ptr);
-    else snprintf(ts, sizeof(ts), "%ld", (long)now);
+    if (tm_ptr) strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm_ptr); // NOLINT(cert-err33-c)
+    else snprintf(ts, sizeof(ts), "%ld", (long)now); // NOLINT(cert-err33-c)
     cJSON_AddStringToObject(ev, "timestamp", ts);
 
     cJSON_AddItemToArray(s->events, ev);

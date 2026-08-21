@@ -768,6 +768,35 @@ START_TEST(test_resolve_absolute_inside_workspace_resolves)
 }
 END_TEST
 
+/* --- safety_audit_log (fault injection) --- */
+
+extern void safety_test_set_fclose_fail(int nth_close);
+
+/* Regression: safety_audit_log returned 0 even when the audit entry's
+ * close failed, silently losing a security-relevant entry while reporting
+ * success. With the fix it returns -1. On the old code this assertion
+ * fails. */
+START_TEST(test_audit_log_fclose_fail_returns_error)
+{
+    char log_path[256];
+    snprintf(log_path, sizeof(log_path), "/tmp/test_safety_audit_%d.log", getpid());
+    unlink(log_path);
+
+    SafetyConfig *cfg = safety_config_create();
+    cfg->audit_log_path = str_dup(log_path);
+
+    safety_test_set_fclose_fail(1);
+    ck_assert_int_eq(safety_audit_log(cfg, "{\"entry\":1}"), -1);
+    safety_test_set_fclose_fail(-1);
+
+    /* normal operation still works after the injected failure */
+    ck_assert_int_eq(safety_audit_log(cfg, "{\"entry\":1}"), 0);
+
+    safety_config_free(cfg); /* also frees audit_log_path */
+    unlink(log_path);
+}
+END_TEST
+
 /* --- safety_load_from_conf --- */
 
 Suite *safety_suite(void)
@@ -842,6 +871,11 @@ Suite *safety_suite(void)
     tcase_add_test(tc_app, test_approval_empty_list);
     tcase_add_test(tc_app, test_allow_tool_always_removes_from_approval);
     suite_add_tcase(s, tc_app);
+
+    TCase *tc_audit = tcase_create("AuditLog");
+    tcase_set_timeout(tc_audit, 10);
+    tcase_add_test(tc_audit, test_audit_log_fclose_fail_returns_error);
+    suite_add_tcase(s, tc_audit);
 
     TCase *tc_mode = tcase_create("Mode");
     tcase_set_timeout(tc_mode, 10);

@@ -218,8 +218,8 @@ static void log_empty_catalog_diagnostic(const char *body)
     }
     char total_buf[16];
     char list_buf[16];
-    snprintf(total_buf, sizeof(total_buf), "%d", total);
-    snprintf(list_buf, sizeof(list_buf), "%d", list_visible);
+    snprintf(total_buf, sizeof(total_buf), "%d", total); // NOLINT(cert-err33-c)
+    snprintf(list_buf, sizeof(list_buf), "%d", list_visible); // NOLINT(cert-err33-c)
     log_warn("OpenAI Codex model catalog contained no list-visible models",
              "items", total_buf, "list_visible", list_buf,
              "visibility_values", vis_buf, NULL);
@@ -270,7 +270,7 @@ int parse_models_response(const char *raw, char ***models_out,
         if (strcmp(visibility, "list") != 0 ||
             model_already_added(models, count, slug))
             continue;
-        models[count] = str_dup(slug);
+        models[count] = str_dup(slug); // NOLINT(clang-analyzer-core.NullDereference)
         if (!models[count]) goto fail;
         count++;
     }

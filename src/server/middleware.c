@@ -40,7 +40,7 @@ static const char *header_value(const char *headers, const char *name,
             const char *value = colon + 1;
             while (value < line_end && (*value == ' ' || *value == '\t')) value++;
             const char *end = line_end;
-            while (end > value && (end[-1] == ' ' || end[-1] == '\t')) end--;
+            while (end > value && (end[-1] == ' ' || end[-1] == '\t')) end--; // NOLINT(clang-analyzer-security.ArrayBound)
             *value_len = (size_t)(end - value);
             return value;
         }

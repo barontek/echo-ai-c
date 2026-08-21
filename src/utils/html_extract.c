@@ -560,7 +560,7 @@ char *html_extract_text_alloc(const char *raw, size_t raw_len, size_t max_chars)
     x.raw = raw;
     x.len = raw_len;
     x.max_chars = max_chars;
-    x.frames[0].tag_id = -1; /* root frame: never scored, never dropped */
+    x.frames[0].tag_id = -1; /* root frame: never scored, never dropped */ // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange)
     x.depth = 1;
 
     if (parse(&x) != 0)
@@ -619,10 +619,10 @@ static char *text_for_llm(const char *data, size_t len, size_t max_chars)
                 memcpy(fixed + w, buf, blen);
                 w += blen;
             }
-            fixed[w] = '\0';
+            fixed[w] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
             free(nul);
             nul = fixed;
-            len = w;
+            len = w; // NOLINT(clang-analyzer-deadcode.DeadStores)
         }
     }
     char *res = str_truncate_ellipsis_dup(nul, max_chars);

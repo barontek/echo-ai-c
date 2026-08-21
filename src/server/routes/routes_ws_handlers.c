@@ -205,7 +205,7 @@ void ws_handle_provider_frame(WSChatCtx *c, WSClient *ws, cJSON *json)
                 if (c->server_ctx && c->server_ctx->conf)
                 {
                     char provider_key[64];
-                    snprintf(provider_key, sizeof(provider_key), "%s.base_url",
+                    snprintf(provider_key, sizeof(provider_key), "%s.base_url", // NOLINT(cert-err33-c)
                              pname);
                     const char *v = conf_get(c->server_ctx->conf, provider_key);
                     if (v) base_url = v;
@@ -218,7 +218,7 @@ void ws_handle_provider_frame(WSChatCtx *c, WSClient *ws, cJSON *json)
                                        c->effort) != 0)
                 {
                     char msg[128];
-                    snprintf(msg, sizeof(msg), "provider switch failed: %s",
+                    snprintf(msg, sizeof(msg), "provider switch failed: %s", // NOLINT(cert-err33-c)
                              provider->valuestring);
                     cJSON *err = cJSON_CreateObject();
                     cJSON_AddStringToObject(err, "type", "error");

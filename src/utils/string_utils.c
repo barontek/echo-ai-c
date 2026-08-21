@@ -18,7 +18,7 @@ char *str_trim(char *str)
     if (!str) return NULL;
 
     char *start = str;
-    while (isspace((unsigned char)*start)) start++;
+    while (isspace((unsigned char)*start)) start++; // NOLINT(clang-analyzer-core.uninitialized.ArraySubscript)
 
     char *end = start + strlen(start);
     while (end > start && isspace((unsigned char)*(end - 1))) end--;

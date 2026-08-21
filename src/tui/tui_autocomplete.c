@@ -76,7 +76,7 @@ int tui_autocomplete_slash(const TuiCommandRegistry *r, const char *input,
     int rc = 1;
     if (match_count == 1)
     {
-        snprintf(out, cap, "/%s ", match[0]);
+        snprintf(out, cap, "/%s ", match[0]); // NOLINT(cert-err33-c)
     }
     else
     {
@@ -98,7 +98,7 @@ int tui_autocomplete_slash(const TuiCommandRegistry *r, const char *input,
             if (lcp >= sizeof(tmp)) lcp = sizeof(tmp) - 1;
             memcpy(tmp, match[0], lcp);
             tmp[lcp] = '\0';
-            snprintf(out, cap, "/%s", tmp);
+            snprintf(out, cap, "/%s", tmp); // NOLINT(cert-err33-c)
         }
     }
     for (int i = 0; i < match_count; i++) free(match[i]);

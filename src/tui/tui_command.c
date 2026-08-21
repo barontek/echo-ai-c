@@ -31,7 +31,7 @@ void tui_command_registry_destroy(TuiCommandRegistry *r)
 static void copy_field(char *dst, size_t cap, const char *src)
 {
     if (cap == 0) return;
-    snprintf(dst, cap, "%s", src);
+    snprintf(dst, cap, "%s", src); // NOLINT(cert-err33-c)
 }
 
 int tui_command_register(TuiCommandRegistry *r, const TuiCommand *c)

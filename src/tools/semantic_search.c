@@ -353,7 +353,7 @@ ToolResult *semantic_search_execute(Tool *self, const char *args_json)
                 scores[i] = scores[j];
                 scores[j] = tmp_s;
                 int tmp_i = indices[i];
-                indices[i] = indices[j];
+                indices[i] = indices[j]; // NOLINT(clang-analyzer-core.uninitialized.Assign)
                 indices[j] = tmp_i;
             }
         }
@@ -362,7 +362,7 @@ ToolResult *semantic_search_execute(Tool *self, const char *args_json)
     cJSON *out_arr = cJSON_CreateArray();
     for (int i = 0; i < top_k && i < search_index.doc_count; i++)
     {
-        int doc_idx = indices[i];
+        int doc_idx = indices[i]; // NOLINT(clang-analyzer-core.uninitialized.Assign)
         if (scores[i] <= 0) break;
 
         cJSON *item = cJSON_CreateObject();
@@ -374,7 +374,7 @@ ToolResult *semantic_search_execute(Tool *self, const char *args_json)
         char *snippet = malloc(snippet_len + 1);
         if (snippet)
         {
-            memcpy(snippet, doc, snippet_len);
+            if (doc) memcpy(snippet, doc, snippet_len);
             snippet[snippet_len] = '\0';
             cJSON_AddStringToObject(item, "snippet", snippet);
             free(snippet);

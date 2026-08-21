@@ -27,11 +27,11 @@ static char *read_file_alloc(const char *path)
     char *buf = malloc(cap);
     if (!buf)
     {
-        fclose(fp);
+        fclose(fp); // NOLINT(cert-err33-c)
         return NULL;
     }
     size_t n;
-    while ((n = fread(buf + len, 1, cap - len, fp)) > 0)
+    while ((n = fread(buf + len, 1, cap - len, fp)) > 0) // NOLINT(clang-analyzer-unix.Stream)
     {
         len += n;
         if (len == cap)
@@ -41,15 +41,15 @@ static char *read_file_alloc(const char *path)
             if (!nb)
             {
                 free(buf);
-                fclose(fp);
+                fclose(fp); // NOLINT(cert-err33-c)
                 return NULL;
             }
             buf = nb;
             cap = nc;
         }
     }
-    fclose(fp);
-    buf[len] = '\0';
+    fclose(fp); // NOLINT(cert-err33-c)
+    buf[len] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
     return buf;
 }
 

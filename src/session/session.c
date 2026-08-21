@@ -32,7 +32,7 @@ Session *session_create(const char *title)
     {
         /* The timestamp prefix alone collides for sessions created in the
          * same second; a random suffix makes ids practically unique. */
-        int unique = rand() % 1000000;
+        int unique = rand() % 1000000; // NOLINT(cert-msc30-c,cert-msc50-cpp)
         char *tmp = NULL;
         if (asprintf(&tmp, "%s-%d", s->id, unique) < 0) {
             free(s->id);
@@ -65,7 +65,7 @@ Session *session_create(const char *title)
     struct tm *tm_ptr = localtime_r(&now, &tm_storage);
     if (tm_ptr)
     {
-        strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm_ptr);
+        strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm_ptr); // NOLINT(cert-err33-c)
         s->created_at = str_dup(ts);
     }
     else

@@ -382,6 +382,7 @@ Tool *tool_browser_create(SafetyConfig *safety)
         "executable path or name; default auto-discovery\"}"
         "},\"required\":[\"action\"]}"
     );
+    t->ctx = ctx; /* attach before the failure check so destroy() frees it */
     if (!t->name || !t->description || !t->parameters_schema)
     {
         tool_browser_destroy(t);
@@ -389,7 +390,6 @@ Tool *tool_browser_create(SafetyConfig *safety)
     }
     t->execute = tool_browser_execute;
     t->destroy = tool_browser_destroy;
-    t->ctx = ctx;
     return t;
 }
 

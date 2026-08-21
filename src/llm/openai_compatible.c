@@ -133,7 +133,7 @@ static char *build_messages_json(Message *messages, int count, const char *syste
             cJSON_AddItemToObject(msg, "tool_calls", tc_arr);
         }
 
-        if (strcmp(messages[i].role, "tool") == 0)
+        if (messages[i].role && strcmp(messages[i].role, "tool") == 0)
         {
             cJSON_AddStringToObject(msg, "tool_call_id",
                 messages[i].tool_call_id ? messages[i].tool_call_id : "");
@@ -339,7 +339,7 @@ static char *openai_compatible_chat_request(const char *base_url,
     if (http_status < 200 || http_status >= 300)
     {
         char status_str[16];
-        snprintf(status_str, sizeof(status_str), "%ld", http_status);
+        snprintf(status_str, sizeof(status_str), "%ld", http_status); // NOLINT(cert-err33-c)
         log_error("openai compatible request returned non-2xx", "status",
                   status_str, "body", buf.data ? buf.data : "", NULL);
         free(buf.data);
@@ -443,7 +443,7 @@ static LLMResponse *openai_compatible_chat_stream_request(
     if (http_status < 200 || http_status >= 300)
     {
         char status_str[16];
-        snprintf(status_str, sizeof(status_str), "%ld", http_status);
+        snprintf(status_str, sizeof(status_str), "%ld", http_status); // NOLINT(cert-err33-c)
         log_error("openai compatible request returned non-2xx", "status",
                   status_str, "body",
                   ctx.raw.data ? ctx.raw.data : "", NULL);

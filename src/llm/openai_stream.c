@@ -210,7 +210,9 @@ static int merge_completed_output(StreamParser *parser, const cJSON *response)
         }
         else if (strcmp(cJSON_GetStringValue(type), "function_call") == 0 &&
             upsert_function_item(parser, index, item) != 0)
-         {
+         {  // NOLINT(bugprone-branch-clone): shared delete+return error tail;
+            // TODO(openai_stream): the message branch below is intentional
+            // (each branch has a distinct side effect, only the error tail clones)
             cJSON_Delete(reasoning);
             return -1;
         }

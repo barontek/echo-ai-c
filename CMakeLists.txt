@@ -160,6 +160,10 @@ target_link_libraries(echo-ai PRIVATE
 
 option(ENABLE_SANITIZERS "Build with ASan/UBSan" ON)
 option(ENABLE_COVERAGE "Build with code coverage instrumentation (--coverage)" OFF)
+# ThreadSanitizer (AGENTS.md "Concurrency"): any file touching shared or
+# global state across more than one thread gets a TSan build/run. TSan is
+# not combinable with ASan/UBSan, so it is its own build dir (own CI stage).
+option(ENABLE_TSAN "Build with ThreadSanitizer" OFF)
 
 if(ENABLE_COVERAGE)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} --coverage")
@@ -189,6 +193,15 @@ target_compile_options(echo-ai PRIVATE -Wall -Wextra -Wpedantic -Werror)
 if(ENABLE_SANITIZERS)
     target_compile_options(echo-ai PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(echo-ai PRIVATE -fsanitize=address,undefined)
+endif()
+if(ENABLE_TSAN)
+    if(ENABLE_SANITIZERS)
+        message(FATAL_ERROR
+            "ENABLE_TSAN and ENABLE_SANITIZERS are not combinable (AGENTS.md "
+            "'Concurrency') — configure them in separate build dirs.")
+    endif()
+    target_compile_options(echo-ai PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
+    target_link_options(echo-ai PRIVATE -fsanitize=thread)
 endif()
 
 # Frontend build (requires Node.js)

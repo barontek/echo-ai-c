@@ -110,15 +110,33 @@ target_include_directories(test_tui_autocomplete PRIVATE ../../src)
 target_link_libraries(test_tui_autocomplete PRIVATE echo_ai_test_deps)
 add_test(NAME test_tui_autocomplete COMMAND test_tui_autocomplete)
 
-# --- tui_model_store (recent/favorite model lists) ---
+# --- tui_model_store (recent/favorite model lists), fault-injection ---
 add_executable(test_tui_model_store
     test_tui_model_store.c
     ../../src/tui/tui_model_store.c
     ../../src/utils/string_utils.c
 )
+target_compile_definitions(test_tui_model_store PRIVATE TUI_MODEL_STORE_TEST=1)
 target_include_directories(test_tui_model_store PRIVATE ../../src)
 target_link_libraries(test_tui_model_store PRIVATE echo_ai_test_deps)
 add_test(NAME test_tui_model_store COMMAND test_tui_model_store)
+
+# --- tui_picker (picker commit ownership), heavy externals mocked ---
+add_executable(test_tui_picker
+    test_tui_picker.c
+    ../../src/tui/tui_picker.c
+    ../../src/tui/tui_dialogs.c
+    ../../src/tui/tui_events.c
+    ../../src/tui/tui_input.c
+    ../../src/tui/tui_keys.c
+    ../../src/tui/tui_command.c
+    ../../src/tui/tui_model_store.c
+    ../../src/utils/string_utils.c
+)
+target_compile_definitions(test_tui_picker PRIVATE TUI_PICKER_TEST=1)
+target_include_directories(test_tui_picker PRIVATE ../../src)
+target_link_libraries(test_tui_picker PRIVATE echo_ai_test_deps)
+add_test(NAME test_tui_picker COMMAND test_tui_picker)
 
 # --- tui_stream (think/content chunk classifier) ---
 add_executable(test_tui_stream

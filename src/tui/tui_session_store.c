@@ -24,11 +24,11 @@ static char *read_file_alloc(const char *path)
     char *buf = malloc(cap);
     if (!buf)
     {
-        fclose(fp);
+        fclose(fp); // NOLINT(cert-err33-c)
         return NULL;
     }
     size_t n;
-    while ((n = fread(buf + len, 1, cap - len, fp)) > 0)
+    while ((n = fread(buf + len, 1, cap - len, fp)) > 0) // NOLINT(clang-analyzer-unix.Stream)
     {
         len += n;
         if (len == cap)
@@ -38,15 +38,15 @@ static char *read_file_alloc(const char *path)
             if (!nb)
             {
                 free(buf);
-                fclose(fp);
+                fclose(fp); // NOLINT(cert-err33-c)
                 return NULL;
             }
             buf = nb;
             cap = nc;
         }
     }
-    fclose(fp);
-    buf[len] = '\0';
+    fclose(fp); // NOLINT(cert-err33-c)
+    buf[len] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
     return buf;
 }
 
@@ -214,7 +214,7 @@ int tui_session_store_resolve_slot(const char *const *pinned, int pinned_count,
         seen++;
         if (seen == slot)
         {
-            snprintf(out, out_cap, "%s", pinned[i]);
+            snprintf(out, out_cap, "%s", pinned[i]); // NOLINT(cert-err33-c)
             return 1;
         }
     }
@@ -226,7 +226,7 @@ int tui_session_store_resolve_slot(const char *const *pinned, int pinned_count,
         seen++;
         if (seen == slot)
         {
-            snprintf(out, out_cap, "%s", all[i]);
+            snprintf(out, out_cap, "%s", all[i]); // NOLINT(cert-err33-c)
             return 1;
         }
     }

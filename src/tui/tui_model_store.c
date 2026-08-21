@@ -15,6 +15,27 @@
 #include "tui_model_store.h"
 #include "../utils/string_utils.h"
 
+#ifdef TUI_MODEL_STORE_TEST
+/* Test-only fault-injection seam (AGENTS.md "Fault-injection testing"):
+ * force a calloc failure at a chosen call so the load/record/toggle
+ * commit paths can be proven clean under OOM. Per-target definition only.
+ */
+static int test_alloc_fail_at = -1;
+static int test_alloc_call_count = 0;
+static void *test_calloc(size_t nmemb, size_t size)
+{
+    test_alloc_call_count++;
+    if (test_alloc_call_count == test_alloc_fail_at) return NULL;
+    return calloc(nmemb, size);
+}
+#define calloc test_calloc
+void tui_model_store_test_set_alloc_fail(int nth_allocation)
+{
+    test_alloc_fail_at = nth_allocation;
+    test_alloc_call_count = 0;
+}
+#endif
+
 static char *read_file_alloc(const char *path)
 {
     FILE *fp = fopen(path, "r");
@@ -24,11 +45,11 @@ static char *read_file_alloc(const char *path)
     char *buf = malloc(cap);
     if (!buf)
     {
-        fclose(fp);
+        fclose(fp); // NOLINT(cert-err33-c)
         return NULL;
     }
     size_t n;
-    while ((n = fread(buf + len, 1, cap - len, fp)) > 0)
+    while ((n = fread(buf + len, 1, cap - len, fp)) > 0) // NOLINT(clang-analyzer-unix.Stream)
     {
         len += n;
         if (len == cap)
@@ -38,15 +59,15 @@ static char *read_file_alloc(const char *path)
             if (!nb)
             {
                 free(buf);
-                fclose(fp);
+                fclose(fp); // NOLINT(cert-err33-c)
                 return NULL;
             }
             buf = nb;
             cap = nc;
         }
     }
-    fclose(fp);
-    buf[len] = '\0';
+    fclose(fp); // NOLINT(cert-err33-c)
+    buf[len] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
     return buf;
 }
 
@@ -75,7 +96,7 @@ static int parse_list(cJSON *root, const char *key, char ***out, int *out_count)
     {
         const char *s = cJSON_GetStringValue(item);
         if (!s) continue;
-        list[n] = str_dup(s);
+        list[n] = str_dup(s); // NOLINT(clang-analyzer-security.ArrayBound)
         if (!list[n])
         {
             for (int i = 0; i < n; i++) free(list[i]);
@@ -140,6 +161,10 @@ int tui_model_store_load(const char *path, char ***recent, int *recent_count,
     {
         free_list(r, rn);
         free_list(f, fn);
+        free(*recent);
+        free(*favorites);
+        *recent = NULL;
+        *favorites = NULL;
     }
     return rc;
 }
@@ -196,9 +221,9 @@ int tui_model_store_record_recent(const char *path, const char *id, int cap)
 
     /* build the new recent list: id first, then others (dedup) */
     int total = rc_count + 1;
+    int n = 0;
     char **nr = calloc((size_t)total, sizeof(char *));
     if (!nr) goto done;
-    int n = 0;
     nr[n++] = str_dup(id);
     if (!nr[0]) goto done;
     for (int i = 0; i < rc_count && n < cap; i++)
@@ -229,9 +254,9 @@ int tui_model_store_toggle_favorite(const char *path, const char *id,
 
     int rc = -1;
     int was = list_contains((const char *const *)fav, fc_count, id);
-    char **nf = calloc((size_t)(fc_count + 1), sizeof(char *));
-    if (!nf) goto done;
     int n = 0;
+    char **nf = calloc((size_t)fc_count + 1, sizeof(char *));
+    if (!nf) goto done;
     if (was)
     {
         for (int i = 0; i < fc_count; i++)

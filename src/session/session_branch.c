@@ -76,7 +76,7 @@ static char *branch_mint_id(const char *prefix)
 {
     time_t now = time(NULL);
     char *id = NULL;
-    if (asprintf(&id, "%s%ld-%d", prefix, (long)now, rand() % 1000000) < 0)
+    if (asprintf(&id, "%s%ld-%d", prefix, (long)now, rand() % 1000000) < 0) // NOLINT(cert-msc30-c,cert-msc50-cpp)
         return NULL;
     return id;
 }

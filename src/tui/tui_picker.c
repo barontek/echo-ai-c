@@ -24,6 +24,242 @@
 #include "../llm/factory.h"
 #include "../safety/safety.h"
 
+#ifdef TUI_PICKER_TEST
+/* Test-only mocks for the heavy externals (worker, chat, providers,
+ * sessions, notcurses): the picker's commit/ownership logic is under
+ * test, not those subsystems. Mirrors the REGISTRY_TEST precedent:
+ * the define is only set by the test target, never in production. */
+#define close_modal test_close_modal
+#define set_status_msg test_set_status_msg
+#define command_dispatch test_command_dispatch
+#define slash_theme test_slash_theme
+#define tui_worker_submit test_worker_submit
+#define provider_names_available test_provider_names_available
+#define provider_effort_options test_provider_effort_options
+#define session_manager_list_sessions test_list_sessions
+#define session_list_free test_session_list_free
+#define tui_prompt_store_stash_list test_stash_list
+#define tui_prompt_store_stash_pop test_stash_pop
+#define tui_prompt_store_stash_push test_stash_push
+#define tui_prompt_store_stash_remove test_stash_remove
+#define tui_chat_append_error test_chat_append_error
+#define tui_chat_block_count test_chat_block_count
+#define tui_chat_block_kind test_chat_block_kind
+#define tui_chat_block_text test_chat_block_text
+#define tui_chat_block_render_lines test_chat_block_render_lines
+#define ncplane_dim_yx test_ncplane_dim_yx
+#define message_block_at test_message_block_at
+#define registry_enabled_count test_registry_enabled_count
+
+static char test_dispatched[256];
+static char test_theme[64];
+static char test_status[128];
+static int test_worker_jobs[16];
+static char test_worker_args[16][128];
+static int test_worker_job_count;
+
+static void test_close_modal(TuiApp *app, int answer_cancel)
+{
+    (void)answer_cancel;
+    tui_modal_close(app->modal);
+    app->modal = NULL;
+}
+
+static void test_set_status_msg(TuiApp *app, const char *msg)
+{
+    (void)app;
+    if (msg) (void)snprintf(test_status, sizeof(test_status), "%s", msg);
+}
+
+static void test_command_dispatch(TuiApp *app, const char *name, const char *args)
+{
+    (void)app;
+    (void)args;
+    if (name) (void)snprintf(test_dispatched, sizeof(test_dispatched), "%s", name);
+}
+
+static void test_slash_theme(TuiApp *app, const char *style)
+{
+    (void)app;
+    if (style) (void)snprintf(test_theme, sizeof(test_theme), "%s", style);
+}
+
+static int test_worker_submit(TuiWorker *worker, const char *job, const char *data)
+{
+    (void)worker;
+    if (test_worker_job_count < 16 && job)
+    {
+        (void)snprintf(test_worker_args[test_worker_job_count],
+                       sizeof(test_worker_args[0]), "%s", data ? data : "");
+        test_worker_jobs[test_worker_job_count++] = (unsigned char)job[0];
+    }
+    return 0;
+}
+
+static const char *test_provider_names[4];
+static const char *test_effort_opts[8];
+
+static const char *const *test_provider_names_available(int *count)
+{
+    int n = 0;
+    while (n < 3 && test_provider_names[n]) n++;
+    if (count) *count = n;
+    return test_provider_names;
+}
+
+static const char *const *test_provider_effort_options(const char *name)
+{
+    (void)name;
+    return test_effort_opts[0] ? test_effort_opts : NULL;
+}
+
+static SessionList test_sessions;
+
+static SessionList *test_list_sessions(SessionManager *sm)
+{
+    (void)sm;
+    return &test_sessions;
+}
+
+static void test_session_list_free(SessionList *list)
+{
+    (void)list; /* the list itself is static test state */
+}
+
+static int test_stash_list(const char *path, char ***out, int *out_count)
+{
+    (void)path;
+    (void)out;
+    if (out_count) *out_count = 0;
+    return 0;
+}
+
+static int test_stash_pop(const char *path, char **out)
+{
+    (void)path;
+    if (out) *out = NULL;
+    return 0;
+}
+
+static int test_stash_push(const char *path, const char *input, int max)
+{
+    (void)path;
+    (void)input;
+    (void)max;
+    return 0;
+}
+
+static int test_stash_remove(const char *path, int index)
+{
+    (void)path;
+    (void)index;
+    return 0;
+}
+
+static int test_chat_append_error(TuiChat *chat, const char *text)
+{
+    (void)chat;
+    (void)text;
+    return 0;
+}
+
+static size_t test_chat_block_count(const TuiChat *chat)
+{
+    (void)chat;
+    return 0;
+}
+
+static TuiBlockKind test_chat_block_kind(const TuiChat *chat, size_t idx)
+{
+    (void)chat;
+    (void)idx;
+    return TUI_BLOCK_USER;
+}
+
+static const char *test_chat_block_text(const TuiChat *chat, size_t idx)
+{
+    (void)chat;
+    (void)idx;
+    return "";
+}
+
+static size_t test_chat_block_render_lines(TuiChat *chat, size_t idx, size_t width)
+{
+    (void)chat;
+    (void)idx;
+    (void)width;
+    return 0;
+}
+
+static void test_ncplane_dim_yx(const struct ncplane *n, unsigned *rows,
+                                unsigned *cols)
+{
+    (void)n;
+    if (rows) *rows = 0;
+    if (cols) *cols = 0;
+}
+
+static long test_message_block_at(TuiApp *app, long n)
+{
+    (void)app;
+    (void)n;
+    return -1;
+}
+
+static int test_registry_enabled_count(void)
+{
+    return 0;
+}
+
+void tui_picker_test_reset(void)
+{
+    test_dispatched[0] = '\0';
+    test_theme[0] = '\0';
+    test_status[0] = '\0';
+    test_worker_job_count = 0;
+    test_provider_names[0] = NULL;
+    test_provider_names[1] = NULL;
+    test_provider_names[2] = NULL;
+    test_provider_names[3] = NULL;
+    test_effort_opts[0] = NULL;
+    test_sessions.count = 0;
+    test_sessions.ids = NULL;
+    test_sessions.titles = NULL;
+}
+
+void tui_picker_test_set_sessions(char **ids, char **titles, int count)
+{
+    test_sessions.ids = ids;
+    test_sessions.titles = titles;
+    test_sessions.count = count;
+}
+
+const char *tui_picker_test_dispatched(void)
+{
+    return test_dispatched;
+}
+
+const char *tui_picker_test_theme(void)
+{
+    return test_theme;
+}
+
+int tui_picker_test_worker_jobs(void)
+{
+    return test_worker_job_count;
+}
+
+int tui_picker_test_worker_job(int index)
+{
+    return test_worker_jobs[index];
+}
+
+const char *tui_picker_test_worker_arg(int index)
+{
+    return test_worker_args[index];
+}
+#endif /* TUI_PICKER_TEST */
+
 /* Free two caller-owned string arrays (model-store lists). */
 static void free_str_lists(char **a, int an, char **b, int bn)
 {
@@ -142,7 +378,7 @@ void open_model_picker(TuiApp *app)
     {
         pos += (size_t)snprintf(body + pos, pos < total ? total - pos : 0,
                                 "%s\xE2\x98\x85 %s", pos > 0 ? "\n" : "", fav[i]);
-        values[shown++] = fav[i];
+        values[shown++] = fav[i]; // NOLINT(clang-analyzer-security.ArrayBound)
     }
     for (int i = 0; i < rn; i++)
     {
@@ -152,7 +388,7 @@ void open_model_picker(TuiApp *app)
         if (is_fav) continue; /* already listed */
         pos += (size_t)snprintf(body + pos, pos < total ? total - pos : 0,
                                 "%s\xE2\x86\xBA %s", pos > 0 ? "\n" : "", recent[i]);
-        values[shown++] = recent[i];
+        values[shown++] = recent[i]; // NOLINT(clang-analyzer-security.ArrayBound)
     }
     for (int i = 0; i < app->pending_models_count; i++)
     {
@@ -163,7 +399,7 @@ void open_model_picker(TuiApp *app)
         pos += (size_t)snprintf(body + pos, pos < total ? total - pos : 0,
                                 "%s%s", pos > 0 ? "\n" : "",
                                 app->pending_models[i]);
-        values[shown++] = app->pending_models[i];
+        values[shown++] = app->pending_models[i]; // NOLINT(clang-analyzer-security.ArrayBound)
     }
     free_pending_models(app);
     app->modal = tui_modal_open(TUI_MODAL_PICKER, "Select model", body, NULL);
@@ -376,12 +612,21 @@ int picker_commit(TuiApp *app)
         return 0;
     }
     case PICKER_MENU:
+        /* the selection lives in the modal's item array, which close_modal
+         * frees, so copy it before closing the menu */
+    {
+        char *menu_sel = str_dup(sel);
         /* close the menu before opening the next dialog, so the menu
          * modal is not leaked and the ANSWERED close_modal skips cleanly
          * (return 1 below) */
         close_modal(app, 0);
-        picker_menu_select(app, sel);
+        if (menu_sel)
+            picker_menu_select(app, menu_sel);
+        else
+            app->picker_context = PICKER_NONE;
+        free(menu_sel);
         return 1;
+    }
     case PICKER_EFFORT:
         (void)tui_worker_submit(app->worker, "effort", sel);
         app->picker_context = PICKER_NONE;
@@ -405,6 +650,9 @@ int picker_commit(TuiApp *app)
         app->menu_session_id = session_id_from_item(sel);
         app->picker_context = PICKER_NONE;
         app->confirm_action = CONFIRM_DELETE;
+        /* the session picker is replaced, not stacked: close it so the
+         * confirm modal does not leak it */
+        close_modal(app, 0);
         app->modal = tui_modal_open(TUI_MODAL_CONFIRM, "Delete session",
                                     "Delete this session permanently?",
                                     NULL);
@@ -419,6 +667,9 @@ int picker_commit(TuiApp *app)
         app->menu_session_id = session_id_from_item(sel);
         app->picker_context = PICKER_NONE;
         app->input_action = INPUT_EXPORT_PATH;
+        /* the session picker is replaced, not stacked: close it so the
+         * input modal does not leak it */
+        close_modal(app, 0);
         app->modal = tui_modal_open(TUI_MODAL_ASK_USER,
                                     "Export path",
                                     "Path (empty = <session id>.json)",
@@ -434,6 +685,9 @@ int picker_commit(TuiApp *app)
         app->menu_session_id = session_id_from_item(sel);
         app->picker_context = PICKER_NONE;
         app->input_action = INPUT_RENAME_NAME;
+        /* the session picker is replaced, not stacked: close it so the
+         * input modal does not leak it */
+        close_modal(app, 0);
         app->modal = tui_modal_open(TUI_MODAL_ASK_USER, "Rename session",
                                     "New name:", NULL);
         if (!app->modal)
@@ -444,7 +698,9 @@ int picker_commit(TuiApp *app)
         return 1;
     case PICKER_COMMAND:
     {
-        const char *value = tui_modal_picker_selected_value(app->modal);
+        /* the value lives in the modal's values array, which close_modal
+         * frees, so copy it before closing the palette */
+        char *value = str_dup(tui_modal_picker_selected_value(app->modal));
         /* close the palette itself before running the command, so a
          * command that opens its own dialog (status/debug/themes/...) is
          * not instantly closed by the ANSWERED handler's close_modal and
@@ -453,6 +709,7 @@ int picker_commit(TuiApp *app)
         app->picker_context = PICKER_NONE;
         if (value && value[0])
             command_dispatch(app, value, NULL);
+        free(value);
         return 1; /* the palette is already closed */
     }
     case PICKER_STASH:
@@ -576,7 +833,7 @@ void open_command_palette(TuiApp *app, const char *args)
         max_rows++;
         if (c->suggested) has_suggested = 1;
     }
-    total += 32 * 16; /* headers + slack */
+    total += (size_t)32 * 16; /* headers + slack */
     max_rows += 16;
 
     char *body = malloc(total);
@@ -623,7 +880,7 @@ void open_command_palette(TuiApp *app, const char *args)
         {
             const TuiCommand *c = tui_command_at(app->commands, i);
             if (c->hidden || !c->suggested) continue;
-            PAL_CMD(c);
+            PAL_CMD(c); // NOLINT(cert-err33-c)
         }
     }
     const char *cats[16];
@@ -646,7 +903,7 @@ void open_command_palette(TuiApp *app, const char *args)
             const TuiCommand *c = tui_command_at(app->commands, i);
             if (c->hidden || c->suggested) continue;
             if (strcmp(c->category, cats[ci]) != 0) continue;
-            PAL_CMD(c);
+            PAL_CMD(c); // NOLINT(cert-err33-c)
         }
     }
 #undef PAL_HEADER
@@ -688,13 +945,13 @@ void slash_status(TuiApp *app, const char *args)
 {
     (void)args;
     char lines[4][128];
-    snprintf(lines[0], sizeof(lines[0]), "Provider: %s",
+    snprintf(lines[0], sizeof(lines[0]), "Provider: %s", // NOLINT(cert-err33-c)
              app->provider ? app->provider : "(none)");
-    snprintf(lines[1], sizeof(lines[1]), "Model: %s",
+    snprintf(lines[1], sizeof(lines[1]), "Model: %s", // NOLINT(cert-err33-c)
              app->model ? app->model : "(none)");
-    snprintf(lines[2], sizeof(lines[2]), "Session: %s",
+    snprintf(lines[2], sizeof(lines[2]), "Session: %s", // NOLINT(cert-err33-c)
              app->session_id ? app->session_id : "(none)");
-    snprintf(lines[3], sizeof(lines[3]), "Enabled tools: %d",
+    snprintf(lines[3], sizeof(lines[3]), "Enabled tools: %d", // NOLINT(cert-err33-c)
              registry_enabled_count());
     char *body = NULL;
     if (asprintf(&body, "%s\n%s\n%s\n%s",
@@ -720,11 +977,11 @@ static void describe_os(char *out, size_t cap)
     if (cap < 1) return;
     if (uname(&u) != 0)
     {
-        snprintf(out, cap, "unknown");
+        snprintf(out, cap, "unknown"); // NOLINT(cert-err33-c)
         return;
     }
     char buf[208];
-    snprintf(buf, sizeof(buf), "%.*s %.*s (%.*s)",
+    snprintf(buf, sizeof(buf), "%.*s %.*s (%.*s)", // NOLINT(cert-err33-c)
              (int)sizeof(u.sysname), u.sysname,
              (int)sizeof(u.release), u.release,
              (int)sizeof(u.machine), u.machine);
@@ -737,9 +994,9 @@ static void describe_terminal(char *out, size_t cap)
     const char *prog = getenv("TERM_PROGRAM");
     const char *term = getenv("TERM");
     if (prog && prog[0])
-        snprintf(out, cap, "%s (%s)", prog, term ? term : "?");
+        snprintf(out, cap, "%s (%s)", prog, term ? term : "?"); // NOLINT(cert-err33-c)
     else
-        snprintf(out, cap, "%s", term ? term : "unknown");
+        snprintf(out, cap, "%s", term ? term : "unknown"); // NOLINT(cert-err33-c)
 }
 
 /* /debug: a copyable environment summary. */
@@ -887,7 +1144,7 @@ void cmd_stash_list(TuiApp *app, const char *args)
         {
             line[len] = '\xE2';
             line[len + 1] = '\x80';
-            line[len + 2] = '\xA6';
+            line[len + 2] = '\xA6'; // NOLINT(clang-analyzer-security.ArrayBound)
             line[len + 3] = '\0';
         }
         else
@@ -980,7 +1237,7 @@ static int open_message_picker(TuiApp *app, const char *title, int context)
         memcpy(line, text, len);
         if (nl || text[len])
         {
-            line[len] = '\xE2'; line[len + 1] = '\x80'; line[len + 2] = '\xA6';
+            line[len] = '\xE2'; line[len + 1] = '\x80'; line[len + 2] = '\xA6'; // NOLINT(clang-analyzer-security.ArrayBound)
             line[len + 3] = '\0';
         }
         else
@@ -992,7 +1249,7 @@ static int open_message_picker(TuiApp *app, const char *title, int context)
         num_bufs[shown] = malloc(24);
         if (num_bufs[shown])
         {
-            snprintf(num_bufs[shown], 24, "%ld", n);
+            snprintf(num_bufs[shown], 24, "%ld", n); // NOLINT(cert-err33-c)
             values[shown] = num_bufs[shown];
         }
         shown++;

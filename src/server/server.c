@@ -166,7 +166,7 @@ int server_response(Client *client, int status, const char *content_type, const 
 
     client->response_status = status;
     char status_buf[16];
-    snprintf(status_buf, sizeof(status_buf), "%d", status);
+    snprintf(status_buf, sizeof(status_buf), "%d", status); // NOLINT(cert-err33-c)
     log_info("response", "status", status_buf,
              "req_id", client->req_id, "path", client->path, NULL);
 
@@ -273,7 +273,7 @@ static unsigned long req_counter = 0;
 static void gen_req_id(char *buf, size_t len)
 {
     req_counter++;
-    snprintf(buf, len, "%lu", req_counter);
+    snprintf(buf, len, "%lu", req_counter); // NOLINT(cert-err33-c)
 }
 
 static void handle_request(Client *client)
@@ -385,7 +385,7 @@ Client *server_test_client_new(void)
 {
     Client *c = calloc(1, sizeof(Client));
     if (!c) return NULL;
-    snprintf(c->req_id, sizeof(c->req_id), "test");
+    snprintf(c->req_id, sizeof(c->req_id), "test"); // NOLINT(cert-err33-c)
     /* handle.data is wired like the real on_connection path so
      * client_close_cb finds the client (data is uv_tcp_t's first member). */
     c->handle.data = c;
@@ -549,10 +549,10 @@ int server_start(ServerContext *ctx)
     }
 
     char port_str[16];
-    snprintf(port_str, sizeof(port_str), "%d", ctx->port);
+    snprintf(port_str, sizeof(port_str), "%d", ctx->port); // NOLINT(cert-err33-c)
     log_info("server listening", "addr", bind, "port", port_str, NULL);
     printf("Echo AI server started on http://%s:%d\n", bind, ctx->port);
-    fflush(stdout);
+    fflush(stdout); // NOLINT(cert-err33-c)
 
     uv_run(ctx->loop, UV_RUN_DEFAULT);
     return 0;

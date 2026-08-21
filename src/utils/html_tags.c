@@ -55,7 +55,7 @@ double tag_weight_of(TagId tid)
     switch (tid)
     {
     case TAG_FRAME_ARTICLE: return 1.5;
-    case TAG_FRAME_SECTION: return 1.0;
+    case TAG_FRAME_SECTION:
     case TAG_FRAME_P:       return 1.0;
     case TAG_FRAME_H1:      return 1.2;
     case TAG_FRAME_H2:      return 1.1;

@@ -28,6 +28,7 @@ add_executable(test_safety
     ../../src/utils/string_utils.c
     test_safety.c
 )
+target_compile_definitions(test_safety PRIVATE SAFETY_TEST=1)
 target_include_directories(test_safety PRIVATE ../../src)
 target_link_libraries(test_safety PRIVATE echo_ai_test_deps)
 add_test(NAME test_safety COMMAND test_safety)

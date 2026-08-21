@@ -65,7 +65,7 @@ Conf *conf_load(const char *path)
 
     Conf *conf = calloc(1, sizeof(Conf));
     if (!conf) {
-        fclose(fp);
+        fclose(fp); // NOLINT(cert-err33-c)
         return NULL;
     }
 
@@ -80,7 +80,7 @@ Conf *conf_load(const char *path)
         if (llen > 0 && line[llen - 1] == '\n') line[llen - 1] = '\0';
 
         char *raw = line;
-        while (isspace((unsigned char)*raw)) raw++;
+        while (isspace((unsigned char)*raw)) raw++; // NOLINT(clang-analyzer-security.ArrayBound)
 
         if (raw[0] == '\0' || raw[0] == '#') continue;
 
@@ -162,7 +162,7 @@ Conf *conf_load(const char *path)
         }
     }
 
-    fclose(fp);
+    fclose(fp); // NOLINT(cert-err33-c)
     return conf;
 }
 

@@ -49,10 +49,10 @@ static int build_system_prompt(Agent *agent, char **out, size_t *out_len)
     struct tm tm_storage;
     struct tm *tm_info = localtime_r(&now, &tm_storage);
     char time_buf[64];
-    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info); // NOLINT(cert-err33-c)
 
     char context_buf[512];
-    snprintf(context_buf, sizeof(context_buf),
+    snprintf(context_buf, sizeof(context_buf), // NOLINT(cert-err33-c)
              "\n\n[System Context]\nOS: " SYSTEM_OS "\n"
              "Current Working Directory: %s\nCurrent Time: %s\n",
              cwd, time_buf);

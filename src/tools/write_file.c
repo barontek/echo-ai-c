@@ -209,8 +209,9 @@ static ToolResult *write_file_execute(Tool *self, const char *args_json)
          * inside the workspace, then resolve again. A policy rejection
          * falls out here too (the walk refuses anything above the
          * workspace root). */
-        if (write_file_ensure_parents(ctx->safety, path) != 0 ||
-            !(resolved = safety_resolve_path_alloc(ctx->safety, path)))
+        if (write_file_ensure_parents(ctx->safety, path) == 0)
+            resolved = safety_resolve_path_alloc(ctx->safety, path);
+        if (!resolved)
         {
             free(path);
             free(content);

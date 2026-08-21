@@ -24,6 +24,27 @@
 #define PATH_MAX 4096
 #endif
 
+#ifdef SAFETY_TEST
+/* Test-only fault-injection seam (AGENTS.md "Fault-injection testing"):
+ * force fclose to fail at a chosen call so safety_audit_log proves it
+ * surfaces a failed close (a silently-lost audit entry) instead of
+ * returning success. */
+static int test_fclose_fail_at = -1;
+static int test_fclose_call_count = 0;
+static int test_fclose(FILE *fp)
+{
+    test_fclose_call_count++;
+    if (test_fclose_call_count == test_fclose_fail_at) return EOF;
+    return fclose(fp);
+}
+#define fclose test_fclose
+void safety_test_set_fclose_fail(int nth_close)
+{
+    test_fclose_fail_at = nth_close;
+    test_fclose_call_count = 0;
+}
+#endif
+
 SafetyConfig *safety_config_create(void)
 {
     SafetyConfig *cfg = calloc(1, sizeof(SafetyConfig));
@@ -539,7 +560,7 @@ int safety_check_url(const SafetyConfig *cfg, const char *url)
 
     unsigned int a = 0, b = 0, c = 0, d = 0;
     char trailing = '\0';
-    if (sscanf(host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &trailing) == 4 &&
+    if (sscanf(host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &trailing) == 4 && // NOLINT(cert-err34-c)
         a <= 255 && b <= 255 && c <= 255 && d <= 255)
     {
         if (a == 10 || a == 127 || a == 0 ||
@@ -660,10 +681,11 @@ int safety_audit_log(const SafetyConfig *cfg, const char *entry)
     /* localtime is non-reentrant; keep this function single-threaded. */
     struct tm *tm = localtime(&now);
     char ts[64];
-    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm);
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm); // NOLINT(cert-err33-c)
 
-    fprintf(f, "{\"timestamp\":\"%s\",\"entry\":%s}\n", ts, entry);
-    fclose(f);
+    fprintf(f, "{\"timestamp\":\"%s\",\"entry\":%s}\n", ts, entry); // NOLINT(cert-err33-c)
+    if (ferror(f) || fclose(f) != 0)
+        return -1; // NOLINT(clang-analyzer-unix.Stream)
     return 0;
 }
 

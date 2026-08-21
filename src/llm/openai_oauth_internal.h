@@ -14,6 +14,7 @@
 
 #define _GNU_SOURCE
 #include <pthread.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -34,8 +35,8 @@
 #define OAUTH_CLIENT_TIMEOUT_SECONDS 10
 #define OAUTH_REFRESH_SKEW_SECONDS 300
 #define OAUTH_REQUEST_MAX 8192
-#define OAUTH_RESPONSE_MAX (1024U * 1024U)
-#define OAUTH_VALUE_MAX (256U * 1024U)
+#define OAUTH_RESPONSE_MAX ((size_t)1024U * 1024U)
+#define OAUTH_VALUE_MAX ((size_t)256U * 1024U)
 #define OAUTH_QUERY_FIELDS_MAX 16
 
 /* Staged credentials parsed from a token endpoint response or stored row;

@@ -266,7 +266,10 @@ int tui_chat_stream_append(TuiChat *chat, const char *delta)
     char *nb = calloc(cur + add + 1, 1);
     if (!nb) return -1;
     memcpy(nb, chat->blocks[idx].text, cur);
-    memcpy(nb + cur, delta, add);
+    memcpy(nb + cur, delta, add);  // NOLINT(bugprone-not-null-terminated-result)
+                                   // TODO(tui_chat): verified 2026-08-18: nb is
+                                   // calloc(cur+add+1) at line 266, writes cover
+                                   // nb[0..cur+add-1], so nb[cur+add] stays 0 — NUL.
     free(chat->blocks[idx].text);
     chat->blocks[idx].text = nb;
     invalidate_wrap(&chat->blocks[idx]);

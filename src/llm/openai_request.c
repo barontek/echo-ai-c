@@ -509,12 +509,8 @@ char *build_request_body(Message *messages, int count, const char *model,
         }
         if (cJSON_GetArraySize(tools) == 0)
             cJSON_Delete(tools);
-        else if (json_add_item(root, "tools", tools) != 0)
-        {
-            cJSON_Delete(root);
-            return NULL;
-        }
-        else if (json_add_bool(root, "parallel_tool_calls", 1) != 0)
+        else if (json_add_item(root, "tools", tools) != 0 ||
+                 json_add_bool(root, "parallel_tool_calls", 1) != 0)
         {
             cJSON_Delete(root);
             return NULL;

@@ -55,7 +55,7 @@ static char *run_git(const char *const *argv, int timeout)
     pid_t result;
     int elapsed = 0;
 
-    while ((result = waitpid(pid, &status, WNOHANG)) == 0)
+    while ((result = waitpid(pid, &status, WNOHANG)) == 0) // NOLINT(clang-analyzer-deadcode.DeadStores)
     {
         if (elapsed >= timeout * 10)
         {
@@ -123,7 +123,7 @@ static char *git_diff(const char *path)
 static char *git_log(int count)
 {
     char count_str[16];
-    snprintf(count_str, sizeof(count_str), "-%d", count > 0 ? count : 10);
+    snprintf(count_str, sizeof(count_str), "-%d", count > 0 ? count : 10); // NOLINT(cert-err33-c)
     const char *argv[] = {"git", "log", "--oneline", count_str, NULL};
     return run_git(argv, 30);
 }

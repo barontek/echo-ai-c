@@ -86,7 +86,7 @@ static ToolResult *python_execute_execute(Tool *self, const char *args_json)
     pid_t result;
     int elapsed = 0;
 
-    while ((result = waitpid(pid, &status, WNOHANG)) == 0)
+    while ((result = waitpid(pid, &status, WNOHANG)) == 0) // NOLINT(clang-analyzer-deadcode.DeadStores)
     {
         if (elapsed >= timeout * 10)
         {
@@ -138,11 +138,11 @@ static ToolResult *python_execute_execute(Tool *self, const char *args_json)
         if (combined)
         {
             if (out_len > 0 && err_len > 0)
-                snprintf(combined, total, "%s\n(stderr: %s)", stdout_buf, stderr_buf);
+                snprintf(combined, total, "%s\n(stderr: %s)", stdout_buf, stderr_buf); // NOLINT(cert-err33-c)
             else if (out_len > 0)
-                snprintf(combined, total, "%s", stdout_buf);
+                snprintf(combined, total, "%s", stdout_buf); // NOLINT(cert-err33-c)
             else
-                snprintf(combined, total, "(stderr: %s)", stderr_buf);
+                snprintf(combined, total, "(stderr: %s)", stderr_buf); // NOLINT(cert-err33-c)
             ToolResult *tr = tool_result_create(combined);
             free(combined);
             return tr;

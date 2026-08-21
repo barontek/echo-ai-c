@@ -69,7 +69,7 @@ static ToolResult *humanizer_execute(Tool *self, const char *args_json)
                     cJSON *item = cJSON_GetArrayItem(lines, i);
                     const char *val = cJSON_IsString(item) ? cJSON_GetStringValue(item) : "";
                     size_t cur = strlen(result);
-                    snprintf(result + cur, total - cur + 1, "- %s\n", val);
+                    snprintf(result + cur, total - cur + 1, "- %s\n", val); // NOLINT(cert-err33-c)
                 }
             }
             cJSON_Delete(lines);

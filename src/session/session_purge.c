@@ -81,7 +81,7 @@ int session_manager_purge_sessions(SessionManager *sm, int older_than_days)
     if (!tm_cutoff) return -1;
 
     char cutoff_str[64];
-    strftime(cutoff_str, sizeof(cutoff_str), "%Y-%m-%dT%H:%M:%S", tm_cutoff);
+    strftime(cutoff_str, sizeof(cutoff_str), "%Y-%m-%dT%H:%M:%S", tm_cutoff); // NOLINT(cert-err33-c)
 
     sm_lock(sm);
 

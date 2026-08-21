@@ -150,7 +150,7 @@ static char *fetch_via_impersonator(const char *binary, const char *imp_flag,
         if (devnull >= 0) dup2(devnull, STDERR_FILENO);
         for (int i = 3; i < 256; i++) close(i);
         char timeout_arg[32];
-        snprintf(timeout_arg, sizeof(timeout_arg), "%d", timeout_s);
+        snprintf(timeout_arg, sizeof(timeout_arg), "%d", timeout_s); // NOLINT(cert-err33-c)
         /* --compressed: the impersonated Chrome header set advertises
          * Accept-Encoding, so the server may send gzip/br; curl must be
          * told to decode it or the extractor sees compressed bytes. */

@@ -56,7 +56,13 @@ static size_t assemble_copy_parts(char *dst, const char *title, size_t tlen,
         size_t plen = 7;
         memcpy(dst + w, tprefix, plen); w += plen;
         memcpy(dst + w, title, tlen); w += tlen;
-        memcpy(dst + w, "\n\n", 2);   w += 2;
+        memcpy(dst + w, "\n\n", 2);   w += 2;  // NOLINT(bugprone-not-null-terminated-result)
+                                               // TODO(html_assembly): verified 2026-08-18:
+                                               // w accumulates 7 + tlen + 2 + body_len +
+                                               // mlen + flen == fin, so the NUL lands at
+                                               // the last written byte — res[w] = '\0' at
+                                               // line 194 (truncation) / line 133 (full).
+                                               // Re-check if accumulation order changes.
     }
     if (body_len > 0)
     {
@@ -128,7 +134,7 @@ char *assemble(Extract *x)
         size_t w = assemble_copy_parts(res, title, x->title.len,
                                        x->w.out.data, body_len,
                                        footer.data, flen, NULL, 0);
-        res[w] = '\0';
+        res[w] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
         free(footer.data);
         return res;
     }
@@ -189,7 +195,7 @@ char *assemble(Extract *x)
     size_t w = assemble_copy_parts(res, title, x->title.len,
                                    x->w.out.data, cut,
                                    footer.data, flen, marker, mlen);
-    res[w] = '\0';
+    res[w] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
     free(footer.data);
     return res;
 }

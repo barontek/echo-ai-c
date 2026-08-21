@@ -67,7 +67,7 @@ static void search_file(const char *path, const char *pattern,
         }
     }
 
-    fclose(fp);
+    fclose(fp); // NOLINT(cert-err33-c)
 }
 
 static void search_dir(const char *dir_path, const char *pattern,
@@ -86,7 +86,10 @@ static void search_dir(const char *dir_path, const char *pattern,
         if (entry->d_name[0] == '.') continue;
 
         char full_path[4096];
-        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
+        int plen = snprintf(full_path, sizeof(full_path), "%s/%s",
+                            dir_path, entry->d_name);
+        /* never let a truncated path silently resolve to another file */
+        if (plen < 0 || (size_t)plen >= sizeof(full_path)) continue;
 
         struct stat st;
         if (lstat(full_path, &st) != 0 || S_ISLNK(st.st_mode) ||
@@ -143,7 +146,13 @@ static ToolResult *grep_execute(Tool *self, const char *args_json)
     cJSON_Delete(args);
 
     GrepCtx *gctx = (GrepCtx *)self->ctx;
-    if (gctx && gctx->safety && !safety_check_path(gctx->safety, search_path))
+    if (!gctx || !gctx->safety)
+    {
+        free(pattern);
+        free(search_path);
+        return tool_result_error("tool context missing", "execution_error");
+    }
+    if (!safety_check_path(gctx->safety, search_path))
     {
         free(pattern);
         free(search_path);

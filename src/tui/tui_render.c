@@ -172,7 +172,7 @@ static void put_block_header(TuiApp *app, struct ncplane *p, TuiRole role,
         }
         else
         {
-            snprintf(label_buf, sizeof(label_buf), "%s tool", label);
+            snprintf(label_buf, sizeof(label_buf), "%s tool", label); // NOLINT(cert-err33-c)
             label = label_buf;
         }
     }
@@ -494,13 +494,13 @@ static void render_chat(TuiApp *app)
             char marker[96];
             if (truncated)
             {
-                snprintf(marker, sizeof(marker),
+                snprintf(marker, sizeof(marker), // NOLINT(cert-err33-c)
                          "  \xE2\x80\xA6 +%zu more lines \xE2\x80\x94 click to expand",
                          lines - TUI_CHAT_COLLAPSE_THRESHOLD);
             }
             else
             {
-                snprintf(marker, sizeof(marker),
+                snprintf(marker, sizeof(marker), // NOLINT(cert-err33-c)
                          "  \xE2\x80\x94 click to collapse");
             }
             (void)ncplane_cursor_move_yx(p, (int)drawn, 0);
@@ -696,7 +696,7 @@ static const char *modal_hint(TuiModalKind kind)
     {
     case TUI_MODAL_APPROVAL: return "h/l or 1-3 choose \xE2\x80\xA2 enter confirm \xE2\x80\xA2 esc reject";
     case TUI_MODAL_CONFIRM_QUIT: return "y quit \xE2\x80\xA2 any other key cancels";
-    case TUI_MODAL_PASSWORD: return "enter submit \xE2\x80\xA2 esc cancel";
+    case TUI_MODAL_PASSWORD:
     case TUI_MODAL_ASK_USER: return "enter submit \xE2\x80\xA2 esc cancel";
     case TUI_MODAL_PICKER: return "type to filter \xE2\x80\xA2 up/down move \xE2\x80\xA2 enter select \xE2\x80\xA2 esc cancel";
     case TUI_MODAL_CONFIRM: return "y confirm \xE2\x80\xA2 n cancel";
@@ -718,7 +718,7 @@ static char *approval_prompt_text_alloc(const TuiApp *app)
     if (sel < 0 || sel > 2) sel = 0;
     static const char *opts[3] = { "Allow once", "Always", "Reject" };
     char hint[96];
-    snprintf(hint, sizeof(hint),
+    snprintf(hint, sizeof(hint), // NOLINT(cert-err33-c)
              "   \xE2\x80\x94 %s%s  \xE2\x80\xA2 %s%s  \xE2\x80\xA2 %s%s  (h/l or 1-3, Enter confirm, Esc reject)",
              sel == 0 ? "\xE2\x96\xB6 " : "  ", opts[0],
              sel == 1 ? "\xE2\x96\xB6 " : "  ", opts[1],
@@ -886,13 +886,13 @@ static void render_modal(TuiApp *app)
                     char hdr[80];
                     if (ilen + 6 < sizeof(hdr))
                     {
-                        snprintf(hdr, sizeof(hdr), "\xE2\x94\x80 %.48s \xE2\x94\x80",
+                        snprintf(hdr, sizeof(hdr), "\xE2\x94\x80 %.48s \xE2\x94\x80", // NOLINT(cert-err33-c)
                                  item ? item : "");
                         ilen = strlen(hdr);
                     }
                     else if (item)
                     {
-                        snprintf(hdr, sizeof(hdr), "%.*s", (int)(cols - 4), item);
+                        snprintf(hdr, sizeof(hdr), "%.*s", (int)(cols - 4), item); // NOLINT(cert-err33-c)
                         ilen = strlen(hdr);
                     }
                     else
@@ -1029,17 +1029,17 @@ static void render_sidebar(TuiApp *app)
     (void)ncplane_putstr(p, " \xE2\x94\x80\xE2\x94\x80 Session \xE2\x94\x80\xE2\x94\x80 ");
     int y = 1;
     char line[128];
-    snprintf(line, sizeof(line), " id:    %.12s",
+    snprintf(line, sizeof(line), " id:    %.12s", // NOLINT(cert-err33-c)
              app->session_id ? app->session_id : "(none)");
     (void)ncplane_cursor_move_yx(p, y++, 0);
     (void)ncplane_putstr(p, line);
-    snprintf(line, sizeof(line), " model:  %s", app->model ? app->model : "(none)");
+    snprintf(line, sizeof(line), " model:  %s", app->model ? app->model : "(none)"); // NOLINT(cert-err33-c)
     (void)ncplane_cursor_move_yx(p, y++, 0);
     (void)ncplane_putstr(p, line);
-    snprintf(line, sizeof(line), " prov:   %s", app->provider ? app->provider : "(none)");
+    snprintf(line, sizeof(line), " prov:   %s", app->provider ? app->provider : "(none)"); // NOLINT(cert-err33-c)
     (void)ncplane_cursor_move_yx(p, y++, 0);
     (void)ncplane_putstr(p, line);
-    snprintf(line, sizeof(line), " tools:  %d", registry_enabled_count());
+    snprintf(line, sizeof(line), " tools:  %d", registry_enabled_count()); // NOLINT(cert-err33-c)
     (void)ncplane_cursor_move_yx(p, y++, 0);
     (void)ncplane_putstr(p, line);
     (void)ncplane_cursor_move_yx(p, y++, 0);

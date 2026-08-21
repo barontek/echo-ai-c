@@ -77,14 +77,14 @@ static ToolResult *ingest_document_execute(Tool *self, const char *args_json)
 
         freed_content = malloc((size_t)st.st_size + 1);
         if (!freed_content) {
-            fclose(f);
+            fclose(f); // NOLINT(cert-err33-c)
             cJSON_Delete(args);
             return tool_result_error("oom", "execution_error");
         }
 
         size_t read = fread(freed_content, 1, (size_t)st.st_size, f);
-        fclose(f);
-        freed_content[read] = '\0';
+        fclose(f); // NOLINT(cert-err33-c)
+        freed_content[read] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
         content = freed_content;
     }
 

@@ -385,7 +385,7 @@ static LLMResponse *ollama_parse_response(const char *raw)
                         ? cJSON_GetStringValue(name) : "");
                     {
                         char id_buf[32];
-                        snprintf(id_buf, sizeof(id_buf), "call_%u",
+                        snprintf(id_buf, sizeof(id_buf), "call_%u", // NOLINT(cert-err33-c)
                                  atomic_fetch_add_explicit(&call_seq, 1,
                                                            memory_order_relaxed));
                         resp->tool_calls[i].id = str_dup(id_buf);

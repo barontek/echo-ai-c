@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <sys/stat.h>
 
 #include <arpa/inet.h>
@@ -62,7 +63,7 @@ int encryption_key_derive(const char *password, const unsigned char *salt, int s
     }
 
     int rc = EVP_PBE_scrypt(password, strlen(password), salt_combined, combined_len,
-                            SCRYPT_N, SCRYPT_R, SCRYPT_P, 512 * 1024 * 1024,
+                            SCRYPT_N, SCRYPT_R, SCRYPT_P, (uint64_t)512 * 1024 * 1024,
                             key->key, sizeof(key->key));
     if (rc != 1)
     {
@@ -242,6 +243,25 @@ static int decrypt_fernet_token(const unsigned char *aes_key, const unsigned cha
 }
 
 #ifdef ENCRYPTION_TEST
+/* Test-only fault-injection seam (AGENTS.md "Fault-injection testing"):
+ * force fclose to fail at a chosen call so the salt/pepper/verifier store
+ * paths prove they surface a failed close (a close after a checked fwrite
+ * is where a silently-lost flush hides) instead of returning success. */
+static int test_fclose_fail_at = -1;
+static int test_fclose_call_count = 0;
+static int test_fclose(FILE *fp)
+{
+    test_fclose_call_count++;
+    if (test_fclose_call_count == test_fclose_fail_at) return EOF;
+    return fclose(fp);
+}
+#define fclose test_fclose
+void encryption_test_set_fclose_fail(int nth_close)
+{
+    test_fclose_fail_at = nth_close;
+    test_fclose_call_count = 0;
+}
+
 /* Structural validation of the real Fernet-token parse path over
  * arbitrary bytes (version byte, minimum length, layout arithmetic,
  * HMAC comparison) using fixed zero keys — the fuzzer cannot forge a
@@ -317,12 +337,18 @@ int encryption_salt_create(const char *salt_path)
     if (fwrite(salt, 1, SALT_SIZE, f) != SALT_SIZE)
     {
         log_error("failed to write salt", NULL);
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         unlink(salt_path);
         return -1;
     }
 
-    fclose(f);
+    if (fclose(f) != 0)
+    {
+        log_error("failed to flush salt file", NULL); // NOLINT(clang-analyzer-unix.Stream)
+        unlink(salt_path);
+        memset(salt, 0, sizeof(salt));
+        return -1;
+    }
     memset(salt, 0, sizeof(salt));
     return 0;
 }
@@ -346,12 +372,18 @@ int encryption_pepper_create(const char *pepper_path)
     if (fwrite(pepper, 1, PEPPER_SIZE, f) != PEPPER_SIZE)
     {
         log_error("failed to write pepper", NULL);
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         unlink(pepper_path);
         return -1;
     }
 
-    fclose(f);
+    if (fclose(f) != 0)
+    {
+        log_error("failed to flush pepper file", NULL); // NOLINT(clang-analyzer-unix.Stream)
+        unlink(pepper_path);
+        memset(pepper, 0, sizeof(pepper));
+        return -1;
+    }
     memset(pepper, 0, sizeof(pepper));
     return 0;
 }
@@ -362,15 +394,25 @@ int encryption_salt_load(const char *salt_path, unsigned char *salt, int *salt_l
     if (!f) return -1;
 
     long file_size;
-    if (fseek(f, 0, SEEK_END) != 0 || (file_size = ftell(f)) < 0 || file_size > 64)
+    if (fseek(f, 0, SEEK_END) != 0)
     {
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         return -1;
     }
-    rewind(f);
+    file_size = ftell(f);
+    if (file_size < 0 || file_size > 64)
+    {
+        fclose(f); // NOLINT(cert-err33-c)
+        return -1; // NOLINT(clang-analyzer-unix.Stream)
+      }
+      if (fseek(f, 0, SEEK_SET) != 0)
+      {
+          fclose(f); // NOLINT(cert-err33-c)
+          return -1;
+      }
 
-    size_t read = fread(salt, 1, file_size, f);
-    fclose(f);
+      size_t read = fread(salt, 1, file_size, f);
+    fclose(f); // NOLINT(cert-err33-c)
 
     if (read != (size_t)file_size) return -1;
     *salt_len = (int)read;
@@ -383,15 +425,25 @@ int encryption_pepper_load(const char *pepper_path, unsigned char *pepper, int *
     if (!f) return -1;
 
     long file_size;
-    if (fseek(f, 0, SEEK_END) != 0 || (file_size = ftell(f)) < 0 || file_size > 64)
+    if (fseek(f, 0, SEEK_END) != 0)
     {
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         return -1;
     }
-    rewind(f);
+    file_size = ftell(f);
+    if (file_size < 0 || file_size > 64)
+    {
+        fclose(f); // NOLINT(cert-err33-c)
+        return -1; // NOLINT(clang-analyzer-unix.Stream)
+    }
+    if (fseek(f, 0, SEEK_SET) != 0)
+    {
+        fclose(f); // NOLINT(cert-err33-c)
+        return -1;
+    }
 
     size_t read = fread(pepper, 1, file_size, f);
-    fclose(f);
+    fclose(f); // NOLINT(cert-err33-c)
 
     if (read != (size_t)file_size) return -1;
     *pepper_len = (int)read;
@@ -424,12 +476,21 @@ int encryption_create_verifier(const EncryptionKey *key, const char *path)
         return -1;
     }
 
-    int rc = -1;
-    if (fwrite(token, 1, out_len, f) == (size_t)out_len)
-        rc = 0;
-    fclose(f);
+    if (fwrite(token, 1, out_len, f) != (size_t)out_len)
+    {
+        fclose(f); // NOLINT(cert-err33-c)
+        unlink(path);
+        free(token);
+        return -1;
+    }
+    if (fclose(f) != 0)
+    {
+        unlink(path); // NOLINT(clang-analyzer-unix.Stream)
+        free(token);
+        return -1;
+    }
     free(token);
-    return rc;
+    return 0;
 }
 
 int encryption_check_verifier(const EncryptionKey *key, const char *path)
@@ -437,22 +498,21 @@ int encryption_check_verifier(const EncryptionKey *key, const char *path)
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
 
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    rewind(f);
-    if (fsize <= 0 || fsize > 4096) {
-        fclose(f);
-        return -1;
+    fseek(f, 0, SEEK_END); // NOLINT(cert-err33-c)
+long fsize = ftell(f);
+      if (fsize <= 0 || fsize > 4096 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f); // NOLINT(cert-err33-c)
+        return -1; // NOLINT(clang-analyzer-unix.Stream)
     }
 
     unsigned char *data = malloc((size_t)fsize);
     if (!data) {
-        fclose(f);
+        fclose(f); // NOLINT(cert-err33-c)
         return -1;
     }
 
     size_t read = fread(data, 1, (size_t)fsize, f);
-    fclose(f);
+    fclose(f); // NOLINT(cert-err33-c)
     if (read != (size_t)fsize) {
         free(data);
         return -1;

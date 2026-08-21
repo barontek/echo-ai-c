@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# lint.sh - local static-analysis gate (never runs in CI).
+# lint.sh - clang-tidy static-analysis gate (runs in the CI
+# static-analysis job; also runnable locally via `make lint`).
 #
 # clang-tidy replays the CMake compile commands with clang, but the
 # commands only carry the cjson -isystem flag: the rest of the include
@@ -56,15 +57,25 @@ SUMMARY_FILE="$(mktemp)"
 
 lint_one() {
     local f="$1"
+    local out
+    out="$(mktemp)"
     local extra=()
     local d
     while IFS= read -r d; do
         extra+=(--extra-arg-before=-isystem --extra-arg-before="$d")
     done < "$INC_FILE"
     if timeout "${PER_FILE_TIMEOUT}s" \
-        clang-tidy -p "$BUILD_DIR" "${extra[@]}" "$f" >/tmp/lint_one.out 2>&1; then
-        echo "ok $f" >> "$SUMMARY_FILE"
-        rm -f /tmp/lint_one.out
+        clang-tidy -p "$BUILD_DIR" "${extra[@]}" "$f" >"$out" 2>&1; then
+        # clang-tidy may still exit 0 with findings (WarningsAsErrors is
+        # config/version-dependent); a diagnostic line is a finding
+        # regardless of exit code.
+        if grep -qE ':[0-9]+:[0-9]+: (warning|error):' "$out"; then
+            echo "fail $f" >> "$SUMMARY_FILE"
+            cat "$out"
+        else
+            echo "ok $f" >> "$SUMMARY_FILE"
+        fi
+        rm -f "$out"
         return 0
     fi
     local rc=$?
@@ -73,9 +84,9 @@ lint_one() {
         echo "warning: $f hit the ${PER_FILE_TIMEOUT}s file cap — skipped" >&2
     else
         echo "fail $f" >> "$SUMMARY_FILE"
-        cat /tmp/lint_one.out
+        cat "$out"
     fi
-    rm -f /tmp/lint_one.out
+    rm -f "$out"
     return 0
 }
 export -f lint_one

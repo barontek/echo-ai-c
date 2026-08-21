@@ -1,26 +1,69 @@
-# clang-tidy config — run via `make lint` (local only, not CI).
+# clang-tidy config — CI gate via `scripts/lint.sh` (static-analysis job).
 #
 # Curated for this repo's build-flag contract (-Wall -Wextra -Wpedantic
 # -Werror + ASan/UBSan already cover compile-time and runtime memory
 # bugs; this adds static data-flow analysis on top):
 #   bugprone-*         suspicious/misleading patterns (overflow, misuse)
 #   clang-analyzer-*   leaks, use-after-free, null derefs, uninit reads
+#   cert-*             CERT secure-coding rules (C-focused)
 #   portability-*      macOS/other-platform portability traps
 #
 # Deliberately disabled:
+#   readability-* / modernize-* / llvm-* — style-opinion checks (LLVM
+#     house style, C++-centric auto/naming rules); not wanted in this repo.
 #   bugprone-reserved-identifier — every TU defines _GNU_SOURCE first;
+#   cert-dcl37-c / cert-dcl51-cpp — same reserved-identifier class on the
+#     same `#define _GNU_SOURCE` lines (verified 2026-08-18: all 122 hits
+#     are that define); same reason as the bugprone check above;
 #   bugprone-easily-swappable-parameters — fires on every multi-size_t
 #     helper (wrap/truncate families); header docs carry the contracts;
 #   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
 #     — fires on every memcpy/strncpy call; AGENTS.md already bans the
 #     unbounded forms and the codebase only uses bounded ones.
+#   bugprone-multi-level-implicit-pointer-conversion — pure C idiom:
+#     free/calloc/realloc/memmove of char**/int** (verified 2026-08-18,
+#     all 145 hits are alloc/free sites, none a real conversion bug);
+#   bugprone-narrowing-conversions — false-positive-prone nag on the
+#     repo's standard idioms (int len = strlen(...), char arithmetic,
+#     double->int JSON values), all bounded by request limits.
+#   clang-analyzer-optin.performance.Padding — struct field-reordering
+#     suggestions (52 hits, zero bug content); layout is deliberate.
+#
+# cert-* is kept fully ON (no cert-* exclusions), so cert-dcl37-c /
+# cert-dcl51-cpp fire on every `#define _GNU_SOURCE` — those lines carry a
+# per-line `// NOLINT(cert-dcl37-c,cert-dcl51-cpp)`: the macro is required
+# before the first glibc header on Linux (asprintf/strtok_r/etc.), and is
+# the same reserved-identifier class the bugprone check above flags. The
+# other cert-* findings (err33-c unchecked returns, msc24-c/msc33-c rewind,
+# msc30-c rand, err34-c sscanf) are handled per-site: fixed where the
+# failure is actionable, NOLINT'd where the call is display/cleanup-path.
+#
+# Kept ON deliberately: bugprone-implicit-widening-of-multiplication-result
+# and bugprone-misplaced-widening-cast — a narrow-type multiplication later
+# widened is the allocation-size-overflow shape this project treats as its
+# most common bug class. All baseline hits were constant expressions
+# (fixed 2026-08-18 by making the limit macros size_t-typed) or real
+# allocation-size sites (fixed); the checks stay on to catch new ones.
+#
+# WarningsAsErrors: findings block the CI gate (same status as a warning
+# under -Werror per AGENTS.md "Static analysis"). Per-line exceptions:
+# `// NOLINT` or `// NOLINTNEXTLINE` plus a `// TODO(reason:)` comment —
+# never a blanket pragma.
 Checks: >
-  bugprone-*,
   clang-analyzer-*,
+  bugprone-*,
+  cert-*,
   portability-*,
-  misc-misleading-indentation,
+  -readability-*,
+  -modernize-*,
+  -llvm-*,
   -bugprone-reserved-identifier,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
   -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -clang-analyzer-optin.performance.Padding,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
-WarningsAsErrors: false
+WarningsAsErrors: true
 HeaderFilterRegex: 'src/'

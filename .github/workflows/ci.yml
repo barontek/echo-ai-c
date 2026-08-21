@@ -166,6 +166,95 @@ jobs:
           build-fuzz/tests/$target -runs=1000 -max_len=4096
         done
 
+  # Static-analysis gate (AGENTS.md "Static analysis"): clang-tidy +
+  # cppcheck, separate from the sanitizer/test run — sanitizers only catch
+  # bugs on lines a test actually runs; these catch the unexercised paths.
+  # Findings are treated like a warning under -Werror: fix, or a documented
+  # // TODO(reason:) exception (// NOLINT / // cppcheck-suppress), never a
+  # blanket pragma.
+  static-analysis:
+    runs-on: ubuntu-latest
+    container: debian:sid-20260803-slim
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: install deps
+      run: apt-get update && apt-get install -y cmake git gcc clang-tidy cppcheck pkgconf pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check libnotcurses-dev libunistring-dev libncurses-dev libdeflate-dev
+
+    - name: configure
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+
+    - name: build
+      run: cmake --build build
+
+    - name: clang-tidy (scripts/lint.sh)
+      run: scripts/lint.sh
+
+    - name: cppcheck (scripts/cppcheck.sh)
+      run: scripts/cppcheck.sh
+
+  # TSan stage (AGENTS.md "Concurrency"): any file touching shared/global
+  # state across more than one thread gets a TSan build/run. TSan is not
+  # combinable with ASan/UBSan, so it is its own build dir in its own job
+  # (= its own CI stage), separate from the sanitizer/test run.
+  backend-tsan:
+    runs-on: ubuntu-latest
+    container: debian:sid-20260803-slim
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: install deps
+      run: apt-get update && apt-get install -y cmake git gcc pkgconf pkg-config libuv1-dev libcurl4-openssl-dev libsqlite3-dev libssl-dev libcjson-dev check libnotcurses-dev libunistring-dev libncurses-dev libdeflate-dev
+
+    - name: configure (TSan only; ASan/UBSan not combinable)
+      run: cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=OFF -DENABLE_TSAN=ON
+
+    - name: build
+      run: cmake --build build-tsan
+
+    - name: test
+      run: |
+        # TSan on modern kernels needs ASLR off (setarch -R) or it aborts
+        # with "unexpected memory mapping"; fall back to plain ctest if
+        # setarch is unavailable.
+        if command -v setarch >/dev/null 2>&1; then
+          setarch "$(uname -m)" -R ctest --test-dir build-tsan -V
+        else
+          ctest --test-dir build-tsan -V
+        fi
+
+  # Verification-integrity gate (AGENTS.md "Verification discipline"):
+  # - rule A (evidence): docs/verification/*.md touched by the diff must
+  #   contain raw command+output, not a claim — blocking from day one.
+  # - rule B (fault-injection tests): new multi-allocation functions must
+  #   ship a fault-injection test in the same PR — report-only during its
+  #   graduation period (dates tracked as constants in the script), the
+  #   script self-surfaces the flip-to-blocking date in its output.
+  verification-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: compute base ref
+      id: base
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "base=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: fault-injection merge gate (rule B)
+      run: scripts/check-fault-tests.sh "${{ steps.base.outputs.base }}"
+
+    - name: verification-evidence gate (rule A)
+      run: scripts/check-verification-evidence.sh "${{ steps.base.outputs.base }}"
+
   backend-macos:
     runs-on: macos-15
 

@@ -61,9 +61,9 @@ void log_msg(LogLevel level, const char *file, int line,
     char timestamp[64];
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", &tm);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", &tm); // NOLINT(cert-err33-c)
 
-    fprintf(stderr, "{\"timestamp\":\"%s.%03ldZ\",\"level\":\"%s\",\"file\":\"%s\",\"line\":%d,\"message\":\"",
+    fprintf(stderr, "{\"timestamp\":\"%s.%03ldZ\",\"level\":\"%s\",\"file\":\"%s\",\"line\":%d,\"message\":\"", // NOLINT(cert-err33-c)
             timestamp, ts.tv_nsec / 1000000, level_str(level), file, line);
 
     va_list args;
@@ -72,7 +72,7 @@ void log_msg(LogLevel level, const char *file, int line,
     const char *key = message;
     const char *val = NULL;
 
-    fprintf(stderr, "%s", message);
+    fprintf(stderr, "%s", message); // NOLINT(cert-err33-c)
 
     for (int i = 0; i < 100; i++)
     {
@@ -80,15 +80,15 @@ void log_msg(LogLevel level, const char *file, int line,
         if (!key) break;
         val = va_arg(args, const char *);
         if (!val) break;
-        fprintf(stderr, "\",\"%s\":\"", key);
+        fprintf(stderr, "\",\"%s\":\"", key); // NOLINT(cert-err33-c)
         for (const char *p = val; *p; p++)
         {
-            if (*p == '"' || *p == '\\') putc('\\', stderr);
-            putc(*p, stderr);
+            if (*p == '"' || *p == '\\') putc('\\', stderr); // NOLINT(cert-err33-c)
+            putc(*p, stderr); // NOLINT(cert-err33-c)
         }
     }
 
     va_end(args);
 
-    fprintf(stderr, "\"}\n");
+    fprintf(stderr, "\"}\n"); // NOLINT(cert-err33-c)
 }

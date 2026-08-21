@@ -119,7 +119,7 @@ static void slash_sessions(TuiApp *app, const char *term)
                 continue;
         }
         char line[512];
-        snprintf(line, sizeof(line), "  %s | %s | %s",
+        snprintf(line, sizeof(line), "  %s | %s | %s", // NOLINT(cert-err33-c)
                  list->ids[i], list->titles[i], list->created_ats[i]);
         (void)tui_chat_append_error(app->chat, line);
         shown++;
@@ -127,7 +127,7 @@ static void slash_sessions(TuiApp *app, const char *term)
     if (shown == 0)
     {
         char line[160];
-        snprintf(line, sizeof(line), "No sessions match: %s",
+        snprintf(line, sizeof(line), "No sessions match: %s", // NOLINT(cert-err33-c)
                  term ? term : "(none)");
         chat_notice(app, line);
     }
@@ -184,7 +184,7 @@ static void slash_keybinds(TuiApp *app, const char *args)
     {
         const TuiKeyBinding *b = tui_keymap_at(app->keymap, i);
         char line[260];
-        snprintf(line, sizeof(line), "%s  %-12s (%s)%s", b->name,
+        snprintf(line, sizeof(line), "%s  %-12s (%s)%s", b->name, // NOLINT(cert-err33-c)
                  b->enabled ? b->keys : "none",
                  b->desc, i + 1 < n ? "\n" : "");
         pos += (size_t)snprintf(body + pos, total - pos, "%s", line);
@@ -258,7 +258,7 @@ void slash_theme(TuiApp *app, const char *style)
     app->theme = nt;
     /* The next render_all() recolors every plane from the new theme. */
     char msg[96];
-    snprintf(msg, sizeof(msg), "Theme: %s", style);
+    snprintf(msg, sizeof(msg), "Theme: %s", style); // NOLINT(cert-err33-c)
     chat_notice(app, msg);
 }
 
@@ -410,7 +410,7 @@ static void slash_regen(TuiApp *app, const char *rest)
         return;
     }
     char arg[32];
-    snprintf(arg, sizeof(arg), "%ld", n);
+    snprintf(arg, sizeof(arg), "%ld", n); // NOLINT(cert-err33-c)
     (void)tui_worker_submit(app->worker, "regen", arg);
 }
 
@@ -528,7 +528,9 @@ static void slash_load(TuiApp *app, const char *args)
 {
     if (!args || !args[0])
     {
-        chat_notice(app, "Usage: /load <session id>");
+        /* no id: open the session picker so the user can choose one
+         * (the command palette dispatches session.load with NULL args) */
+        open_session_picker(app, PICKER_SESSION_LOAD, "Load session");
         return;
     }
     (void)tui_worker_submit(app->worker, "load", args);
@@ -835,150 +837,150 @@ void commands_init(TuiApp *app)
     } while (0)
 
     /* App / navigation */
-    REG("app.exit", "Quit", "Exit the TUI", "App", "exit", "quit, q",
+    REG("app.exit", "Quit", "Exit the TUI", "App", "exit", "quit, q", // NOLINT(cert-err33-c)
         0, 0, quit_immediate);
-    REG("app.quit_prompt", "Quit", "Ask before quitting", "App", "", "",
+    REG("app.quit_prompt", "Quit", "Ask before quitting", "App", "", "", // NOLINT(cert-err33-c)
         0, 1, cmd_quit_prompt);
-    REG("command.palette.show", "Commands", "Browse and run every command", "App",
+    REG("command.palette.show", "Commands", "Browse and run every command", "App", // NOLINT(cert-err33-c)
         "", "", 1, 0, open_command_palette);
-    REG("app.menu", "Command menu", "Open the classic menu", "App", "menu", "",
+    REG("app.menu", "Command menu", "Open the classic menu", "App", "menu", "", // NOLINT(cert-err33-c)
         0, 0, cmd_open_menu);
-    REG("app.help", "Help", "Show help", "App", "help", "", 1, 0, slash_help);
-    REG("app.keybinds", "Keybindings", "Show the keymap", "App", "keybinds", "",
+    REG("app.help", "Help", "Show help", "App", "help", "", 1, 0, slash_help); // NOLINT(cert-err33-c)
+    REG("app.keybinds", "Keybindings", "Show the keymap", "App", "keybinds", "", // NOLINT(cert-err33-c)
         0, 0, slash_keybinds);
-    REG("app.status", "Status", "Show the status inventory", "App", "status", "",
+    REG("app.status", "Status", "Show the status inventory", "App", "status", "", // NOLINT(cert-err33-c)
         0, 0, slash_status);
-    REG("app.debug", "Debug info", "Show environment details", "App", "debug", "",
+    REG("app.debug", "Debug info", "Show environment details", "App", "debug", "", // NOLINT(cert-err33-c)
         0, 0, slash_debug);
-    REG("run.cancel", "Cancel run", "Cancel the running reply", "App", "", "",
+    REG("run.cancel", "Cancel run", "Cancel the running reply", "App", "", "", // NOLINT(cert-err33-c)
         0, 1, cmd_cancel_run);
 
     /* Session */
-    REG("session.new", "New session", "Reset the conversation", "Session", "new", "",
+    REG("session.new", "New session", "Reset the conversation", "Session", "new", "", // NOLINT(cert-err33-c)
         1, 0, cmd_session_new);
-    REG("session.clear", "Clear pane", "Clear the chat pane", "Chat", "clear", "",
+    REG("session.clear", "Clear pane", "Clear the chat pane", "Chat", "clear", "", // NOLINT(cert-err33-c)
         0, 0, cmd_clear_chat);
-    REG("session.list", "Sessions", "List and search sessions", "Session",
+    REG("session.list", "Sessions", "List and search sessions", "Session", // NOLINT(cert-err33-c)
         "sessions", "resume, continue", 1, 0, cmd_session_list);
-    REG("session.undo", "Undo", "Undo the last file change", "Session", "undo", "",
+    REG("session.undo", "Undo", "Undo the last file change", "Session", "undo", "", // NOLINT(cert-err33-c)
         0, 0, cmd_undo);
-    REG("session.redo", "Redo", "Redo the last undone change", "Session", "redo", "",
+    REG("session.redo", "Redo", "Redo the last undone change", "Session", "redo", "", // NOLINT(cert-err33-c)
         0, 0, cmd_redo);
-    REG("session.save", "Save session", "Save the session", "Session", "save", "",
+    REG("session.save", "Save session", "Save the session", "Session", "save", "", // NOLINT(cert-err33-c)
         0, 0, slash_save);
-    REG("session.load", "Load session", "Load a session", "Session", "load", "",
+    REG("session.load", "Load session", "Load a session", "Session", "load", "", // NOLINT(cert-err33-c)
         0, 0, slash_load);
-    REG("session.delete", "Delete session", "Delete a session", "Session",
+    REG("session.delete", "Delete session", "Delete a session", "Session", // NOLINT(cert-err33-c)
         "delete", "", 0, 0, slash_delete);
-    REG("session.rename", "Rename session", "Rename a session", "Session",
+    REG("session.rename", "Rename session", "Rename a session", "Session", // NOLINT(cert-err33-c)
         "rename", "", 0, 0, slash_rename);
-    REG("session.export", "Export session", "Export a session to markdown",
+    REG("session.export", "Export session", "Export a session to markdown", // NOLINT(cert-err33-c)
         "Session", "export", "", 0, 0, slash_export);
-    REG("session.edit", "Edit message", "Edit a user message", "Session",
+    REG("session.edit", "Edit message", "Edit a user message", "Session", // NOLINT(cert-err33-c)
         "edit", "", 0, 0, slash_edit);
-    REG("session.timeline", "Timeline", "Jump to a user message", "Session",
+    REG("session.timeline", "Timeline", "Jump to a user message", "Session", // NOLINT(cert-err33-c)
         "timeline", "", 0, 0, cmd_timeline);
-    REG("session.fork", "Fork session", "Re-answer from a user message",
+    REG("session.fork", "Fork session", "Re-answer from a user message", // NOLINT(cert-err33-c)
         "Session", "fork", "", 0, 0, cmd_fork);
-    REG("session.regen", "Regenerate reply", "Regenerate an assistant reply",
+    REG("session.regen", "Regenerate reply", "Regenerate an assistant reply", // NOLINT(cert-err33-c)
         "Session", "regen", "", 0, 0, slash_regen);
-    REG("session.branch", "Branches", "List or switch session branches",
+    REG("session.branch", "Branches", "List or switch session branches", // NOLINT(cert-err33-c)
         "Session", "branch", "", 0, 0, slash_branch);
-    REG("session.compact", "Compact session", "Summarize the conversation",
+    REG("session.compact", "Compact session", "Summarize the conversation", // NOLINT(cert-err33-c)
         "Session", "compact", "summarize", 0, 0, cmd_compact);
-    REG("session.copy", "Copy message", "Copy a message to the clipboard",
+    REG("session.copy", "Copy message", "Copy a message to the clipboard", // NOLINT(cert-err33-c)
         "Chat", "copy", "", 0, 0, slash_copy);
-    REG("session.stash", "Stash prompt", "Save the draft into the stash",
+    REG("session.stash", "Stash prompt", "Save the draft into the stash", // NOLINT(cert-err33-c)
         "Chat", "stash", "", 0, 0, cmd_stash_push);
-    REG("session.stash_pop", "Pop stash", "Restore the newest stashed draft",
+    REG("session.stash_pop", "Pop stash", "Restore the newest stashed draft", // NOLINT(cert-err33-c)
         "Chat", "stash-pop", "stashp", 0, 0, cmd_stash_pop);
-    REG("session.stash_list", "Stash list", "Browse stashed drafts",
+    REG("session.stash_list", "Stash list", "Browse stashed drafts", // NOLINT(cert-err33-c)
         "Chat", "stash-list", "stashl", 0, 0, cmd_stash_list);
-    REG("session.pin", "Pin session", "Pin or unpin the active session",
+    REG("session.pin", "Pin session", "Pin or unpin the active session", // NOLINT(cert-err33-c)
         "Session", "pin", "", 0, 0, cmd_session_pin);
-    REG("session.sidebar.toggle", "Toggle sidebar", "Show or hide the sidebar",
+    REG("session.sidebar.toggle", "Toggle sidebar", "Show or hide the sidebar", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 0, cmd_sidebar_toggle);
-    REG("prompt.editor", "Edit in editor", "Open the draft in $EDITOR",
+    REG("prompt.editor", "Edit in editor", "Open the draft in $EDITOR", // NOLINT(cert-err33-c)
         "Prompt", "editor", "", 0, 0, cmd_editor);
-    REG("prompt.complete", "Complete", "Complete a slash command",
+    REG("prompt.complete", "Complete", "Complete a slash command", // NOLINT(cert-err33-c)
         "Prompt", "", "", 0, 1, cmd_prompt_complete);
-    REG("session.quick_switch.1", "Quick switch 1", "Load slot 1",
+    REG("session.quick_switch.1", "Quick switch 1", "Load slot 1", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_1);
-    REG("session.quick_switch.2", "Quick switch 2", "Load slot 2",
+    REG("session.quick_switch.2", "Quick switch 2", "Load slot 2", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_2);
-    REG("session.quick_switch.3", "Quick switch 3", "Load slot 3",
+    REG("session.quick_switch.3", "Quick switch 3", "Load slot 3", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_3);
-    REG("session.quick_switch.4", "Quick switch 4", "Load slot 4",
+    REG("session.quick_switch.4", "Quick switch 4", "Load slot 4", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_4);
-    REG("session.quick_switch.5", "Quick switch 5", "Load slot 5",
+    REG("session.quick_switch.5", "Quick switch 5", "Load slot 5", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_5);
-    REG("session.quick_switch.6", "Quick switch 6", "Load slot 6",
+    REG("session.quick_switch.6", "Quick switch 6", "Load slot 6", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_6);
-    REG("session.quick_switch.7", "Quick switch 7", "Load slot 7",
+    REG("session.quick_switch.7", "Quick switch 7", "Load slot 7", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_7);
-    REG("session.quick_switch.8", "Quick switch 8", "Load slot 8",
+    REG("session.quick_switch.8", "Quick switch 8", "Load slot 8", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_8);
-    REG("session.quick_switch.9", "Quick switch 9", "Load slot 9",
+    REG("session.quick_switch.9", "Quick switch 9", "Load slot 9", // NOLINT(cert-err33-c)
         "Session", "", "", 0, 1, cmd_quick_switch_9);
 
     /* Model / provider / theme */
-    REG("model.list", "Model", "Pick provider or model", "Model", "", "",
+    REG("model.list", "Model", "Pick provider or model", "Model", "", "", // NOLINT(cert-err33-c)
         1, 0, cmd_model_menu);
-    REG("model.set", "Switch model", "Switch the model", "Model", "model", "",
+    REG("model.set", "Switch model", "Switch the model", "Model", "model", "", // NOLINT(cert-err33-c)
         0, 0, slash_model);
-    REG("provider.set", "Switch provider", "Switch the provider", "Model",
+    REG("provider.set", "Switch provider", "Switch the provider", "Model", // NOLINT(cert-err33-c)
         "provider", "", 0, 0, slash_provider);
-    REG("model.effort", "Reasoning effort", "Set the reasoning effort", "Model",
+    REG("model.effort", "Reasoning effort", "Set the reasoning effort", "Model", // NOLINT(cert-err33-c)
         "effort", "", 0, 0, slash_effort);
-    REG("model.cycle_recent", "Next recent model", "Cycle to the next recent model",
+    REG("model.cycle_recent", "Next recent model", "Cycle to the next recent model", // NOLINT(cert-err33-c)
         "Model", "", "", 0, 1, cmd_model_cycle_recent);
-    REG("model.cycle_recent_reverse", "Previous recent model",
+    REG("model.cycle_recent_reverse", "Previous recent model", // NOLINT(cert-err33-c)
         "Cycle to the previous recent model", "Model", "", "", 0, 1,
         cmd_model_cycle_recent_reverse);
-    REG("theme.list", "Theme", "Pick a theme", "Theme", "", "", 0, 0, cmd_theme_menu);
-    REG("theme.set", "Set theme", "Set the theme", "Theme", "theme", "",
+    REG("theme.list", "Theme", "Pick a theme", "Theme", "", "", 0, 0, cmd_theme_menu); // NOLINT(cert-err33-c)
+    REG("theme.set", "Set theme", "Set the theme", "Theme", "theme", "", // NOLINT(cert-err33-c)
         0, 0, slash_theme);
 
     /* Security / auth */
-    REG("security.change_password", "Change password", "Change the database password",
+    REG("security.change_password", "Change password", "Change the database password", // NOLINT(cert-err33-c)
         "Security", "change-password", "", 0, 0, slash_change_password);
-    REG("security.lock", "Lock", "Lock the database", "Security", "lock", "",
+    REG("security.lock", "Lock", "Lock the database", "Security", "lock", "", // NOLINT(cert-err33-c)
         0, 0, slash_lock);
-    REG("security.unlock", "Unlock", "Unlock the database", "Security", "unlock", "",
+    REG("security.unlock", "Unlock", "Unlock the database", "Security", "unlock", "", // NOLINT(cert-err33-c)
         0, 0, slash_unlock);
-    REG("auth.openai_login", "OpenAI sign in", "Device-login to OpenAI",
+    REG("auth.openai_login", "OpenAI sign in", "Device-login to OpenAI", // NOLINT(cert-err33-c)
         "Auth", "openai-login", "", 0, 0, slash_openai_login);
-    REG("auth.openai_logout", "OpenAI sign out", "Sign out of OpenAI",
+    REG("auth.openai_logout", "OpenAI sign out", "Sign out of OpenAI", // NOLINT(cert-err33-c)
         "Auth", "openai-logout", "", 0, 0, slash_openai_logout);
 
     /* Input editing (keymap-only; hidden from the palette) */
-    REG("input.submit", "Submit", "Submit the input", "Input", "", "", 0, 1,
+    REG("input.submit", "Submit", "Submit the input", "Input", "", "", 0, 1, // NOLINT(cert-err33-c)
         cmd_submit_line);
-    REG("input.newline", "Newline", "Insert a newline", "Input", "", "", 0, 1,
+    REG("input.newline", "Newline", "Insert a newline", "Input", "", "", 0, 1, // NOLINT(cert-err33-c)
         cmd_newline);
-    REG("input.backspace", "Backspace", "Delete backward", "Input", "", "", 0, 1,
+    REG("input.backspace", "Backspace", "Delete backward", "Input", "", "", 0, 1, // NOLINT(cert-err33-c)
         cmd_backspace);
-    REG("input.delete", "Delete", "Delete forward", "Input", "", "", 0, 1,
+    REG("input.delete", "Delete", "Delete forward", "Input", "", "", 0, 1, // NOLINT(cert-err33-c)
         cmd_delete);
-    REG("input.delete_word", "Delete word", "Delete the word before the cursor",
+    REG("input.delete_word", "Delete word", "Delete the word before the cursor", // NOLINT(cert-err33-c)
         "Input", "", "", 0, 1, cmd_delete_word);
-    REG("input.move.left", "Move left", "Move the cursor left", "Input", "", "",
+    REG("input.move.left", "Move left", "Move the cursor left", "Input", "", "", // NOLINT(cert-err33-c)
         0, 1, cmd_move_left);
-    REG("input.move.right", "Move right", "Move the cursor right", "Input", "", "",
+    REG("input.move.right", "Move right", "Move the cursor right", "Input", "", "", // NOLINT(cert-err33-c)
         0, 1, cmd_move_right);
-    REG("input.home", "Line home", "Jump to the line start", "Input", "", "",
+    REG("input.home", "Line home", "Jump to the line start", "Input", "", "", // NOLINT(cert-err33-c)
         0, 1, cmd_home);
-    REG("input.end", "Line end", "Jump to the line end", "Input", "", "", 0, 1,
+    REG("input.end", "Line end", "Jump to the line end", "Input", "", "", 0, 1, // NOLINT(cert-err33-c)
         cmd_end);
-    REG("input.history_back", "Previous prompt", "Walk prompt history back",
+    REG("input.history_back", "Previous prompt", "Walk prompt history back", // NOLINT(cert-err33-c)
         "Input", "", "", 0, 1, cmd_history_back);
-    REG("input.history_forward", "Next prompt", "Walk prompt history forward",
+    REG("input.history_forward", "Next prompt", "Walk prompt history forward", // NOLINT(cert-err33-c)
         "Input", "", "", 0, 1, cmd_history_forward);
 
     /* Chat scrolling (keymap-only) */
-    REG("chat.scroll_up", "Scroll up", "Scroll toward older messages",
+    REG("chat.scroll_up", "Scroll up", "Scroll toward older messages", // NOLINT(cert-err33-c)
         "Chat", "", "", 0, 1, cmd_scroll_up);
-    REG("chat.scroll_down", "Scroll down", "Scroll toward newer messages",
+    REG("chat.scroll_down", "Scroll down", "Scroll toward newer messages", // NOLINT(cert-err33-c)
         "Chat", "", "", 0, 1, cmd_scroll_down);
 
 #undef REG
@@ -1126,12 +1128,12 @@ static void cmd_editor(TuiApp *app, const char *args)
     restore_signal_handlers(app->saved_sigs, 2);
 
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "exec %s %s", ed, tmpl);
+    snprintf(cmd, sizeof(cmd), "exec %s %s", ed, tmpl); // NOLINT(cert-err33-c)
     pid_t pid = fork();
     int st = 0;
     if (pid == 0)
     {
-        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL); // NOLINT(clang-analyzer-optin.taint.GenericTaint)
         _exit(127);
     }
     if (pid > 0) (void)waitpid(pid, &st, 0);
@@ -1150,19 +1152,24 @@ static void cmd_editor(TuiApp *app, const char *args)
         FILE *fp = fopen(tmpl, "r");
         if (fp)
         {
-            long sz;
-            if (fseek(fp, 0, SEEK_END) == 0 &&
-                (sz = ftell(fp)) > 0 && (size_t)sz < (size_t)(1 << 20))
+            long sz = -1;
+            if (fseek(fp, 0, SEEK_END) == 0)
+                sz = ftell(fp);
+            if (sz > 0 && (size_t)sz < (size_t)(1 << 20))
             {
                 buf = malloc((size_t)sz + 1);
-                if (buf)
+                if (buf && fseek(fp, 0, SEEK_SET) == 0)
                 {
-                    rewind(fp);
                     size_t got = fread(buf, 1, (size_t)sz, fp);
-                    buf[got] = '\0';
+                    buf[got] = '\0'; // NOLINT(clang-analyzer-security.ArrayBound)
+                }
+                else if (buf)
+                {
+                    free(buf);
+                    buf = NULL;
                 }
             }
-            fclose(fp);
+            fclose(fp); // NOLINT(cert-err33-c)
         }
         if (buf)
         {

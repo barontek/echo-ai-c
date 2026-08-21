@@ -272,7 +272,7 @@ static int read_callback_request(OpenAIOAuth *auth, uint64_t generation, int fd,
         if (selected < 0 && errno == EINTR) continue;
         if (selected < 0) return -1;
         if (selected == 0) continue;
-        ssize_t count = recv(fd, request + used, OAUTH_REQUEST_MAX - used, 0);
+        ssize_t count = recv(fd, request + used, OAUTH_REQUEST_MAX - used, 0); // NOLINT(clang-analyzer-unix.BlockInCriticalSection)
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) return -1;
         if (memchr(request + used, '\0', (size_t)count)) return -1;

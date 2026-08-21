@@ -99,8 +99,10 @@ static int redirect_stderr(const char *path)
         log_error("tui: stderr redirect failed", "path", path, NULL);
         return -1;
     }
-    setvbuf(stderr, NULL, _IOLBF, 0);
-    return 0;
+    setvbuf(stderr, NULL, _IOLBF, 0); // NOLINT(cert-err33-c)
+    /* f aliases stderr for the process lifetime; closing it would close
+     * stderr itself — never closed by design. */
+    return 0; // cppcheck-suppress resourceLeak
 }
 
 /* ---- layout ---- */
@@ -594,10 +596,10 @@ static void keymap_bind_def(TuiKeymap *km, const char *name, const char *cat,
 {
     TuiKeyBinding b;
     memset(&b, 0, sizeof(b));
-    snprintf(b.name, sizeof(b.name), "%s", name);
-    snprintf(b.category, sizeof(b.category), "%s", cat);
-    snprintf(b.desc, sizeof(b.desc), "%s", desc);
-    snprintf(b.keys, sizeof(b.keys), "%s", keys);
+    snprintf(b.name, sizeof(b.name), "%s", name); // NOLINT(cert-err33-c)
+    snprintf(b.category, sizeof(b.category), "%s", cat); // NOLINT(cert-err33-c)
+    snprintf(b.desc, sizeof(b.desc), "%s", desc); // NOLINT(cert-err33-c)
+    snprintf(b.keys, sizeof(b.keys), "%s", keys); // NOLINT(cert-err33-c)
     /* A default spec is authored by us and must parse; a failure is a
      * build bug, so log it rather than silently binding nothing. */
     if (tui_keymap_register(km, &b) != 0)
@@ -815,12 +817,10 @@ static void handle_key(TuiApp *app, const ncinput *ni)
         {
             /* The picker also navigates with arrows / PgUp-PgDn and
              * Ctrl-P/Ctrl-N, so route those into the modal dispatcher. */
-            if (id == NCKEY_UP) key = TUI_PICKER_KEY_UP;
-            else if (id == NCKEY_DOWN) key = TUI_PICKER_KEY_DOWN;
+            if (id == NCKEY_UP || key_is_ctrl(ni, 'P')) key = TUI_PICKER_KEY_UP;
+            else if (id == NCKEY_DOWN || key_is_ctrl(ni, 'N')) key = TUI_PICKER_KEY_DOWN;
             else if (id == NCKEY_PGUP) key = TUI_PICKER_KEY_PGUP;
             else if (id == NCKEY_PGDOWN) key = TUI_PICKER_KEY_PGDOWN;
-            else if (key_is_ctrl(ni, 'P')) key = TUI_PICKER_KEY_UP;
-            else if (key_is_ctrl(ni, 'N')) key = TUI_PICKER_KEY_DOWN;
             else if (id < 0x110000u && id >= 32u) key = ncinput_cp(ni);
         }
         else if (tui_modal_kind(app->modal) == TUI_MODAL_APPROVAL)

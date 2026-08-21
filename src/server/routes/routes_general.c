@@ -201,7 +201,7 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
                 provider[plen] = '\0';
                 /* FE spelling is lm_studio; use the static-token compatible provider. */
                 if (strcmp(provider, "lm_studio") == 0)
-                    snprintf(provider, sizeof(provider), "openai_compatible");
+                    snprintf(provider, sizeof(provider), "openai_compatible"); // NOLINT(cert-err33-c)
             }
         }
     }
@@ -219,7 +219,7 @@ void handle_models(HTTPRequest *req, Client *client, ServerContext *ctx)
      * shared fetcher applies the default when this stays NULL. OpenAI is
      * OAuth-only: no static token is ever sent on its behalf. */
     char provider_key[96];
-    snprintf(provider_key, sizeof(provider_key), "%s.base_url", provider);
+    snprintf(provider_key, sizeof(provider_key), "%s.base_url", provider); // NOLINT(cert-err33-c)
     const char *base_url = ctx && ctx->conf
         ? conf_get(ctx->conf, provider_key) : NULL;
     const char *api_token = ctx && ctx->conf &&

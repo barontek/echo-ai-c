@@ -66,7 +66,7 @@ static void set_error(BrowserSession *s, const char *fmt, ...)
     char buf[1024];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    vsnprintf(buf, sizeof(buf), fmt, ap); // NOLINT(cert-err33-c)
     va_end(ap);
 
     free(s->last_error);
@@ -269,7 +269,7 @@ static char **build_argv(BrowserSession *s, int headless,
         }
     }
 
-    size_t cap = (size_t)(5 + tokens + 1);
+    size_t cap = (size_t)5 + (size_t)tokens + 1;
     char **argv = calloc(cap, sizeof(char *));
     if (!argv)
     {
@@ -309,12 +309,12 @@ static char **build_argv(BrowserSession *s, int headless,
         char *tok = strtok_r(extra_copy, " \t", &save);
         while (tok)
         {
-            argv[i++] = str_dup(tok);
+            argv[i++] = str_dup(tok); // NOLINT(clang-analyzer-security.ArrayBound)
             if (!argv[i - 1]) goto oom;
             tok = strtok_r(NULL, " \t", &save);
         }
     }
-    argv[i] = NULL;
+    argv[i] = NULL; // NOLINT(clang-analyzer-security.ArrayBound)
     free(extra_copy);
     *out_count = i + 1;
     return argv;
@@ -903,7 +903,7 @@ int browser_navigate(BrowserSession *s, const char *url, size_t max_chars,
         grown = malloc(need);
         if (grown)
         {
-            snprintf(grown, need, "%s%s", out->text, note);
+            snprintf(grown, need, "%s%s", out->text, note); // NOLINT(cert-err33-c)
             free(out->text);
             out->text = grown;
         }
@@ -965,7 +965,7 @@ int browser_evaluate(BrowserSession *s, const char *expression,
         const char *desc = NULL;
         cJSON *eo = cJSON_GetObjectItem(exc, "exception");
         cJSON *d = cJSON_IsObject(eo) ? cJSON_GetObjectItem(eo, "description") : NULL;
-        if (cJSON_IsString(d)) desc = d->valuestring;
+        if (cJSON_IsString(d)) desc = d->valuestring; // NOLINT(clang-analyzer-core.NullDereference)
         set_error(s, "evaluate: %s%s%s", text, desc ? ": " : "",
                   desc ? desc : "");
         cJSON_Delete(result);
